@@ -283,3 +283,7 @@ Public Problem Sample Tracking Link responses require a non-empty typed-name sig
 
 ## Next.js search-parameter boundaries
 The root problem-sample table page renders its search-param-dependent content through `Suspense`. The New Problem Sample route also wraps `ProblemForm`, which reads the `table` query parameter, in `Suspense`. Keep this boundary when changing either route so Vercel/Next.js production prerendering remains valid.
+
+### Customer administration and import history
+
+`/api/customers/`, `/api/customers/import/`, and `/api/customers/overview/` require a tracker administrator. The Customers navigation entry is also rendered only for administrators. `CustomerImport` is retained as an audit trail rather than deleted during snapshot replacement; `Customer` rows are still atomically replaced by each successful export. The overview endpoint returns the current directory row count plus up to the 100 most recent upload records. Form-specific suggestion endpoints remain authenticated-user APIs so Distributor, End User, Brand, and Client Email fields continue to function for workflow users.

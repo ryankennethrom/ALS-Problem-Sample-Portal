@@ -484,3 +484,7 @@ Pages/components that use `useSearchParams()` are rendered below React `Suspense
 ## Current temporary staff authentication (supersedes earlier login-link notes)
 
 Staff email magic-link/Brevo login is disabled. The current endpoints are `POST /api/auth/login/` for username/password sign-in and administrator-only `GET/POST /api/auth/accounts/` for account listing/creation. Accounts require First Name, Last Name, and a server-derived username; no email address is required. `UserProfile.is_admin` is the account-management permission. Existing Lab Technician/Customer Service values remain separate workflow roles.
+
+## Customer Export administration
+
+The **Customers** page is administrator-only. Administrators can see the current customer row count, upload replacement Customer Exports, search the directory, and review retained upload history including filename, timestamp, uploader, imported row count, and days since upload. The import history is retained across future replacement uploads. Specialized customer suggestion APIs used inside problem-sample forms remain available to authenticated non-admin users.

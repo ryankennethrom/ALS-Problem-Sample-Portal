@@ -91,7 +91,6 @@ export default function Login() {
             <SignInIcon />{signingIn ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
-        <p className="login-subprompt">Accounts are created by a tracker administrator.</p>
         {error && <div className="login-error" role="alert">{error}</div>}
       </div>
     </section>

@@ -775,3 +775,23 @@ a.result:hover{background:#f7f9fb}
 .history-customer-information{margin-top:7px;padding:9px 10px;background:#f8fafc;border-left:3px solid #5b7f9e;border-radius:2px;color:#343a40;font-size:12px}
 .history-customer-information>div{margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
 @media(max-width:560px){.public-requested-info-overlay{padding:12px}.public-requested-info-dialog{padding:22px 18px 19px}.public-requested-info-actions{display:grid;grid-template-columns:1fr}.public-requested-info-actions .button{width:100%}}
+
+/* Administrator customer directory and import history */
+.customer-summary-grid{display:grid;grid-template-columns:minmax(220px,320px) minmax(280px,420px);gap:14px;margin-bottom:18px}
+.customer-stat-card{background:#fff;border:1px solid #d5d9dd;border-radius:6px;padding:14px 16px}
+.customer-stat-label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6f777e;margin-bottom:5px}
+.customer-stat-value{font-size:30px;line-height:1.1;font-weight:700;color:#252b30}
+.customer-stat-value-small{font-size:22px;padding-top:4px}
+.customer-admin-layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(320px,.7fr);gap:18px;align-items:start}
+.customer-upload-history{position:sticky;top:74px;max-height:calc(100vh - 96px);overflow:hidden}
+.customer-history-list{padding-top:2px;padding-bottom:2px;overflow:auto;max-height:calc(100vh - 145px)}
+.customer-history-item{padding:14px 0;border-bottom:1px solid #e1e5e8}
+.customer-history-item:last-child{border-bottom:0}
+.customer-history-topline{display:flex;align-items:flex-start;gap:8px;justify-content:space-between}
+.customer-history-file{font-size:14px;font-weight:700;color:#30363b;overflow-wrap:anywhere;min-width:0}
+.customer-history-latest{flex:0 0 auto;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#2d6c3c;background:#edf7ef;border:1px solid #cfe6d4;border-radius:10px;padding:2px 7px}
+.customer-history-date{font-size:13px;color:#4d555b;margin-top:5px}
+.customer-history-meta{display:flex;gap:6px;flex-wrap:wrap;font-size:12px;color:#737b82;margin-top:3px}
+.customer-history-uploader{font-size:12px;color:#737b82;margin-top:6px;overflow-wrap:anywhere}
+@media(max-width:1050px){.customer-admin-layout{grid-template-columns:1fr}.customer-upload-history{position:static;max-height:none}.customer-history-list{max-height:none}.customer-summary-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:620px){.customer-summary-grid{grid-template-columns:1fr}}

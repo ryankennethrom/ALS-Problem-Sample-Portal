@@ -173,9 +173,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="side-section-label">Settings</div>
 
-        <Link href="/customers" className={`side-link ${pathname==='/customers'?'active':''}`}>
+        {user?.is_admin && <Link href="/customers" className={`side-link ${pathname==='/customers'?'active':''}`}>
           <span className="side-icon"><Icon name="customers"/></span><span className="side-label">Customers</span>
-        </Link>
+        </Link>}
         {user?.is_admin && <Link href="/accounts" className={`side-link ${pathname==='/accounts'?'active':''}`}>
           <span className="side-icon"><Icon name="account"/></span><span className="side-label">User Accounts</span>
         </Link>}

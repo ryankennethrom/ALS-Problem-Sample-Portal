@@ -3,15 +3,17 @@ import io
 from datetime import date, datetime
 
 from django.db import connection, transaction
+from django.utils import timezone
 from django.db.models import Q
 from rapidfuzz.fuzz import WRatio
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 
 from .models import Customer, CustomerImport
 from .serializers import CustomerSerializer
 from .normalization import normalize_header, normalize_customer_type, normalize_company_name, normalize_brand, customer_type_is
+from .permissions import IsTrackerAdmin
 
 
 ALIASES = {
@@ -193,6 +195,7 @@ def read_export(upload):
 
 
 @api_view(['GET'])
+@permission_classes([IsTrackerAdmin])
 def list_customers(request):
     q = (request.query_params.get('q') or '').strip()
     qs = Customer.objects.all()
@@ -458,7 +461,48 @@ def suggest_client_emails(request):
     })
 
 
+def _customer_import_payload(batch):
+    uploader = batch.imported_by
+    uploader_name = 'Unknown user'
+    uploader_username = ''
+    if uploader is not None:
+        uploader_name = uploader.get_full_name().strip() or uploader.username
+        uploader_username = uploader.username
+
+    imported_local_date = timezone.localdate(batch.imported_at)
+    days_ago = max((timezone.localdate() - imported_local_date).days, 0)
+    return {
+        'id': batch.id,
+        'filename': batch.filename,
+        'imported_at': batch.imported_at,
+        'row_count': batch.row_count,
+        'days_ago': days_ago,
+        'uploaded_by': {
+            'id': uploader.id if uploader is not None else None,
+            'username': uploader_username,
+            'name': uploader_name,
+        },
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsTrackerAdmin])
+def customer_overview(request):
+    history_qs = (
+        CustomerImport.objects.select_related('imported_by')
+        .order_by('-imported_at', '-id')
+    )
+    history = [_customer_import_payload(batch) for batch in history_qs[:100]]
+    return Response({
+        'row_count': Customer.objects.count(),
+        'history_count': history_qs.count(),
+        'latest_upload': history[0] if history else None,
+        'history': history,
+    })
+
+
 @api_view(['POST'])
+@permission_classes([IsTrackerAdmin])
 def import_customers(request):
     upload = request.FILES.get('file')
     if not upload:
@@ -535,11 +579,9 @@ def import_customers(request):
         previous_count = Customer.objects.count()
         previous_import_count = CustomerImport.objects.count()
 
-        # The current Customer Export is the whole source of truth. Discard the
-        # previous customer rows and their import metadata rather than merging,
-        # updating, or trying to match on any non-unique export field.
+        # The current Customer Export is the whole source of truth for customer
+        # rows, but import records are an audit trail and must be retained.
         Customer.objects.all().delete()
-        CustomerImport.objects.all().delete()
 
         batch = CustomerImport.objects.create(
             filename=upload.name,
@@ -556,7 +598,8 @@ def import_customers(request):
             'imported': len(customer_rows),
             'source_rows': len(rows),
             'replaced': previous_count,
-            'discarded_imports': previous_import_count,
+            'previous_imports': previous_import_count,
+            'import_history_count': previous_import_count + 1,
             'filename': upload.name,
             'mode': 'replace',
         },
