@@ -191,23 +191,24 @@ export default function Detail() {
   if (error && !p) return <div className="card error">{error}</div>;
   if (!p) return <div>Loading…</div>;
 
+  const problem = p;
   const customerEmails = findCustomerEmails(table, customValues);
-  const rowTitle = `Problem #${p.problem_number}`;
+  const rowTitle = `Problem #${problem.problem_number}`;
 
   async function emailCustomer() {
     if (!customerEmails.length || preparingCustomerEmail) return;
     setError('');
     setPreparingCustomerEmail(true);
     try {
-      const credentials = await api(`/problem-samples/${p.id}/customer-notification-credentials/`, {
+      const credentials = await api(`/problem-samples/${problem.id}/customer-notification-credentials/`, {
         method: 'POST',
         errorMessage: 'Could not prepare problem sample tracking link',
       });
       const emailContext: CustomerEmailContext = {
         table,
         values: customValues,
-        problemNumber: p.problem_number,
-        tableName: p.table_name,
+        problemNumber: problem.problem_number,
+        tableName: problem.table_name,
         trackingUrl: credentials.tracking_url,
       };
       setPendingEmailLaunch({

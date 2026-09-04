@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { displayProblemValue, systemColumnHint, ProblemTable } from '@/lib/problemTables';
@@ -30,7 +30,7 @@ type AppliedAdvancedSearch = {
 type QuickFilterValues = Record<string, string>;
 const EMPTY_QUICK_FILTERS: QuickFilterValues = {};
 
-export default function Home() {
+function HomeContent() {
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table') || '';
   const [q, setQ] = useState('');
@@ -187,4 +187,12 @@ export default function Home() {
       </div>
     </section>}
   </div>;
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div className="muted">Loading problem samples…</div>}>
+      <HomeContent />
+    </Suspense>
+  );
 }

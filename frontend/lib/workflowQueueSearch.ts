@@ -55,7 +55,7 @@ export const WORKFLOW_QUEUE_FIELDS: QueueFilterField[] = [
   { key: 'any_custom', label: 'Any Custom Field', type: 'text' },
 ];
 
-function textValue(value: unknown) {
+function textValue(value: unknown): string {
   if (value == null) return '';
   if (Array.isArray(value)) return value.join(' ');
   if (typeof value === 'object') return Object.values(value as Record<string, unknown>).map(textValue).join(' ');

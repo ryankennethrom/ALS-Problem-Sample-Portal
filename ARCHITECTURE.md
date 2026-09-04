@@ -285,3 +285,6 @@ After a staff login link is successfully exchanged, the frontend uses a full bro
 Public Problem Sample Tracking Link responses require a non-empty typed-name signature (maximum 200 characters). The frontend disables workflow-action buttons until a name is entered, and the backend independently rejects unsigned responses. Each submitted name is stored in the corresponding `ProblemHistory.details.customer_signature` value so it remains tied to the exact customer action. Successful submissions clear the input so a later response must be signed again.
 
 - Customer **Fill out requested information (if applicable)** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **To be back to testing**.
+
+## Next.js search-parameter boundaries
+The root problem-sample table page renders its search-param-dependent content through `Suspense`. The New Problem Sample route also wraps `ProblemForm`, which reads the `table` query parameter, in `Suspense`. Keep this boundary when changing either route so Vercel/Next.js production prerendering remains valid.

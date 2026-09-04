@@ -482,3 +482,6 @@ The canonical migration graph includes `0045_alter_problemsample_acknowledgement
 Customers must type their name as a signature before submitting any tracking-page action. The signature is stored in History with that response.
 
 - Customer **Fill out requested information (if applicable)** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **To be back to testing**.
+
+### Next.js production prerendering
+Pages/components that use `useSearchParams()` are rendered below React `Suspense` boundaries. This is required by current Next.js production builds and prevents CSR-bailout prerender errors on `/` and `/problems/new`.
