@@ -1,7 +1,19 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import { api } from '@/lib/api';
+import { api, setToken } from '@/lib/api';
+
+type LoginUser = {
+  id: number;
+  username: string;
+  name: string;
+  needs_role: boolean;
+};
+
+type LoginResponse = {
+  token: string;
+  user: LoginUser;
+};
 
 function SignInIcon() {
   return <svg className="login-button-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -12,27 +24,27 @@ function SignInIcon() {
 }
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState('');
 
-  async function request(e: FormEvent) {
+  async function signIn(e: FormEvent) {
     e.preventDefault();
     setError('');
-    setSending(true);
+    setSigningIn(true);
     try {
-      await api('/auth/request-link/', {
+      const data: LoginResponse = await api('/auth/login/', {
         method: 'POST',
-        body: JSON.stringify({ email }),
-        successMessage: 'Sign-in link sent.',
-        errorMessage: 'Could not send sign-in link',
+        body: JSON.stringify({ username, password }),
+        errorMessage: 'Could not sign in',
       });
-      setSent(true);
+      setToken(data.token);
+      window.location.replace(data.user.needs_role ? '/account' : '/');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : 'Sign in failed');
     } finally {
-      setSending(false);
+      setSigningIn(false);
     }
   }
 
@@ -46,39 +58,40 @@ export default function Login() {
       <div className="login-divider" />
 
       <div className="login-form-area">
-        {!sent ? <>
-          <p className="login-prompt">Sign in to start your session</p>
-          <form className="login-stack" onSubmit={request}>
-            <div className="login-field">
-              <label htmlFor="login-email">Company email</label>
-              <input
-                id="login-email"
-                className="login-input"
-                type="email"
-                required
-                autoComplete="email"
-                placeholder="name@alsglobal.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-              />
-            </div>
-            <button className="login-primary-button" type="submit" disabled={sending}>
-              <SignInIcon />{sending ? 'Sending…' : 'Send Sign-In Link'}
-            </button>
-          </form>
-        </> : <>
-          <p className="login-prompt">Check your email</p>
-          <p className="login-subprompt">
-            We sent a secure sign-in link to <strong>{email}</strong>. The link expires in <strong>5 minutes</strong> and can only be used once.
-          </p>
-          <div className="login-stack">
-            <button className="login-secondary-button" type="button" onClick={() => { setSent(false); setError(''); }}>
-              Use another email
-            </button>
+        <p className="login-prompt">Sign in to start your session</p>
+        <form className="login-stack" onSubmit={signIn}>
+          <div className="login-field">
+            <label htmlFor="login-username">Username</label>
+            <input
+              id="login-username"
+              className="login-input"
+              type="text"
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="username"
+              placeholder="first.last"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+            />
           </div>
-          <div className="login-dev-note">In local development, the full sign-in link appears in the Django terminal.</div>
-        </>}
-
+          <div className="login-field">
+            <label htmlFor="login-password">Password</label>
+            <input
+              id="login-password"
+              className="login-input"
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+            />
+          </div>
+          <button className="login-primary-button" type="submit" disabled={signingIn}>
+            <SignInIcon />{signingIn ? 'Signing in…' : 'Sign In'}
+          </button>
+        </form>
+        <p className="login-subprompt">Accounts are created by a tracker administrator.</p>
         {error && <div className="login-error" role="alert">{error}</div>}
       </div>
     </section>

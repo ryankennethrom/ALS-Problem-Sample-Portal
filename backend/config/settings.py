@@ -64,16 +64,5 @@ REST_FRAMEWORK={
     'DEFAULT_PERMISSION_CLASSES':['rest_framework.permissions.IsAuthenticated'],
 }
 
-AUTH_ALLOWED_DOMAIN=os.getenv('AUTH_ALLOWED_DOMAIN','alsglobal.com').lower().strip()
-AUTH_ALLOWED_EMAILS={x.strip().lower() for x in os.getenv('AUTH_ALLOWED_EMAILS','').split(',') if x.strip()}
-LOGIN_LINK_EXPIRES_MINUTES=5
 SESSION_EXPIRES_HOURS=int(os.getenv('SESSION_EXPIRES_HOURS','12'))
 FRONTEND_URL=os.getenv('FRONTEND_URL','http://localhost:3000')
-
-EMAIL_BACKEND=os.getenv('EMAIL_BACKEND','django.core.mail.backends.console.EmailBackend')
-DEFAULT_FROM_EMAIL=os.getenv('DEFAULT_FROM_EMAIL','Edmonton Problem Sample Tracker <noreply@example.com>')
-EMAIL_HOST=os.getenv('EMAIL_HOST','')
-EMAIL_PORT=int(os.getenv('EMAIL_PORT','587'))
-EMAIL_HOST_USER=os.getenv('EMAIL_HOST_USER','')
-EMAIL_HOST_PASSWORD=os.getenv('EMAIL_HOST_PASSWORD','')
-EMAIL_USE_TLS=env_bool('EMAIL_USE_TLS', True)

@@ -11,7 +11,7 @@ A Next.js + Django/DRF internal tracker for laboratory problem samples.
 - **Frontend:** Next.js App Router + TypeScript
 - **Backend:** Django + Django REST Framework
 - **Database:** PostgreSQL locally and in deployment
-- **Authentication:** single-use email sign-in links for the MVP; isolated so it can later be replaced by Microsoft Entra ID
+- **Authentication:** administrator-created username/password accounts for the temporary MVP; isolated so it can later be replaced by Microsoft Entra ID
 - **Search:** identifier normalization + weighted fuzzy search, including user-created searchable columns
 - **Customer sync:** Customer Export upload rather than direct access to ALS production systems
 - **Dynamic tables:** users can create multiple Problem Sample Tables and add their own typed columns, similar to Microsoft Lists/Tables
@@ -119,7 +119,7 @@ python manage.py loaddata sqlite-to-postgres.json
 
 Keep a copy of `db.sqlite3` until you have verified the PostgreSQL data. Uploaded image/file contents live under `backend/media/`, not inside SQLite, so preserve that directory as well.
 
-Development sign-in links are printed to the backend console by default. Configure the SMTP variables in `backend/.env` when you want real email delivery.
+After the first migration, create at least one tracker administrator with `python manage.py create_tracker_admin --first-name <First> --last-name <Last>`. The command prints the derived username and generated random password once.
 
 ### Frontend
 
@@ -167,7 +167,9 @@ For a larger production dataset, the search service can later switch to PostgreS
 
 ## Authentication
 
-The MVP accepts authorized `@alsglobal.com` email addresses by default and sends a cryptographically random, single-use sign-in link. The login token has roughly 384 bits of entropy, only its SHA-256 hash is stored in the database, and it expires after 5 minutes or immediately after successful use, whichever comes first. Requesting a new link invalidates older unused links for the same email. Locally, the full link is printed to the Django console. Production authentication can later be replaced with Microsoft Entra ID without changing the table/problem domain model.
+The temporary MVP uses administrator-created username/password accounts. An administrator creates an account from **User Accounts** by entering First Name and Last Name. The server derives a lowercase username such as `jane.smith` (adding a numeric suffix for duplicates), generates a cryptographically random password, and stores only Django's password hash. Email is not required. The generated password is returned only in the account-creation response so the administrator can hand it to the user.
+
+Administrator permission is separate from the existing **Lab Technician** / **Customer Service** workflow role. Regular users still choose one of those workflow roles after first login. From **User Accounts**, an administrator can grant or remove administrator access for another user, reset another user's password to a newly generated random password, and delete another user. Password reset revokes that user's existing tracker sessions. These account-management actions cannot be used on the administrator's own account from the User Accounts page. Every authenticated user, including administrators, can change their own password from **My Account** by entering the current password and a new password of at least 12 characters. The new password is saved with Django's password hashing; other active tracker sessions for that account are revoked while the session performing the change remains signed in. The initial administrator is bootstrapped with `python manage.py create_tracker_admin --first-name <First> --last-name <Last>`. Microsoft Entra ID can later replace this temporary login layer and add staff email identities without changing the problem-sample domain model.
 
 ## Railway deployment
 
@@ -180,7 +182,7 @@ New Problem Sample Tables start with only the protected auto-incrementing **Prob
 
 ## User roles
 
-First-time registration asks the user to choose **Lab Technician** or **Customer Service**. This is workflow/profile metadata, not a security privilege. Users can change it later from **My Account**.
+Regular accounts choose **Lab Technician** or **Customer Service** after their first username/password login. This remains workflow/profile metadata. **Administrator** is a separate security permission used for account creation and is not selectable from My Account.
 
 
 ### Customer-service email template
@@ -442,13 +444,6 @@ Customer acknowledgement history entries display **Customer acknowledged problem
 
 The Follow Up Required workflow exposes a Quick Filters section for the currently selected real problem-sample table. Each Choice column with configured choices receives an All/value dropdown. Quick filters can be combined with the basic search and Advanced Search and are enforced by the backend follow-up endpoint. The Oldest problem sample requiring follow up indicator follows the current filtered result set, so it always identifies the oldest row remaining after the selected table, basic search, Quick Filters, and Advanced Search are applied.
 
-- Login verification is guarded so React development Strict Mode cannot redeem the same one-time sign-in link twice.
-
-
-## Login verification link redirect behavior
-After a staff login link is successfully exchanged, the frontend uses a full browser redirect so the verification page is immediately replaced by the portal. Existing users go to the portal home page; first-time users who still need to select a role go to My Account.
-
-- When using Django's console email backend locally, the backend prints a separate clean `LOCAL DEVELOPMENT SIGN-IN LINK` because the raw MIME email may display quoted-printable encoding such as `=3D` and soft line breaks.
 
 
 ## Persistent problem sample tracking links
@@ -485,3 +480,7 @@ Customers must type their name as a signature before submitting any tracking-pag
 
 ### Next.js production prerendering
 Pages/components that use `useSearchParams()` are rendered below React `Suspense` boundaries. This is required by current Next.js production builds and prevents CSR-bailout prerender errors on `/` and `/problems/new`.
+
+## Current temporary staff authentication (supersedes earlier login-link notes)
+
+Staff email magic-link/Brevo login is disabled. The current endpoints are `POST /api/auth/login/` for username/password sign-in and administrator-only `GET/POST /api/auth/accounts/` for account listing/creation. Accounts require First Name, Last Name, and a server-derived username; no email address is required. `UserProfile.is_admin` is the account-management permission. Existing Lab Technician/Customer Service values remain separate workflow roles.

@@ -7,7 +7,7 @@ import { api, clearToken, getToken } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
 import RequiredRoleModal from '@/components/RequiredRoleModal';
 
-type User = { id: number; email: string; name: string; role: string; role_label: string; needs_role: boolean };
+type User = { id: number; username: string; email: string; first_name: string; last_name: string; name: string; role: string; role_label: string; needs_role: boolean; is_admin: boolean };
 type IconName = 'samples' | 'customers' | 'logout' | 'table' | 'settings' | 'account' | 'chevron' | 'container' | 'shipping' | 'flask' | 'clock' | 'create';
 
 function Icon({ name }: { name: IconName }) {
@@ -38,11 +38,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [backToTestingOpen, setBackToTestingOpen] = useState(false);
 
   useEffect(() => {
-    if (!getToken()) return;
+    const publicRoute = pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/');
+    if (publicRoute) return;
+    if (!getToken()) {
+      router.replace('/login');
+      return;
+    }
     api('/auth/me/').then((u:User) => {
       setUser(u);
       if (u.needs_role && pathname !== '/account') router.push('/account');
-    }).catch(() => setUser(null));
+    }).catch(() => {
+      clearToken();
+      setUser(null);
+      router.replace('/login');
+    });
     api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
   }, [pathname, router]);
 
@@ -56,7 +65,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return <div className={`admin-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
     <aside className="sidebar">
       <Link href="/" className="sidebar-brand"><span className="brand-mark">E</span><span className="brand-label">Edmonton Problem Sample Tracker</span></Link>
-      <Link href="/account" className="user-panel user-panel-link"><div className="avatar">{(user?.name || user?.email || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.role_label || 'Choose role'}</div><div className="user-email">{user?.email || (pathname === '/login' ? 'Sign in required' : 'Internal tracker')}</div></div></Link>
+      <Link href="/account" className="user-panel user-panel-link"><div className="avatar">{(user?.name || user?.username || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.is_admin ? 'Administrator' : (user?.role_label || 'Choose role')}</div><div className="user-email">{user?.username ? `@${user.username}` : 'Sign in required'}</div></div></Link>
       <nav className="side-nav" aria-label="Main navigation">
         <div className="side-section-label">Workflows</div>
 
@@ -167,6 +176,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/customers" className={`side-link ${pathname==='/customers'?'active':''}`}>
           <span className="side-icon"><Icon name="customers"/></span><span className="side-label">Customers</span>
         </Link>
+        {user?.is_admin && <Link href="/accounts" className={`side-link ${pathname==='/accounts'?'active':''}`}>
+          <span className="side-icon"><Icon name="account"/></span><span className="side-label">User Accounts</span>
+        </Link>}
         <Link href="/account" className={`side-link ${pathname==='/account'?'active':''}`}>
           <span className="side-icon"><Icon name="account"/></span><span className="side-label">My Account</span>
         </Link>

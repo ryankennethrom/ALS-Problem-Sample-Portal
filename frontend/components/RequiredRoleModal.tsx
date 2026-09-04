@@ -6,11 +6,15 @@ import { api } from '@/lib/api';
 type Role = 'lab_technician' | 'customer_service';
 export type RoleModalUser = {
   id: number;
+  username: string;
   email: string;
+  first_name: string;
+  last_name: string;
   name: string;
   role: string;
   role_label: string;
   needs_role: boolean;
+  is_admin: boolean;
 };
 
 export default function RequiredRoleModal({

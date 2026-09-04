@@ -53,7 +53,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         if obj.column_type != ProblemColumn.TYPE_GROUP or not obj.group_role:
             return []
         profiles = (UserProfile.objects.filter(role=obj.group_role, user__is_active=True)
-                    .select_related('user').order_by('user__email'))
+                    .select_related('user').order_by('user__first_name', 'user__last_name', 'user__username'))
         return [
             {
                 'id': profile.user_id,

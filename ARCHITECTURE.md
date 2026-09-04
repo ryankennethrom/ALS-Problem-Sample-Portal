@@ -11,7 +11,7 @@ Ontario customer service / Edmonton laboratory
                   |
              Django API
           /        |        \
- magic-link auth PostgreSQL   Customer Export
+ username/password auth PostgreSQL   Customer Export
                   |
         ProblemTable
             |
@@ -243,16 +243,11 @@ The `customer-notification-sent` action stores visible row changes in `ProblemHi
 
 ## Authentication
 
-Staff login uses single-use email sign-in links. Each link carries a `secrets.token_urlsafe(48)` token (about 384 bits of entropy); only its SHA-256 hash is stored in `LoginLink`. Links expire after 5 minutes and are consumed atomically on the first successful verification. Requesting a new link invalidates any older unused link for that email. The frontend removes the token from the visible URL/history before exchanging it for the normal app session token. New users choose their role from My Account immediately after their first verified sign-in.
+Temporary staff authentication uses administrator-created username/password accounts. Django's built-in `User` stores the derived username, First Name, Last Name, and password hash; staff email is intentionally blank until Microsoft Entra integration is available. `AppSession` remains the bearer-session model used by the frontend after a successful `POST /api/auth/login/`.
 
-- Login verification is guarded so React development Strict Mode cannot redeem the same one-time sign-in link twice.
+`UserProfile.is_admin` is a dedicated security permission and is deliberately separate from `UserProfile.role`, whose values remain Lab Technician and Customer Service for Group-column/workflow behavior. `GET/POST /api/auth/accounts/` is administrator-only. POST accepts First Name and Last Name, derives a unique username such as `jane.smith`, creates a cryptographically random password, and returns that generated password only in the creation response. An initial administrator can be bootstrapped with the `create_tracker_admin` management command.
 
-
-## Login verification link redirect behavior
-After a staff login link is successfully exchanged, the frontend uses a full browser redirect so the verification page is immediately replaced by the portal. Existing users go to the portal home page; first-time users who still need to select a role go to My Account.
-
-- When using Django's console email backend locally, the backend prints a separate clean `LOCAL DEVELOPMENT SIGN-IN LINK` because the raw MIME email may display quoted-printable encoding such as `=3D` and soft line breaks.
-
+Regular new accounts with no workflow role still receive the required first-login role gate. Administrator accounts bypass that gate unless they voluntarily set a workflow role from My Account. Microsoft Entra can later replace the temporary login endpoint and populate email identities while leaving the tracker/domain APIs unchanged.
 
 ## Persistent problem sample tracking links
 - Each problem sample row has at most one secure tracking token/link. Once saved, that same link is reused.
