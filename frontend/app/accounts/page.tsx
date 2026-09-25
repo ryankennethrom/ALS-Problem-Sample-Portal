@@ -80,7 +80,7 @@ export default function AccountsPage() {
   async function setAdministrator(account: Account, isAdmin: boolean) {
     if (account.id === currentUserId) return;
     const message = isAdmin
-      ? `Make ${account.name} an administrator? They will be able to create and manage user accounts.`
+      ? `Make ${account.name} an administrator? They will be able to create and manage staff accounts.`
       : `Remove administrator access from ${account.name}? Their existing login sessions will be revoked.`;
     if (!window.confirm(message)) return;
 
@@ -166,7 +166,7 @@ export default function AccountsPage() {
   return <div>
     <div className="page-heading-row">
       <div>
-        <h1 className="page-heading">User Accounts</h1>
+        <h1 className="page-heading">Staff Accounts</h1>
         <div className="muted">Administrators can create accounts, grant administrator access, reset passwords, and delete other users. Email addresses will be added later through Microsoft Entra.</div>
       </div>
     </div>

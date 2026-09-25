@@ -88,7 +88,9 @@ def score_record(obj, query):
             columns = []
     values = obj.custom_values or {}
     for column in columns:
-        if column.field_key == 'system-days-until-automatic-disposal':
+        if column.field_key == 'current-workflow':
+            raw = getattr(obj, 'workflow_status', '')
+        elif column.field_key == 'system-days-until-automatic-disposal':
             raw = getattr(obj, 'days_until_automatic_disposal', None)
         elif column.field_key == 'system-tracking-link':
             token = getattr(obj, 'acknowledgement_token', None)
@@ -115,7 +117,7 @@ def score_record(obj, query):
         if isinstance(raw, list):
             raw = ' '.join(map(str, raw))
         value = normalize_text(raw)
-        weight = 62 if column.column_type in {'choice', 'multi_choice', 'email', 'client_email', 'group', 'distributor', 'end_user', 'row_creator', 'recent_row_modifier', 'brand'} else 52
+        weight = 62 if column.column_type in {'choice', 'multi_choice', 'email', 'client_email', 'group', 'distributor', 'end_user', 'row_creator', 'recent_row_modifier', 'brand', 'intercolumn_controller'} else 52
         if nq == value:
             candidate = weight + 55
         elif nq in value:

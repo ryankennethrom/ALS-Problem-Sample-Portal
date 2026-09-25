@@ -3,8 +3,8 @@ import AppShell from '@/components/AppShell';
 import ToastProvider from '@/components/ToastProvider';
 
 export const metadata = {
-  title: 'Edmonton Problem Sample Tracker',
-  description: 'Internal problem sample tracker',
+  title: 'Edmonton Ticket Tracker',
+  description: 'Internal ticket tracker',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

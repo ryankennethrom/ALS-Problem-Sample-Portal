@@ -1,11 +1,13 @@
 from django.contrib import admin
-from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemContainer
+from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemContainer, ProblemTrackingLink, EmailTemplate
 
 admin.site.register(ProblemTable)
 admin.site.register(ProblemColumn)
 admin.site.register(ProblemSample)
+admin.site.register(ProblemTrackingLink)
 admin.site.register(ProblemComment)
 admin.site.register(ProblemImage)
 admin.site.register(ProblemAttachment)
 
 admin.site.register(ProblemContainer)
+admin.site.register(EmailTemplate)

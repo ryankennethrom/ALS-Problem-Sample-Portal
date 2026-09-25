@@ -40,7 +40,7 @@ export default function Login() {
         errorMessage: 'Could not sign in',
       });
       setToken(data.token);
-      window.location.replace(data.user.needs_role ? '/account' : '/');
+      window.location.replace(data.user.needs_role ? '/account' : '/dashboard');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed');
     } finally {
@@ -52,7 +52,7 @@ export default function Login() {
     <section className="login-card" aria-labelledby="login-title">
       <div className="login-brand-area">
         <img className="login-logo" src="/als-logo.png" alt="ALS" />
-        <h1 id="login-title">Edmonton Problem<br />Sample Tracker</h1>
+        <h1 id="login-title">Edmonton Ticket<br />Tracker</h1>
       </div>
 
       <div className="login-divider" />

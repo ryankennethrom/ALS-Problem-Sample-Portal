@@ -91,6 +91,8 @@ export default function ClientEmailAutocomplete({
   const [adding, setAdding] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [addError, setAddError] = useState('');
+  const [copiedEmail, setCopiedEmail] = useState('');
+  const [copiedAll, setCopiedAll] = useState(false);
   const sourceRequestId = useRef(0);
   const filterRequestId = useRef(0);
   const hydratedDependencySignature = useRef('');
@@ -296,6 +298,53 @@ export default function ClientEmailAutocomplete({
     setAdding(false);
   }
 
+  async function copyText(text: string): Promise<boolean> {
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    if (!copied) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    return copied;
+  }
+
+  async function copyEmail(email: string) {
+    if (!await copyText(email)) return;
+    const key = email.toLowerCase();
+    setCopiedEmail(key);
+    window.setTimeout(() => {
+      setCopiedEmail(current => current === key ? '' : current);
+    }, 1500);
+  }
+
+  async function copyAllEmails() {
+    if (!emails.length) return;
+    if (!await copyText(emails.join('; '))) return;
+    setCopiedAll(true);
+    window.setTimeout(() => setCopiedAll(false), 1500);
+  }
+
   const activeDependency = activeCompany
     ? configuredDependencies.find(item => item.company.toLowerCase() === activeCompany.toLowerCase())
     : undefined;
@@ -328,25 +377,48 @@ export default function ClientEmailAutocomplete({
           />
           {loading && <span className="client-email-loading">Searching…</span>}
         </div>
-        <span className="client-email-count">{emails.length} email{emails.length === 1 ? '' : 's'}</span>
+        <div className="client-email-toolbar-summary">
+          <span className="client-email-count">{emails.length} email{emails.length === 1 ? '' : 's'}</span>
+          <button
+            type="button"
+            className="button secondary client-email-copy-all-button"
+            onClick={() => void copyAllEmails()}
+            disabled={!emails.length}
+            title="Copy all client email addresses to the clipboard"
+          >
+            {copiedAll ? 'Copied All' : 'Copy All'}
+          </button>
+        </div>
       </div>
 
       <div className="client-email-list" role="listbox" aria-multiselectable="true">
-        {visibleRows.length ? visibleRows.map(row => {
+        {visibleRows.length ? visibleRows.map((row, index) => {
           const key = row.email.toLowerCase();
           const item = row.suggestion;
-          return <label className={`client-email-list-row${selected.has(key) ? ' selected' : ''}`} key={key}>
-            <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(row.email)} />
-            <span className="client-email-list-copy">
+          const checkboxId = `${id}-email-${index}`;
+          return <div className={`client-email-list-row${selected.has(key) ? ' selected' : ''}`} key={key}>
+            <input id={checkboxId} type="checkbox" checked={selected.has(key)} onChange={() => toggle(row.email)} />
+            <label className="client-email-list-copy" htmlFor={checkboxId}>
               <span className="client-email-address">{row.email}</span>
               <span className="client-email-meta">
                 {item
                   ? [item.primary_contact, item.company_name, item.external_customer_id && `CoyId ${item.external_customer_id}`, item.city, item.state].filter(Boolean).join(' · ')
                   : 'Added manually or retained from an earlier customer export'}
               </span>
+            </label>
+            <span className="client-email-row-actions">
+              {!row.stored && <span className="client-email-suggestion-badge">Suggestion</span>}
+              <button
+                type="button"
+                className="button secondary client-email-copy-button"
+                onClick={() => void copyEmail(row.email)}
+                title={`Copy ${row.email} to clipboard`}
+                aria-label={`Copy ${row.email} to clipboard`}
+              >
+                {copiedEmail === key ? 'Copied' : 'Copy'}
+              </button>
             </span>
-            {!row.stored && <span className="client-email-suggestion-badge">Suggestion</span>}
-          </label>;
+          </div>;
         }) : <div className="client-email-empty">
           {filter.trim()
             ? 'No matching emails found.'

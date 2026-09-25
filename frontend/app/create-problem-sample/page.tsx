@@ -5,8 +5,10 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
+import { useCurrentUser } from '@/components/CurrentUserContext';
 
 export default function CreateProblemSampleWorkflowPage() {
+  const currentUser = useCurrentUser();
   const router = useRouter();
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,7 +30,7 @@ export default function CreateProblemSampleWorkflowPage() {
       })
       .catch((e) => {
         if (!active) return;
-        setError(e instanceof Error ? e.message : 'Could not load problem sample tables.');
+        setError(e instanceof Error ? e.message : 'Could not load ticket tables.');
         setLoading(false);
       });
 
@@ -37,28 +39,28 @@ export default function CreateProblemSampleWorkflowPage() {
 
   if (loading) {
     return <div>
-      <h1 className="page-heading">Create Problem Sample</h1>
+      <h1 className="page-heading">Create Ticket</h1>
       <section className="panel panel-blue">
-        <div className="panel-header">Problem Sample Table</div>
+        <div className="panel-header">Ticket Table</div>
         <div className="panel-body"><div className="muted">Loading tables…</div></div>
       </section>
     </div>;
   }
 
   return <div>
-    <h1 className="page-heading">Create Problem Sample</h1>
+    <h1 className="page-heading">Create Ticket</h1>
 
     {error ? <div className="error">{error}</div> : tables.length === 0 ? (
       <section className="panel panel-blue">
-        <div className="panel-header">No Problem Sample Tables</div>
+        <div className="panel-header">No Ticket Tables</div>
         <div className="panel-body stack">
-          <div>No problem sample table exists yet. Create a table before adding a problem sample.</div>
-          <div><Link className="button" href="/tables">Manage Tables</Link></div>
+          <div>No ticket table exists yet. Ask an administrator to create one before adding a ticket.</div>
+          {currentUser?.is_admin && <div><Link className="button" href="/tables">Manage Tables</Link></div>}
         </div>
       </section>
     ) : (
       <section className="panel panel-blue">
-        <div className="panel-header">Which table is this problem sample for?</div>
+        <div className="panel-header">Which table is this ticket for?</div>
         <div className="table-card-list">
           {tables.map((table) => (
             <Link

@@ -59,7 +59,7 @@ export default function RequiredRoleModal({
         <div className="required-role-badge">Account setup required</div>
         <h2 id="required-role-title">Choose your role to continue</h2>
         <p id="required-role-description" className="required-role-copy">
-          Your new account needs a role before you can use the Edmonton Problem Sample Tracker.
+          Your new account needs a role before you can use the Edmonton Ticket Tracker.
           Choose the option that best matches your work.
         </p>
 
@@ -75,7 +75,7 @@ export default function RequiredRoleModal({
             <span className="required-role-radio" aria-hidden="true" />
             <span>
               <strong>Lab Technician</strong>
-              <small>For laboratory staff handling and updating problem samples.</small>
+              <small>For laboratory staff handling and updating tickets.</small>
             </span>
           </button>
 

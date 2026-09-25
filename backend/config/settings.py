@@ -24,10 +24,12 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'problem_samples.public_rate_limit.PublicTrackingRateLimitMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'problem_samples.middleware.AutomaticDisposalTransitionMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -63,6 +65,14 @@ REST_FRAMEWORK={
     'DEFAULT_AUTHENTICATION_CLASSES':['accounts.authentication.BearerSessionAuthentication'],
     'DEFAULT_PERMISSION_CLASSES':['rest_framework.permissions.IsAuthenticated'],
 }
+
+# Use forwarded IPs only after verifying that the ingress overwrites or appends
+# X-Forwarded-For through the configured number of trusted proxy hops.
+PUBLIC_TRACKING_TRUSTED_PROXY_HOPS = int(os.getenv('PUBLIC_TRACKING_TRUSTED_PROXY_HOPS', '0'))
+PUBLIC_TRACKING_READ_LIMIT_PER_MINUTE = int(os.getenv('PUBLIC_TRACKING_READ_LIMIT_PER_MINUTE', '60'))
+PUBLIC_TRACKING_READ_LIMIT_PER_HOUR = int(os.getenv('PUBLIC_TRACKING_READ_LIMIT_PER_HOUR', '600'))
+PUBLIC_TRACKING_WRITE_LIMIT_PER_MINUTE = int(os.getenv('PUBLIC_TRACKING_WRITE_LIMIT_PER_MINUTE', '10'))
+PUBLIC_TRACKING_WRITE_LIMIT_PER_HOUR = int(os.getenv('PUBLIC_TRACKING_WRITE_LIMIT_PER_HOUR', '60'))
 
 SESSION_EXPIRES_HOURS=int(os.getenv('SESSION_EXPIRES_HOURS','12'))
 FRONTEND_URL=os.getenv('FRONTEND_URL','http://localhost:3000')

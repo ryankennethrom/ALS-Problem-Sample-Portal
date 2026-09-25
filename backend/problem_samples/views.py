@@ -13,7 +13,7 @@ from email import policy
 import mimetypes
 import os
 from PIL import Image as PillowImage, UnidentifiedImageError
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -21,7 +21,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_AUTOMATICALLY_DISPOSED, PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_CHOICES, PROBLEM_STATUS_DEFAULT, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from .permissions import IsTrackerAdminOrReadOnly
+from .notification_recipient import get_edmonton_recipient
 from .serializers import (
     ProblemSampleSerializer, ShippingProblemSampleSerializer, CommentSerializer, ImageSerializer, AttachmentSerializer, ProblemTableSerializer, ProblemColumnSerializer, ProblemContainerSerializer,
 )
@@ -31,6 +33,14 @@ from .advanced_search import advanced_search_problem_samples
 
 MAX_ROW_FILE_BYTES = 25 * 1024 * 1024
 MAX_NOTIFICATION_FILES_BYTES = 20 * 1024 * 1024
+
+
+def _confirmed_testing_recipient(request):
+    configured = get_edmonton_recipient().email
+    supplied = request.data.get('email_recipient')
+    if not isinstance(supplied, str) or supplied.strip().casefold() != configured.casefold():
+        raise DRFValidationError({'email_recipient': 'The NA.EDM address has changed. Reopen the email preview before confirming.'})
+    return configured
 ALLOWED_IMAGE_FORMATS = {'JPEG', 'PNG', 'GIF', 'WEBP'}
 
 
@@ -56,6 +66,15 @@ def _history_details(details, reason=''):
     if reason:
         result['reason'] = reason
     return result
+
+
+def _required_email_not_sent_reason(value, field='reason'):
+    if not isinstance(value, str) or not value.strip():
+        raise DRFValidationError({field: 'Provide a reason why the email was not sent.'})
+    reason = value.strip()
+    if len(reason) > 500:
+        raise DRFValidationError({field: 'The reason must be 500 characters or fewer.'})
+    return reason
 
 
 def _validate_uploaded_file(uploaded, *, image=False):
@@ -134,8 +153,8 @@ def _history_value(value):
 
 def _automatic_disposal_history_value(problem):
     """Human-readable value for the built-in disposal countdown in History."""
-    if problem.workflow_status != PROBLEM_STATUS_AUTOMATICALLY_DISPOSED:
-        return 'Not automatic'
+    if not problem.dispose_automatically:
+        return 'Unknown'
     days = problem.days_until_automatic_disposal
     if days is None:
         return '—'
@@ -149,7 +168,7 @@ def ensure_problem_id_column(table):
     if column:
         changed = []
         desired = {
-            'name': 'Problem ID', 'column_type': ProblemColumn.TYPE_NUMBER, 'required': True,
+            'name': 'Ticket ID', 'column_type': ProblemColumn.TYPE_NUMBER, 'required': True,
             'searchable': True, 'choices': [], 'default_value': None, 'position': 0, 'is_system': True,
         }
         for field, value in desired.items():
@@ -159,28 +178,95 @@ def ensure_problem_id_column(table):
             column.save(update_fields=changed + ['modified_at'])
         return column
     return ProblemColumn.objects.create(
-        table=table, name='Problem ID', field_key='problem-id',
+        table=table, name='Ticket ID', field_key='problem-id',
         column_type=ProblemColumn.TYPE_NUMBER, required=True, searchable=True,
         choices=[], default_value=None, position=0, is_system=True,
     )
 
 
 
+def _clean_custom_statuses(raw_choices):
+    # Compatibility helper retained for older callers. Status is no longer table-defined.
+    return list(PROBLEM_STATUS_CHOICES)
+
+
 def ensure_status_column(table):
-    choices = list(SYSTEM_PROBLEM_STATUSES)
     column = table.columns.filter(field_key='status').first()
+    desired = {
+        'name': 'Status',
+        'description': 'Required built-in descriptive status. Values are fixed across all ticket tables; workflow routing is controlled separately by Current Workflow.',
+        'column_type': ProblemColumn.TYPE_CHOICE,
+        'required': True,
+        'searchable': True,
+        'include_in_customer_notification': False,
+        'choices': list(PROBLEM_STATUS_CHOICES),
+        'default_value': PROBLEM_STATUS_DEFAULT,
+        'position': 1,
+        'is_system': True,
+    }
     if column is None:
         column = ProblemColumn.objects.create(
-            table=table, name='Status', description='Current workflow status of the problem sample.',
-            field_key='status', column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
-            include_in_customer_notification=False, choices=choices,
-            default_value=PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL, position=1, is_system=True,
+            table=table, field_key='status', **desired
+        )
+    else:
+        changed = []
+        for field, value in desired.items():
+            if getattr(column, field) != value:
+                setattr(column, field, value)
+                changed.append(field)
+        if changed:
+            column.save(update_fields=changed + ['modified_at'])
+    return column
+
+def ensure_current_workflow_column(table):
+    column = table.columns.filter(field_key=SYSTEM_CURRENT_WORKFLOW_FIELD_KEY).first()
+    if column is None:
+        # Insert immediately after Status. All later built-in/custom columns move right.
+        table.columns.filter(position__gte=2).update(position=F('position') + 1)
+        column = ProblemColumn.objects.create(
+            table=table, name='Current Workflow',
+            description='Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
+            field_key=SYSTEM_CURRENT_WORKFLOW_FIELD_KEY,
+            column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
+            include_in_customer_notification=False, choices=list(CURRENT_WORKFLOW_CHOICES),
+            default_value=CURRENT_WORKFLOW_DEFAULT, position=2, is_system=True,
         )
     else:
         desired = {
-            'name': 'Status', 'column_type': ProblemColumn.TYPE_CHOICE, 'required': True,
-            'searchable': True, 'choices': choices, 'default_value': PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL,
-            'position': 1, 'is_system': True,
+            'name': 'Current Workflow',
+            'description': 'Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
+            'column_type': ProblemColumn.TYPE_CHOICE, 'required': True, 'searchable': True,
+            'include_in_customer_notification': False, 'choices': list(CURRENT_WORKFLOW_CHOICES),
+            'default_value': CURRENT_WORKFLOW_DEFAULT, 'position': 2, 'is_system': True,
+        }
+        changed = []
+        for field, value in desired.items():
+            if getattr(column, field) != value:
+                setattr(column, field, value); changed.append(field)
+        if changed:
+            column.save(update_fields=changed + ['modified_at'])
+    return column
+
+def ensure_dispose_automatically_column(table):
+    column = table.columns.filter(field_key=SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY).first()
+    if column is None:
+        # Insert immediately after Current Workflow. All later built-in/custom columns move right.
+        table.columns.filter(position__gte=3).update(position=F('position') + 1)
+        column = ProblemColumn.objects.create(
+            table=table, name='Dispose Automatically',
+            description='Required built-in setting that controls whether the automatic-disposal countdown is active for this ticket.',
+            field_key=SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY,
+            column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
+            include_in_customer_notification=False, choices=list(DISPOSE_AUTOMATICALLY_CHOICES),
+            default_value=DISPOSE_AUTOMATICALLY_NO, position=3, is_system=True,
+        )
+    else:
+        desired = {
+            'name': 'Dispose Automatically',
+            'description': 'Required built-in setting that controls whether the automatic-disposal countdown is active for this ticket.',
+            'column_type': ProblemColumn.TYPE_CHOICE, 'required': True, 'searchable': True,
+            'include_in_customer_notification': False, 'choices': list(DISPOSE_AUTOMATICALLY_CHOICES),
+            'default_value': DISPOSE_AUTOMATICALLY_NO, 'position': 3, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -194,26 +280,24 @@ def ensure_status_column(table):
 def ensure_days_until_automatic_disposal_column(table):
     column = table.columns.filter(field_key=SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY).first()
     if column is None:
-        # Keep this computed built-in immediately after Status without disturbing
-        # Problem ID (0) or Status (1). Existing user columns move one slot right.
-        table.columns.filter(position__gte=2).update(position=F('position') + 1)
+        table.columns.filter(position__gte=4).update(position=F('position') + 1)
         column = ProblemColumn.objects.create(
             table=table,
             name='Days until up for disposal',
-            description='Read-only countdown until this sample becomes automatically eligible for disposal. The countdown restarts whenever Status changes to Automatically Disposed and applies only while that status is active.',
+            description='Read-only countdown until this sample automatically changes Current Workflow to To be Disposed. The countdown restarts whenever Dispose Automatically changes from No to Yes and is inactive while the value is No.',
             field_key=SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY,
             column_type=ProblemColumn.TYPE_NUMBER,
             required=False, searchable=True,
             include_in_customer_notification=False, choices=[], default_value=None,
-            position=2, is_system=True,
+            position=4, is_system=True,
         )
     else:
         desired = {
             'name': 'Days until up for disposal',
-            'description': 'Read-only countdown until this sample becomes automatically eligible for disposal. The countdown restarts whenever Status changes to Automatically Disposed and applies only while that status is active.',
+            'description': 'Read-only countdown until this sample automatically changes Current Workflow to To be Disposed. The countdown restarts whenever Dispose Automatically changes from No to Yes and is inactive while the value is No.',
             'column_type': ProblemColumn.TYPE_NUMBER, 'required': False, 'searchable': True,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 2, 'is_system': True,
+            'position': 4, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -228,30 +312,30 @@ def ensure_tracking_link_columns(table):
     link_column = table.columns.filter(field_key=SYSTEM_TRACKING_LINK_FIELD_KEY).first()
     expiry_column = table.columns.filter(field_key=SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY).first()
 
-    # Positions 0..2 are Problem ID, Status, and Days until up for disposal.
+    # Positions 0..4 are Ticket ID, Status, Current Workflow, Dispose Automatically, and Days until up for disposal.
     # Shift ordinary columns only when one or both tracking columns are missing.
     if link_column is None and expiry_column is None:
-        table.columns.filter(position__gte=3).update(position=F('position') + 2)
+        table.columns.filter(position__gte=5).update(position=F('position') + 2)
     elif link_column is None:
-        table.columns.filter(position__gte=3).exclude(pk=expiry_column.pk).update(position=F('position') + 1)
+        table.columns.filter(position__gte=5).exclude(pk=expiry_column.pk).update(position=F('position') + 1)
     elif expiry_column is None:
-        table.columns.filter(position__gte=4).exclude(pk=link_column.pk).update(position=F('position') + 1)
+        table.columns.filter(position__gte=6).exclude(pk=link_column.pk).update(position=F('position') + 1)
 
     if link_column is None:
         link_column = ProblemColumn.objects.create(
             table=table, name='Tracking Link',
-            description='Persistent secure Problem Sample Tracking Link for this row. At most one link exists per problem sample.',
+            description='Persistent secure Ticket Tracking Link for this row. At most one link exists per ticket.',
             field_key=SYSTEM_TRACKING_LINK_FIELD_KEY, column_type=ProblemColumn.TYPE_URL,
             required=False, searchable=False, include_in_customer_notification=False,
-            choices=[], default_value=None, position=3, is_system=True,
+            choices=[], default_value=None, position=5, is_system=True,
         )
     else:
         desired = {
             'name': 'Tracking Link',
-            'description': 'Persistent secure Problem Sample Tracking Link for this row. At most one link exists per problem sample.',
+            'description': 'Persistent secure Ticket Tracking Link for this row. At most one link exists per ticket.',
             'column_type': ProblemColumn.TYPE_URL, 'required': False, 'searchable': False,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 3, 'is_system': True,
+            'position': 5, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -263,18 +347,18 @@ def ensure_tracking_link_columns(table):
     if expiry_column is None:
         expiry_column = ProblemColumn.objects.create(
             table=table, name='Tracking Link Expiry',
-            description='When the tracking link becomes inaccessible. It resets to 30 days whenever Status switches to a disposal, shipping, or back-to-testing workflow state.',
+            description='When the tracking link becomes inaccessible. It resets to 30 days whenever Current Workflow switches to a disposal, shipping, or back-to-testing state.',
             field_key=SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, column_type=ProblemColumn.TYPE_DATETIME,
             required=False, searchable=False, include_in_customer_notification=False,
-            choices=[], default_value=None, position=4, is_system=True,
+            choices=[], default_value=None, position=6, is_system=True,
         )
     else:
         desired = {
             'name': 'Tracking Link Expiry',
-            'description': 'When the tracking link becomes inaccessible. It resets to 30 days whenever Status switches to a disposal, shipping, or back-to-testing workflow state.',
+            'description': 'When the tracking link becomes inaccessible. It resets to 30 days whenever Current Workflow switches to a disposal, shipping, or back-to-testing state.',
             'column_type': ProblemColumn.TYPE_DATETIME, 'required': False, 'searchable': False,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 4, 'is_system': True,
+            'position': 6, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -289,6 +373,8 @@ def ensure_tracking_link_columns(table):
 def ensure_builtin_columns(table):
     ensure_problem_id_column(table)
     ensure_status_column(table)
+    ensure_current_workflow_column(table)
+    ensure_dispose_automatically_column(table)
     ensure_days_until_automatic_disposal_column(table)
     ensure_tracking_link_columns(table)
 
@@ -302,7 +388,7 @@ def get_default_table():
     if table:
         ensure_builtin_columns(table)
         return table
-    table = ProblemTable.objects.create(name='Problem Samples', description='Default problem sample table', is_default=True)
+    table = ProblemTable.objects.create(name='Tickets', description='Default ticket table', is_default=True)
     ensure_builtin_columns(table)
     return table
 
@@ -310,8 +396,109 @@ def get_default_table():
 class ProblemSampleViewSet(viewsets.ModelViewSet):
     serializer_class = ProblemSampleSerializer
 
+    def create(self, request, *args, **kwargs):
+        # New tickets must go through the prepared tracking-email sequence. This
+        # prevents API clients from creating a real ticket before staff explicitly
+        # chooses either "I sent the email" or "I didn't send the email".
+        return Response(
+            {'detail': 'New tickets must be prepared through the tracking-link email step before they are created.'},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    @action(detail=False, methods=['post'], url_path='prepare-new')
+    def prepare_new(self, request):
+        serializer = ProblemSampleSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        table = serializer.validated_data.get('table') or get_default_table()
+        with transaction.atomic():
+            table = ProblemTable.objects.select_for_update().get(pk=table.pk)
+            ensure_builtin_columns(table)
+            number = table.next_problem_id
+            table.next_problem_id = number + 1
+            table.save(update_fields=['next_problem_id', 'modified_at'])
+            prepared = PreparedProblemSample.objects.create(
+                table=table, created_by=request.user, problem_number=number,
+                tracking_token=generate_acknowledgement_token(), payload=dict(request.data),
+            )
+        base = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
+        return Response({
+            'id': str(prepared.pk), 'problem_number': number,
+            'custom_values': serializer.validated_data.get('custom_values', {}),
+            'tracking_url': f'{base}/track/{prepared.tracking_token}' if base else f'/track/{prepared.tracking_token}',
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='cancel-prepared')
+    def cancel_prepared(self, request):
+        try:
+            prepared_id = uuid.UUID(str(request.data.get('id')))
+        except (TypeError, ValueError, AttributeError):
+            return Response({'detail': 'Choose a valid preparation.'}, status=status.HTTP_400_BAD_REQUEST)
+        prepared = PreparedProblemSample.objects.filter(pk=prepared_id, created_by=request.user, completed_problem__isnull=True).first()
+        if prepared:
+            prepared.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['post'], url_path='create-prepared')
+    def create_prepared(self, request):
+        try:
+            prepared_id = uuid.UUID(str(request.data.get('id')))
+        except (TypeError, ValueError, AttributeError):
+            return Response({'detail': 'Prepare the customer information first.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(request.data.get('sent'), bool):
+            return Response({'detail': 'Confirm whether the email was sent.'}, status=status.HTTP_400_BAD_REQUEST)
+        not_sent_reason = (_required_email_not_sent_reason(request.data.get('not_sent_reason'), 'not_sent_reason')
+                           if request.data['sent'] is False else '')
+        with transaction.atomic():
+            prepared = PreparedProblemSample.objects.select_for_update().filter(pk=prepared_id, created_by=request.user).first()
+            if not prepared:
+                return Response({'detail': 'This preparation was cancelled or is no longer available.'}, status=status.HTTP_404_NOT_FOUND)
+            if prepared.completed_problem_id:
+                return Response({'id': str(prepared.completed_problem_id)})
+            serializer = ProblemSampleSerializer(data=prepared.payload, context={'request': request})
+            serializer.is_valid(raise_exception=True)
+            problem = serializer.save(
+                table=prepared.table, problem_number=prepared.problem_number,
+                created_by=request.user, modified_by=request.user,
+            )
+            lifecycle_fields = problem.apply_acknowledgement_status_transition('', previous_dispose_automatically=False, changed_at=timezone.now())
+            if lifecycle_fields:
+                problem.save(update_fields=list(dict.fromkeys(lifecycle_fields)))
+            ProblemHistory.objects.create(
+                problem=problem, action=ProblemHistory.ACTION_CREATED, actor=request.user,
+                summary='Created ticket', details={},
+            )
+            if not_sent_reason:
+                ProblemHistory.objects.create(
+                    problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+                    summary='Customer tracking email not sent',
+                    details={'email_not_sent': 'customer', 'reason': not_sent_reason, 'changes': []},
+                )
+            problem.transition_to_disposal_if_due(now=timezone.now())
+            if request.data.get('sent') is True:
+                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'mailto', prepared_token=prepared.tracking_token)
+                if recorded.status_code >= 400:
+                    raise DRFValidationError(recorded.data)
+            else:
+                # The user explicitly chose to create the ticket without sending the
+                # email. Persist the prepared public credential anyway so the finalized
+                # ticket has the same tracking link that was shown during the send step,
+                # but do not mark the customer as notified or start automatic disposal.
+                if not is_strong_tracking_token(prepared.tracking_token):
+                    raise DRFValidationError({'detail': 'Invalid prepared ticket tracking token.'})
+                if ProblemTrackingLink.objects.filter(tracking_token=prepared.tracking_token).exists():
+                    raise DRFValidationError({'detail': 'The prepared ticket tracking link conflicts with another ticket. Prepare the ticket again.'})
+                stored_link = ProblemTrackingLink.objects.create(
+                    ticket=problem,
+                    tracking_token=prepared.tracking_token,
+                    expires_at=problem.expected_tracking_link_expiration(),
+                )
+                problem.tracking_link_record = stored_link
+            prepared.completed_problem = problem
+            prepared.save(update_fields=['completed_problem'])
+        return Response({'id': str(problem.pk)}, status=status.HTTP_201_CREATED)
+
     def get_queryset(self):
-        queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container')
+        queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('comments', 'images__uploaded_by', 'attachments__uploaded_by', 'history__actor', 'table__columns')
                     .order_by('-problem_number'))
         table_id = self.request.query_params.get('table')
@@ -331,14 +518,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 table=table, problem_number=problem_number,
                 created_by=self.request.user, modified_by=self.request.user,
             )
-            lifecycle_fields = problem.apply_acknowledgement_status_transition('', changed_at=timezone.now())
+            lifecycle_fields = problem.apply_acknowledgement_status_transition('', previous_dispose_automatically=False, changed_at=timezone.now())
             if lifecycle_fields:
                 problem.save(update_fields=list(dict.fromkeys(lifecycle_fields)))
             ProblemHistory.objects.create(
                 problem=problem, action=ProblemHistory.ACTION_CREATED, actor=self.request.user,
-                summary='Created problem sample', details={},
+                summary='Created ticket', details={},
             )
+            # If this table uses a zero-day automatic-disposal period, persist
+            # the To be Disposed transition in the same create request.
+            problem.transition_to_disposal_if_due(now=timezone.now())
 
+    @transaction.atomic
     def perform_update(self, serializer):
         reason = _change_reason(self.request)
         instance = serializer.instance
@@ -351,12 +542,37 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'client_contact_email', 'courier', 'courier_tracking_number', 'notify', 'email_confirmation',
             ]
         }
-        before_status = str(before_custom.get('status') or before_core.get('status') or '').strip()
+        before_status = str(before_custom.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or instance.current_workflow or CURRENT_WORKFLOW_DEFAULT).strip()
+        next_status = serializer.validated_data.get('current_workflow', before_status)
+        sending_testing_email = False
+        testing_email_not_sent_reason = ''
+        testing_email_body = ''
+        testing_email_recipient = ''
+        if before_status != PROBLEM_STATUS_BACK_TO_TESTING and next_status == PROBLEM_STATUS_BACK_TO_TESTING:
+            decision = self.request.data.get('back_to_testing_email_sent')
+            if not isinstance(decision, bool):
+                raise DRFValidationError({'back_to_testing_email_sent': 'Confirm whether the NA.EDM email was sent before changing the workflow.'})
+            sending_testing_email = decision
+            if not sending_testing_email:
+                testing_email_not_sent_reason = _required_email_not_sent_reason(
+                    self.request.data.get('back_to_testing_not_sent_reason'), 'back_to_testing_not_sent_reason'
+                )
+            testing_email_body = str(self.request.data.get('back_to_testing_email_body') or '').strip()
+            if sending_testing_email and (not testing_email_body or len(testing_email_body) > 10000):
+                raise DRFValidationError({'back_to_testing_email_body': 'Provide the email message (up to 10,000 characters).'})
+            if sending_testing_email:
+                testing_email_recipient = _confirmed_testing_recipient(self.request)
+        before_auto = str(before_custom.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY) or DISPOSE_AUTOMATICALLY_NO).strip().casefold() == DISPOSE_AUTOMATICALLY_YES.casefold()
         before_container = instance.container.container_id if instance.container_id and instance.container else ''
         problem = serializer.save(modified_by=self.request.user)
-        lifecycle_fields = problem.apply_acknowledgement_status_transition(before_status)
+        lifecycle_fields = problem.apply_acknowledgement_status_transition(
+            before_status, previous_dispose_automatically=before_auto
+        )
         if lifecycle_fields:
             problem.save(update_fields=list(dict.fromkeys(lifecycle_fields)))
+        if sending_testing_email and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
+            problem.back_to_testing_notified_at = timezone.now()
+            problem.save(update_fields=['back_to_testing_notified_at'])
 
         column_names = {c.field_key: c.name for c in problem.table.columns.all()} if problem.table else {}
         changes = []
@@ -400,27 +616,45 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
             summary='Saved changes', details=_history_details({'changes': changes}, reason),
         )
+        if sending_testing_email and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
+            ProblemHistory.objects.create(
+                problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
+                summary='Sent Back to Testing email to NA.EDM',
+                details={'recipient': testing_email_recipient, 'email_body': testing_email_body, 'changes': []},
+            )
+        elif testing_email_not_sent_reason and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
+            ProblemHistory.objects.create(
+                problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
+                summary='Back to Testing email not sent to NA.EDM',
+                details={'email_not_sent': 'back_to_testing', 'reason': testing_email_not_sent_reason, 'changes': []},
+            )
+        # This mainly matters for PT = 0. Longer countdowns are transitioned by
+        # request middleware as soon as a later request observes the due time.
+        problem.transition_to_disposal_if_due(now=timezone.now())
 
     @action(detail=False, methods=['get', 'post'], url_path='follow-up-required')
     def follow_up_required(self, request):
-        # Follow Up Required is table-scoped.  The selected ProblemTable is the
+        # CS Follow-Up is table-scoped.  The selected ProblemTable is the
         # source of truth for both searching and rendering; do not infer a table
         # from row values or from a collection of generic workflow fields.
         table_id = (request.data.get('table') if request.method.lower() == 'post' else request.query_params.get('table'))
         if not table_id:
-            return Response({'detail': 'A problem sample table is required.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'A ticket table is required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             table = ProblemTable.objects.prefetch_related('columns').get(pk=table_id)
         except (ProblemTable.DoesNotExist, ValueError, TypeError):
-            return Response({'detail': 'Problem sample table not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket table not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        follow_up_statuses = {
-            PROBLEM_STATUS_AUTOMATICALLY_DISPOSED,
-            PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL,
-        }
-        queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container')
+        tracking_not_sent = str(
+            request.data.get('tracking_not_sent') if request.method.lower() == 'post'
+            else request.query_params.get('tracking_not_sent')
+        ) == '1'
+        queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('table__columns')
                     .filter(table=table))
+        if tracking_not_sent:
+            from .dashboard_views import tracking_not_sent_tickets
+            queryset = tracking_not_sent_tickets(queryset)
 
         if request.method.lower() == 'post':
             candidates = advanced_search_problem_samples(
@@ -435,11 +669,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             query = str(request.query_params.get('q') or '').strip()
             candidates = search_problem_samples(query, queryset) if query else list(queryset)
 
-        # workflow_status gives custom_values['status'] precedence over the legacy
-        # status field.  Keep only the workflow states that genuinely require
-        # follow-up, then force oldest-first even when a search returned a score
-        # ranking so the longest-waiting matching row remains first.
-        samples = [sample for sample in candidates if sample.workflow_status in follow_up_statuses]
+        # Keep active follow-up and waiting-for-customer tickets together,
+        # then force oldest-first even when a search ranked by score.
+        samples = [sample for sample in candidates if tracking_not_sent or sample.workflow_status in {CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}]
         samples.sort(key=lambda sample: (sample.created_at, str(sample.id)))
         return Response(ShippingProblemSampleSerializer(samples, many=True, context={'request': request}).data)
 
@@ -466,7 +698,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         raw_ids = request.data.get('problem_ids')
         if not isinstance(raw_ids, list) or not raw_ids:
             return Response(
-                {'detail': 'Select at least one problem sample to dispose.'},
+                {'detail': 'Select at least one ticket to dispose.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -477,7 +709,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 problem_id = uuid.UUID(str(raw_id))
             except (ValueError, TypeError, AttributeError):
                 return Response(
-                    {'detail': f'Invalid problem sample ID: {raw_id}'},
+                    {'detail': f'Invalid ticket ID: {raw_id}'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if problem_id not in seen:
@@ -486,15 +718,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
         samples = list(
             ProblemSample.objects.select_for_update()
-            .select_related('table', 'container')
-            .prefetch_related('table__columns')
+            .prefetch_related('table__columns', 'container')
             .filter(pk__in=problem_ids)
         )
         by_id = {sample.id: sample for sample in samples}
         missing = [str(problem_id) for problem_id in problem_ids if problem_id not in by_id]
         if missing:
             return Response(
-                {'detail': 'One or more selected problem samples no longer exist.', 'missing_ids': missing},
+                {'detail': 'One or more selected tickets no longer exist.', 'missing_ids': missing},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -503,7 +734,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if already_disposed:
             return Response(
                 {
-                    'detail': 'One or more selected problem samples are already Disposed. Refresh the search and try again.',
+                    'detail': 'One or more selected tickets are already Disposed. Refresh the search and try again.',
                     'blocking_problem_ids': [sample.problem_number for sample in already_disposed],
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -516,7 +747,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if disposed_container_samples:
             return Response(
                 {
-                    'detail': 'A selected problem sample belongs to a disposed container. Undo that container disposal before disposing the sample individually.',
+                    'detail': 'A selected ticket belongs to a disposed container. Undo that container disposal before disposing the sample individually.',
                     'blocking_problem_ids': [sample.problem_number for sample in disposed_container_samples],
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -527,19 +758,21 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         changed = []
         for sample in ordered_samples:
             before = sample.workflow_status
+            before_auto = sample.dispose_automatically
             values = dict(sample.custom_values or {})
-            values['status'] = PROBLEM_STATUS_DISPOSED
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_DISPOSED
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
             if sample.table_id:
                 for column in sample.table.columns.all():
                     if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
                         values[column.field_key] = modifier
 
             sample.custom_values = values
-            sample.status = PROBLEM_STATUS_DISPOSED
+            sample.current_workflow = PROBLEM_STATUS_DISPOSED
             sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, changed_at=now)
+            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, previous_dispose_automatically=before_auto, changed_at=now)
             sample.save(update_fields=list(dict.fromkeys([
-                'custom_values', 'status', 'modified_by', 'modified_at', *lifecycle_fields,
+                'custom_values', 'current_workflow', 'modified_by', 'modified_at', *lifecycle_fields,
             ])))
             ProblemHistory.objects.create(
                 problem=sample,
@@ -549,7 +782,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 details=_history_details({
                     'disposal_action': 'bulk_dispose_samples',
                     'changes': [{
-                        'field': 'Status',
+                        'field': 'Current Workflow',
                         'before': before,
                         'after': PROBLEM_STATUS_DISPOSED,
                     }],
@@ -566,17 +799,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='to-be-shipped')
     def to_be_shipped(self, request):
         queryset = self.get_queryset().filter(
-            Q(status=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
-            | Q(custom_values__status=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
+            Q(current_workflow=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
         )
+        return Response(ShippingProblemSampleSerializer(queryset, many=True, context={'request': request}).data)
+
+    @action(detail=False, methods=['get'], url_path='back-to-testing')
+    def back_to_testing(self, request):
+        queryset = self.get_queryset().filter(current_workflow=PROBLEM_STATUS_BACK_TO_TESTING)
         return Response(ShippingProblemSampleSerializer(queryset, many=True, context={'request': request}).data)
 
     @action(detail=False, methods=['get'], url_path='to-be-back-to-testing')
     def to_be_back_to_testing(self, request):
-        queryset = self.get_queryset().filter(
-            Q(status=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
-            | Q(custom_values__status=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
-        )
+        queryset = self.get_queryset().filter(current_workflow=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
         return Response(ShippingProblemSampleSerializer(queryset, many=True, context={'request': request}).data)
 
     @action(detail=False, methods=['post'], url_path='bulk-back-to-testing')
@@ -585,103 +819,134 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         reason = _change_reason(request)
         raw_ids = request.data.get('problem_ids')
         if not isinstance(raw_ids, list) or not raw_ids:
-            return Response(
-                {'detail': 'Select at least one problem sample to return to testing.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        problem_ids = []
+            return Response({'detail': 'Select at least one ticket to return to testing.'}, status=status.HTTP_400_BAD_REQUEST)
+        ids = []
         seen = set()
         for raw_id in raw_ids:
             try:
                 problem_id = uuid.UUID(str(raw_id))
             except (ValueError, TypeError, AttributeError):
-                return Response(
-                    {'detail': f'Invalid problem sample ID: {raw_id}'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                return Response({'detail': f'Invalid ticket ID: {raw_id}'}, status=status.HTTP_400_BAD_REQUEST)
             if problem_id not in seen:
                 seen.add(problem_id)
-                problem_ids.append(problem_id)
+                ids.append(problem_id)
 
-        samples = list(
-            ProblemSample.objects.select_for_update()
-            .select_related('table', 'container')
-            .prefetch_related('table__columns')
-            .filter(pk__in=problem_ids)
-        )
+        samples = list(ProblemSample.objects.select_for_update().select_related('container', 'table')
+                       .prefetch_related('table__columns').filter(pk__in=ids))
         by_id = {sample.id: sample for sample in samples}
-        missing = [str(problem_id) for problem_id in problem_ids if problem_id not in by_id]
+        missing = [str(problem_id) for problem_id in ids if problem_id not in by_id]
         if missing:
-            return Response(
-                {'detail': 'One or more selected problem samples no longer exist.', 'missing_ids': missing},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        ordered_samples = [by_id[problem_id] for problem_id in problem_ids]
-        blocked = [sample for sample in ordered_samples if sample.workflow_status != PROBLEM_STATUS_TO_BE_BACK_TO_TESTING]
+            return Response({'detail': 'One or more selected tickets no longer exist.', 'missing_ids': missing}, status=status.HTTP_404_NOT_FOUND)
+        ordered = [by_id[problem_id] for problem_id in ids]
+        blocked = [sample for sample in ordered if sample.workflow_status != PROBLEM_STATUS_TO_BE_BACK_TO_TESTING]
         if blocked:
-            return Response(
-                {
-                    'detail': 'One or more selected problem samples are no longer To be back to testing. Refresh the Back To Testing page and try again.',
-                    'blocking_problem_ids': [sample.problem_number for sample in blocked],
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+            return Response({
+                'detail': 'One or more samples are no longer To be back to testing. Refresh the page and try again.',
+                'blocking_problem_ids': [sample.problem_number for sample in blocked],
+            }, status=status.HTTP_409_CONFLICT)
+        disposed = [sample for sample in ordered if sample.container_id and sample.container and sample.container.disposed_at]
+        if disposed:
+            return Response({
+                'detail': 'Undo container disposal before returning a sample in that container to testing.',
+                'blocking_problem_ids': [sample.problem_number for sample in disposed],
+            }, status=status.HTTP_409_CONFLICT)
 
-        disposed_container_samples = [
-            sample for sample in ordered_samples
-            if sample.container_id and sample.container and sample.container.disposed_at
-        ]
-        if disposed_container_samples:
-            return Response(
-                {
-                    'detail': 'A selected problem sample belongs to a disposed container. Undo that container disposal before changing its testing status.',
-                    'blocking_problem_ids': [sample.problem_number for sample in disposed_container_samples],
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
+        sent = request.data.get('back_to_testing_email_sent')
+        if not isinstance(sent, bool):
+            return Response({'back_to_testing_email_sent': 'Confirm whether the NA.EDM email was sent.'}, status=status.HTTP_400_BAD_REQUEST)
+        body = str(request.data.get('back_to_testing_email_body') or '').strip()
+        if sent:
+            if not body or len(body) > 10000:
+                return Response({'back_to_testing_email_body': 'Provide the email message (up to 10,000 characters).'}, status=status.HTTP_400_BAD_REQUEST)
+            recipient = _confirmed_testing_recipient(request)
+            not_sent_reason = ''
+        else:
+            recipient = ''
+            not_sent_reason = _required_email_not_sent_reason(request.data.get('back_to_testing_not_sent_reason'), 'back_to_testing_not_sent_reason')
 
         now = timezone.now()
         modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
-        changed = []
-        for sample in ordered_samples:
-            before = sample.workflow_status
+        for sample in ordered:
+            previous_workflow = sample.workflow_status
+            before_auto = sample.dispose_automatically
+            previous_container = sample.container.container_id if sample.container_id and sample.container else ''
             values = dict(sample.custom_values or {})
-            values['status'] = PROBLEM_STATUS_BACK_TO_TESTING
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_BACK_TO_TESTING
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
             if sample.table_id:
                 for column in sample.table.columns.all():
                     if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
                         values[column.field_key] = modifier
-
             sample.custom_values = values
-            sample.status = PROBLEM_STATUS_BACK_TO_TESTING
+            sample.current_workflow = PROBLEM_STATUS_BACK_TO_TESTING
+            sample.container = None
             sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, changed_at=now)
-            sample.save(update_fields=list(dict.fromkeys([
-                'custom_values', 'status', 'modified_by', 'modified_at', *lifecycle_fields,
-            ])))
-            ProblemHistory.objects.create(
-                problem=sample,
-                action=ProblemHistory.ACTION_UPDATED,
-                actor=request.user,
-                summary='Back to testing',
-                details=_history_details({
-                    'testing_action': 'bulk_back_to_testing',
-                    'changes': [{
-                        'field': 'Status',
-                        'before': before,
-                        'after': PROBLEM_STATUS_BACK_TO_TESTING,
-                    }],
-                }, reason),
+            lifecycle_fields = sample.apply_acknowledgement_status_transition(
+                previous_workflow, previous_dispose_automatically=before_auto, changed_at=now
             )
-            changed.append(sample)
+            if sent:
+                sample.back_to_testing_notified_at = now
+            sample.save(update_fields=list(dict.fromkeys([
+                'custom_values', 'current_workflow', 'container', 'modified_by', 'modified_at',
+                'back_to_testing_notified_at', *lifecycle_fields,
+            ])))
+            changes = [{'field': 'Current Workflow', 'before': previous_workflow, 'after': PROBLEM_STATUS_BACK_TO_TESTING}]
+            if previous_container:
+                changes.append({'field': 'Container ID', 'before': previous_container, 'after': '—'})
+            ProblemHistory.objects.create(
+                problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+                summary='Moved back to testing',
+                details=_history_details({'testing_action': 'bulk_back_to_testing', 'changes': changes}, reason),
+            )
+            ProblemHistory.objects.create(
+                problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+                summary='Sent Back to Testing email to NA.EDM' if sent else 'Back to Testing email not sent to NA.EDM',
+                details=({'recipient': recipient, 'email_body': body, 'changes': []} if sent else
+                         {'email_not_sent': 'back_to_testing', 'reason': not_sent_reason, 'changes': []}),
+            )
+        return Response({'count': len(ordered), 'problem_ids': [str(sample.id) for sample in ordered],
+                         'problem_numbers': [sample.problem_number for sample in ordered]})
 
-        return Response({
-            'count': len(changed),
-            'problem_ids': [str(sample.id) for sample in changed],
-            'problem_numbers': [sample.problem_number for sample in changed],
-        })
+    @action(detail=True, methods=['post'], url_path='back-to-testing-notification')
+    @transaction.atomic
+    def back_to_testing_notification(self, request, pk=None):
+        problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
+        if problem.workflow_status != PROBLEM_STATUS_BACK_TO_TESTING:
+            return Response({'detail': 'This ticket is not Back to testing.'}, status=status.HTTP_409_CONFLICT)
+        email_body = str(request.data.get('email_body') or '').strip()
+        if not email_body or len(email_body) > 10000:
+            return Response({'detail': 'Provide the email message (up to 10,000 characters).'}, status=status.HTTP_400_BAD_REQUEST)
+        if problem.back_to_testing_notified_at is not None:
+            return Response({'detail': 'NA.EDM has already been notified for this workflow change.'}, status=status.HTTP_409_CONFLICT)
+        recipient = _confirmed_testing_recipient(request)
+        problem.back_to_testing_notified_at = timezone.now()
+        problem.save(update_fields=['back_to_testing_notified_at'])
+        ProblemHistory.objects.create(
+            problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+            summary='Sent Back to Testing email to NA.EDM',
+            details={'recipient': recipient, 'email_body': email_body, 'changes': []},
+        )
+        return Response({'notified_at': problem.back_to_testing_notified_at})
+
+    @action(detail=True, methods=['post'], url_path='email-not-sent')
+    def email_not_sent(self, request, pk=None):
+        problem = self.get_object()
+        kind = request.data.get('kind')
+        if kind not in {'customer', 'back_to_testing'}:
+            return Response({'detail': 'Choose the email that was not sent.'}, status=status.HTTP_400_BAD_REQUEST)
+        reason = _required_email_not_sent_reason(request.data.get('reason'))
+        if kind == 'back_to_testing' and (
+            problem.workflow_status != PROBLEM_STATUS_BACK_TO_TESTING
+            or problem.back_to_testing_notified_at is not None
+        ):
+            return Response({'detail': 'There is no outstanding Back to Testing email for this ticket.'}, status=status.HTTP_409_CONFLICT)
+        ProblemHistory.objects.create(
+            problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+            summary=('Customer tracking email not sent' if kind == 'customer'
+                     else 'Back to Testing email not sent to NA.EDM'),
+            details={'email_not_sent': kind, 'reason': reason, 'changes': []},
+        )
+        return Response({'detail': 'Reason recorded.'}, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'], url_path='bulk-ship-back')
     @transaction.atomic
@@ -690,7 +955,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         raw_ids = request.data.get('problem_ids')
         if not isinstance(raw_ids, list) or not raw_ids:
             return Response(
-                {'detail': 'Select at least one problem sample to ship.'},
+                {'detail': 'Select at least one ticket to ship.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -701,7 +966,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 problem_id = uuid.UUID(str(raw_id))
             except (ValueError, TypeError, AttributeError):
                 return Response(
-                    {'detail': f'Invalid problem sample ID: {raw_id}'},
+                    {'detail': f'Invalid ticket ID: {raw_id}'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if problem_id not in seen:
@@ -710,15 +975,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
         samples = list(
             ProblemSample.objects.select_for_update()
-            .select_related('table', 'container')
-            .prefetch_related('table__columns')
+            .prefetch_related('table__columns', 'container')
             .filter(pk__in=problem_ids)
         )
         by_id = {sample.id: sample for sample in samples}
         missing = [str(problem_id) for problem_id in problem_ids if problem_id not in by_id]
         if missing:
             return Response(
-                {'detail': 'One or more selected problem samples no longer exist.', 'missing_ids': missing},
+                {'detail': 'One or more selected tickets no longer exist.', 'missing_ids': missing},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -727,7 +991,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if blocked:
             return Response(
                 {
-                    'detail': 'One or more selected problem samples are no longer To be shipped back to client. Refresh the Shipping page and try again.',
+                    'detail': 'One or more selected tickets are no longer To be shipped back to client. Refresh the Shipping page and try again.',
                     'blocking_problem_ids': [sample.problem_number for sample in blocked],
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -740,7 +1004,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if disposed_container_samples:
             return Response(
                 {
-                    'detail': 'A selected problem sample belongs to a disposed container. Undo that container disposal before changing its shipping status.',
+                    'detail': 'A selected ticket belongs to a disposed container. Undo that container disposal before changing its shipping status.',
                     'blocking_problem_ids': [sample.problem_number for sample in disposed_container_samples],
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -751,19 +1015,23 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         changed = []
         for sample in ordered_samples:
             before = sample.workflow_status
+            before_auto = sample.dispose_automatically
             values = dict(sample.custom_values or {})
-            values['status'] = PROBLEM_STATUS_SHIPPED_BACK
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_SHIPPED_BACK
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
             if sample.table_id:
                 for column in sample.table.columns.all():
                     if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
                         values[column.field_key] = modifier
 
             sample.custom_values = values
-            sample.status = PROBLEM_STATUS_SHIPPED_BACK
+            sample.current_workflow = PROBLEM_STATUS_SHIPPED_BACK
+            previous_container = sample.container.container_id if sample.container_id and sample.container else ''
+            sample.container = None
             sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, changed_at=now)
+            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, previous_dispose_automatically=before_auto, changed_at=now)
             sample.save(update_fields=list(dict.fromkeys([
-                'custom_values', 'status', 'modified_by', 'modified_at', *lifecycle_fields,
+                'custom_values', 'current_workflow', 'container', 'modified_by', 'modified_at', *lifecycle_fields,
             ])))
             ProblemHistory.objects.create(
                 problem=sample,
@@ -773,10 +1041,10 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 details=_history_details({
                     'shipping_action': 'bulk_ship_back',
                     'changes': [{
-                        'field': 'Status',
+                        'field': 'Current Workflow',
                         'before': before,
                         'after': PROBLEM_STATUS_SHIPPED_BACK,
-                    }],
+                    }, *([{'field': 'Container ID', 'before': previous_container, 'after': '—'}] if previous_container else [])],
                 }, reason),
             )
             changed.append(sample)
@@ -800,7 +1068,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         try:
             table = ProblemTable.objects.prefetch_related('columns').get(pk=table_id)
         except (ProblemTable.DoesNotExist, ValueError):
-            return Response({'detail': 'Problem sample table not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket table not found.'}, status=status.HTTP_404_NOT_FOUND)
         ranked = advanced_search_problem_samples(
             self.get_queryset(),
             table,
@@ -874,16 +1142,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=['post'], url_path='customer-notification-credentials')
+    @transaction.atomic
     def customer_notification_credentials(self, request, pk=None):
-        """Prepare a secure problem sample tracking link without persisting a new token.
-
-        An existing token from a previously confirmed notification is reused.
-        Otherwise the token exists only in this response until the user confirms
-        the email was sent through customer-notification-sent.
-        """
-        problem = self.get_object()
+        """Prepare a server-issued token without activating a public link."""
+        problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
         persisted = bool(problem.acknowledgement_token)
-        token = problem.acknowledgement_token if persisted else generate_acknowledgement_token()
+        if not persisted and not problem.pending_tracking_token:
+            problem.pending_tracking_token = generate_acknowledgement_token()
+            problem.save(update_fields=['pending_tracking_token'])
+        token = problem.acknowledgement_token if persisted else problem.pending_tracking_token
         base = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
         tracking_url = f'{base}/track/{token}' if base else f'/track/{token}'
         return Response({
@@ -895,12 +1162,50 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'persisted': persisted,
         })
 
+    @action(detail=True, methods=['post'], url_path='revoke-tracking-link')
+    @transaction.atomic
+    def revoke_tracking_link(self, request, pk=None):
+        problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
+        link = problem.tracking_link_record_or_none
+        if link is None:
+            return Response({'detail': 'This ticket has no active tracking link to revoke.'}, status=status.HTTP_409_CONFLICT)
+        reason = _change_reason(request)
+        link.delete()
+        if problem.pending_tracking_token:
+            problem.pending_tracking_token = None
+            problem.save(update_fields=['pending_tracking_token'])
+        ProblemHistory.objects.create(
+            problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+            summary='Revoked tracking link',
+            details=_history_details({'changes': [{'field': 'Tracking Link', 'before': 'Active', 'after': 'Revoked'}]}, reason),
+        )
+        return Response({'detail': 'Tracking link revoked. The old URL cannot be used again.'})
+
+    @action(detail=True, methods=['post'], url_path='customer-message-sent')
+    def customer_message_sent(self, request, pk=None):
+        """Record ordinary correspondence without creating or changing a tracking link."""
+        problem = self.get_object()
+        recipients = _validated_email_list(request.data.get('to'))
+        subject = str(request.data.get('subject') or '').strip()
+        body = str(request.data.get('body') or '').strip()
+        if not recipients:
+            return Response({'detail': 'At least one valid customer email address is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not subject or len(subject) > 500 or not body or len(body) > 10000:
+            return Response({'detail': 'Provide a subject (up to 500 characters) and a message (up to 10,000 characters).'}, status=status.HTTP_400_BAD_REQUEST)
+        history = ProblemHistory.objects.create(
+            problem=problem, action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION, actor=request.user,
+            summary='Sent an email to the customer',
+            details={'recipients': recipients, 'subject': subject, 'delivery_method': 'mailto',
+                     'confirmation': 'Staff confirmed sending a general customer email.', 'changes': []},
+        )
+        return Response({'id': history.id, 'summary': history.summary}, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=['post'], url_path='customer-notification-draft')
     def customer_notification_draft(self, request, pk=None):
         problem = self.get_object()
         to_recipients = _validated_email_list(request.data.get('to'))
         cc_recipients = _validated_email_list(request.data.get('cc'))
-        subject = str(request.data.get('subject') or f'Problem Sample #{problem.problem_number}')[:500]
+        subject = str(request.data.get('subject') or f'Ticket #{problem.problem_number}')[:500]
         body = str(request.data.get('body') or '')
         if not to_recipients:
             return Response({'detail': 'At least one valid recipient is required.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -928,47 +1233,56 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             _add_message_file(message, attachment.file, filename, attachment.content_type)
 
         response = HttpResponse(message.as_bytes(), content_type='message/rfc822')
-        response['Content-Disposition'] = f'attachment; filename="problem-sample-{problem.problem_number}-customer-notification.eml"'
+        response['Content-Disposition'] = f'attachment; filename="ticket-{problem.problem_number}-customer-notification.eml"'
         return response
 
     @action(detail=True, methods=['post'], url_path='customer-notification-sent')
+    @transaction.atomic
     def customer_notification_sent(self, request, pk=None):
-        problem = self.get_object()
-        delivery_method = str(request.data.get('delivery_method') or '').strip().lower()
+        return self._record_customer_notification_sent(
+            request, ProblemSample.objects.select_for_update().get(pk=self.get_object().pk),
+            str(request.data.get('tracking_token') or request.data.get('acknowledgement_token') or '').strip(),
+            str(request.data.get('delivery_method') or '').strip().lower(),
+        )
+
+    def _record_customer_notification_sent(self, request, problem, supplied_token, delivery_method, prepared_token=None):
         if delivery_method not in {'mailto', 'eml'}:
             delivery_method = ''
 
-        # A new problem sample tracking link does not exist in the database until this
+        # A new ticket tracking link does not exist in the database until this
         # explicit confirmation. The email preparation step returns a temporary token
         # to the browser only. Previously persisted tokens are reused on resends.
-        supplied_token = str(request.data.get('tracking_token') or request.data.get('acknowledgement_token') or '').strip()
-        stored_credentials = bool(problem.acknowledgement_token)
+        stored_link = problem.tracking_link_record_or_none
+        stored_credentials = stored_link is not None
         credential_fields = []
 
         if stored_credentials:
-            if supplied_token and supplied_token != str(problem.acknowledgement_token):
-                return Response({'detail': 'The prepared problem sample tracking link is no longer current. Prepare the customer email again.'}, status=status.HTTP_409_CONFLICT)
+            if supplied_token and supplied_token != str(stored_link.tracking_token):
+                return Response({'detail': 'The prepared ticket tracking link is no longer current. Prepare the tracking-link email again.'}, status=status.HTTP_409_CONFLICT)
         else:
             if not supplied_token:
                 return Response({'detail': 'Prepare the customer notification before confirming that it was sent.'}, status=status.HTTP_400_BAD_REQUEST)
-            # New problem sample tracking links use a 48-byte URL-safe random token
-            # (64 URL characters / about 384 bits of entropy). Existing UUID
-            # links remain valid after migration, but newly prepared links
-            # must use the stronger token format.
-            if len(supplied_token) != 64 or any(
-                character not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-                for character in supplied_token
-            ):
-                return Response({'detail': 'Invalid problem sample tracking token.'}, status=status.HTTP_400_BAD_REQUEST)
-            if ProblemSample.objects.filter(acknowledgement_token=supplied_token).exclude(pk=problem.pk).exists():
-                return Response({'detail': 'The prepared problem sample tracking link conflicts with another problem sample. Prepare the customer email again.'}, status=status.HTTP_409_CONFLICT)
-            problem.acknowledgement_token = supplied_token
-            credential_fields.append('acknowledgement_token')
+            if not is_strong_tracking_token(supplied_token):
+                return Response({'detail': 'Invalid ticket tracking token.'}, status=status.HTTP_400_BAD_REQUEST)
+            if supplied_token != (prepared_token or problem.pending_tracking_token):
+                return Response({'detail': 'The prepared tracking link is no longer current. Prepare the tracking-link email again.'}, status=status.HTTP_409_CONFLICT)
+            if ProblemTrackingLink.objects.filter(tracking_token=supplied_token).exists():
+                return Response({'detail': 'The prepared ticket tracking link conflicts with another ticket. Prepare the tracking-link email again.'}, status=status.HTTP_409_CONFLICT)
+            stored_link = ProblemTrackingLink.objects.create(
+                ticket=problem,
+                tracking_token=supplied_token,
+                expires_at=problem.expected_tracking_link_expiration(),
+            )
+            # Keep this instance synchronized so existing serializer/API aliases
+            # immediately see the newly-created related row without another query.
+            problem.tracking_link_record = stored_link
+            problem.pending_tracking_token = None
+            credential_fields.append('pending_tracking_token')
 
-        # The first confirmed customer email activates automatic disposal by
-        # changing Halted Automatic Disposal to Automatically Disposed. Entering that
-        # status starts a fresh expiration period. Resends do not reset the period
-        # unless the status actually transitions into Automatically Disposed again.
+        # Preserve the previous workflow: the first confirmed customer email
+        # activates automatic disposal. The activation now lives in the dedicated
+        # Dispose Automatically field without changing Status or Current Workflow. Resends do not
+        # reset the countdown unless the field is later changed No -> Yes again.
         first_notification = problem.customer_notified_at is None
         changes = []
         update_fields = list(credential_fields)
@@ -976,22 +1290,24 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if first_notification:
             now = timezone.now()
             before_status = problem.workflow_status
+            before_auto = problem.dispose_automatically
             before_disposal_days = _automatic_disposal_history_value(problem)
             problem.customer_notified_at = now
             update_fields.append('customer_notified_at')
 
-            if before_status != PROBLEM_STATUS_AUTOMATICALLY_DISPOSED:
+            if not before_auto and before_status == CURRENT_WORKFLOW_DEFAULT:
                 values = dict(problem.custom_values or {})
-                values['status'] = PROBLEM_STATUS_AUTOMATICALLY_DISPOSED
+                values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_YES
                 problem.custom_values = values
-                problem.status = PROBLEM_STATUS_AUTOMATICALLY_DISPOSED
                 problem.modified_by = request.user
-                update_fields.extend(['custom_values', 'status', 'modified_by'])
-                update_fields.extend(problem.apply_acknowledgement_status_transition(before_status, changed_at=now))
+                update_fields.extend(['custom_values', 'modified_by'])
+                update_fields.extend(problem.apply_acknowledgement_status_transition(
+                    before_status, previous_dispose_automatically=before_auto, changed_at=now
+                ))
                 changes.append({
-                    'field': 'Status',
-                    'before': before_status,
-                    'after': PROBLEM_STATUS_AUTOMATICALLY_DISPOSED,
+                    'field': 'Dispose Automatically',
+                    'before': DISPOSE_AUTOMATICALLY_NO,
+                    'after': DISPOSE_AUTOMATICALLY_YES,
                 })
                 after_disposal_days = _automatic_disposal_history_value(problem)
                 if before_disposal_days != after_disposal_days:
@@ -1008,16 +1324,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem=problem,
             action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION,
             actor=request.user,
-            summary='Sent an email to the customer',
+            summary='Sent tracking link to customer by email',
             details={
                 'delivery_method': delivery_method,
                 'confirmation': 'User confirmed the customer notification email was sent.',
+                'first_notification': first_notification,
                 'starts_pt_clock': bool(first_notification and changes),
                 'automatic_disposal_activated': bool(first_notification and changes),
                 'acknowledgement_credentials_saved': bool(credential_fields),
                 'changes': changes,
             },
         )
+        problem.transition_to_disposal_if_due(now=timezone.now())
         problem.refresh_from_db(fields=['customer_notified_at', 'status', 'custom_values', 'modified_by'])
         serialized = ProblemSampleSerializer(problem, context={'request': request}).data
         return Response({
@@ -1077,7 +1395,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='dispose')
     @transaction.atomic
     def dispose(self, request, pk=None):
-        container = ProblemContainer.objects.select_for_update().select_related('disposed_by').get(pk=pk)
+        container = ProblemContainer.objects.select_for_update().get(pk=pk)
         if container.disposed_at:
             return Response(self.get_serializer(container).data)
         reason = _change_reason(request)
@@ -1085,32 +1403,24 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         if not samples:
             return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
 
-        # Samples already shipped back or individually disposed are outside the
-        # physical container disposal workload. They neither block readiness nor
-        # get changed when the physical disposal container is disposed.
-        disposal_samples = [
-            sample for sample in samples
-            if sample.workflow_status not in {PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED}
-        ]
-        if not disposal_samples:
-            return Response({
-                'detail': 'This container has no problem samples that require disposal. Samples already Disposed or Shipped back to client are ignored.',
-            }, status=status.HTTP_409_CONFLICT)
-
-        blocked = [sample for sample in disposal_samples if not sample.is_disposal_eligible]
+        blocked = [sample for sample in samples if sample.workflow_status not in {PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED}]
         if blocked:
             return Response({
-                'detail': 'This container is not ready to be disposed. Ignoring samples already Disposed or Shipped back to client, every remaining problem sample must be To be Disposed, or be Automatically Disposed and past its problem sample expiration period. Halted Automatic Disposal, To be shipped back to client, To be back to testing, and Back to testing are not automatically disposal-eligible.',
+                'detail': 'This container is not ready to be disposed. Every attached ticket must have Current Workflow = To be Disposed or Disposed.',
                 'blocking_problem_ids': [sample.problem_number for sample in blocked],
             }, status=status.HTTP_409_CONFLICT)
+
+        disposal_samples = [sample for sample in samples if sample.workflow_status == PROBLEM_STATUS_TO_BE_DISPOSED]
 
         now = timezone.now()
         disposal_snapshot = {}
         for sample in disposal_samples:
             values = dict(sample.custom_values or {})
-            before = str(values.get('status') or sample.status or '')
+            before = sample.workflow_status
+            before_auto = sample.dispose_automatically
             disposal_snapshot[str(sample.id)] = {
                 'status': sample.status,
+                'current_workflow': sample.current_workflow,
                 'custom_values': dict(sample.custom_values or {}),
                 'modified_by_id': sample.modified_by_id,
                 'acknowledged_at': sample.acknowledged_at.isoformat() if sample.acknowledged_at else None,
@@ -1124,27 +1434,30 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                     if sample.automatic_disposal_started_at else None
                 ),
             }
-            values['status'] = PROBLEM_STATUS_DISPOSED
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_DISPOSED
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
             modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
             if sample.table_id:
                 for column in sample.table.columns.all():
                     if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
                         values[column.field_key] = modifier
             sample.custom_values = values
-            sample.status = PROBLEM_STATUS_DISPOSED
+            sample.current_workflow = PROBLEM_STATUS_DISPOSED
             sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, changed_at=now)
-            sample.save(update_fields=list(dict.fromkeys(['custom_values', 'status', 'modified_by', 'modified_at'] + lifecycle_fields)))
+            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, previous_dispose_automatically=before_auto, changed_at=now)
+            sample.save(update_fields=list(dict.fromkeys(['custom_values', 'current_workflow', 'modified_by', 'modified_at'] + lifecycle_fields)))
             if before != PROBLEM_STATUS_DISPOSED:
                 ProblemHistory.objects.create(
                     problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
                     summary=f'Container {container.container_id} disposed',
-                    details=_history_details({'changes': [{'field': 'Status', 'before': before or '—', 'after': PROBLEM_STATUS_DISPOSED}]}, reason),
+                    details=_history_details({'changes': [{'field': 'Current Workflow', 'before': before or '—', 'after': PROBLEM_STATUS_DISPOSED}]}, reason),
                 )
 
         container.disposed_at = now
         container.disposed_by = request.user
-        container.disposal_snapshot = disposal_snapshot
+        # Distinguish an all-Disposed container from legacy disposals that had
+        # no snapshot and still need a history-based rollback.
+        container.disposal_snapshot = disposal_snapshot or {'_no_rows_changed': True}
         container.save(update_fields=['disposed_at', 'disposed_by', 'disposal_snapshot'])
         # Clear serializer cache if the object was reused.
         if hasattr(container, '_container_samples_cache'):
@@ -1154,7 +1467,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='undo-disposal')
     @transaction.atomic
     def undo_disposal(self, request, pk=None):
-        container = ProblemContainer.objects.select_for_update().select_related('disposed_by').get(pk=pk)
+        container = ProblemContainer.objects.select_for_update().get(pk=pk)
         if not container.disposed_at:
             return Response({'detail': 'This container has not been disposed.'}, status=status.HTTP_409_CONFLICT)
 
@@ -1162,10 +1475,11 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
         snapshot = container.disposal_snapshot or {}
 
-        # New snapshots contain only samples actually changed by disposal. This
-        # intentionally excludes Shipped back to client samples, which disposal
-        # leaves untouched. For legacy empty snapshots, preserve the old check.
-        if snapshot:
+        # A stamped container whose tickets were already Disposed needs only
+        # its stamp cleared. Legacy empty snapshots still use History fallback.
+        if snapshot.get('_no_rows_changed') is True:
+            rollback_samples = []
+        elif snapshot:
             rollback_ids = set(snapshot.keys())
             rollback_samples = [sample for sample in samples if str(sample.id) in rollback_ids]
             missing_snapshot_samples = rollback_ids - {str(sample.id) for sample in rollback_samples}
@@ -1189,7 +1503,12 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         for sample in rollback_samples:
             saved = snapshot.get(str(sample.id))
             if saved is not None:
-                before = str((saved.get('custom_values') or {}).get('status') or saved.get('status') or '')
+                saved_values = saved.get('custom_values') or {}
+                before = str(
+                    saved_values.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY)
+                    or saved.get('current_workflow')
+                    or (saved.get('status') if str(saved.get('status') or '') in CURRENT_WORKFLOW_CHOICES else CURRENT_WORKFLOW_DEFAULT)
+                )
                 restore_plan.append((sample, before, saved))
                 continue
 
@@ -1198,7 +1517,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             before = ''
             if disposal_history:
                 for change in (disposal_history.details or {}).get('changes', []):
-                    if str(change.get('field') or '').strip().lower() == 'status':
+                    if str(change.get('field') or '').strip().lower() in {'current workflow', 'status'}:
                         before = str(change.get('before') or '')
                         if before == '—':
                             before = ''
@@ -1210,7 +1529,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
 
         if missing:
             return Response({
-                'detail': 'Container disposal cannot be undone because the previous status could not be recovered for every sample.',
+                'detail': 'Container disposal cannot be undone because the previous Current Workflow could not be recovered for every sample.',
                 'blocking_problem_ids': missing,
             }, status=status.HTTP_409_CONFLICT)
 
@@ -1219,14 +1538,13 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             if saved is not None:
                 sample.custom_values = dict(saved.get('custom_values') or {})
                 sample.status = str(saved.get('status') or '')
+                sample.current_workflow = before or CURRENT_WORKFLOW_DEFAULT
+                sample.custom_values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = sample.current_workflow
                 sample.modified_by_id = saved.get('modified_by_id')
                 sample.acknowledged_at = parse_datetime(saved.get('acknowledged_at')) if saved.get('acknowledged_at') else None
-                if sample.workflow_status in {
-                    PROBLEM_STATUS_AUTOMATICALLY_DISPOSED,
-                    PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL,
-                }:
-                    # These statuses reactivate the persistent tracking link, so an
-                    # old terminal-workflow expiry anchor must not be restored.
+                if sample.workflow_status == CURRENT_WORKFLOW_DEFAULT:
+                    # CS Follow-Up reactivates the persistent tracking link,
+                    # so an old routed-workflow expiry anchor must not be restored.
                     sample.acknowledgement_status_changed_at = None
                 else:
                     sample.acknowledgement_status_changed_at = (
@@ -1237,35 +1555,39 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 saved_auto_started = saved.get('automatic_disposal_started_at')
                 if saved_auto_started:
                     sample.automatic_disposal_started_at = parse_datetime(saved_auto_started)
-                elif sample.workflow_status == PROBLEM_STATUS_AUTOMATICALLY_DISPOSED:
-                    # Legacy snapshots did not store this field. Treat restoration
-                    # into Automatically Disposed as a fresh activation.
+                elif sample.dispose_automatically:
+                    # Legacy snapshots may not store the countdown anchor. If the
+                    # restored row has Dispose Automatically = Yes, treat undo as a
+                    # fresh activation rather than leaving an active row without an anchor.
                     sample.automatic_disposal_started_at = now
                 else:
                     sample.automatic_disposal_started_at = None
                 update_fields = [
-                    'custom_values', 'status', 'modified_by', 'modified_at',
+                    'custom_values', 'status', 'current_workflow', 'modified_by', 'modified_at',
                     'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action',
                     'automatic_disposal_started_at',
                 ]
             else:
                 values = dict(sample.custom_values or {})
-                values['status'] = before
+                restored_workflow = before if before in CURRENT_WORKFLOW_CHOICES else CURRENT_WORKFLOW_DEFAULT
+                values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = restored_workflow
                 sample.custom_values = values
-                sample.status = before
+                sample.current_workflow = restored_workflow
                 sample.modified_by = request.user
                 lifecycle_fields = sample.apply_acknowledgement_status_transition(
-                    PROBLEM_STATUS_DISPOSED, changed_at=now
+                    PROBLEM_STATUS_DISPOSED, previous_dispose_automatically=False, changed_at=now
                 )
                 update_fields = list(dict.fromkeys(
-                    ['custom_values', 'status', 'modified_by', 'modified_at'] + lifecycle_fields
+                    ['custom_values', 'current_workflow', 'modified_by', 'modified_at'] + lifecycle_fields
                 ))
 
             sample.save(update_fields=update_fields)
+            if saved is not None:
+                sample.set_tracking_link_expiration(sample.expected_tracking_link_expiration())
             ProblemHistory.objects.create(
                 problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
                 summary=f'Container {container.container_id} disposal undone',
-                details=_history_details({'changes': [{'field': 'Status', 'before': PROBLEM_STATUS_DISPOSED, 'after': before or '—'}]}, reason),
+                details=_history_details({'changes': [{'field': 'Current Workflow', 'before': PROBLEM_STATUS_DISPOSED, 'after': before or '—'}]}, reason),
             )
 
         container.disposed_at = None
@@ -1278,6 +1600,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
 
 
 class ProblemTableViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated, IsTrackerAdminOrReadOnly]
     queryset = ProblemTable.objects.prefetch_related('columns').select_related('created_by')
     serializer_class = ProblemTableSerializer
 
@@ -1290,11 +1613,68 @@ class ProblemTableViewSet(viewsets.ModelViewSet):
         if table.is_default:
             return Response({'detail': 'The default table cannot be deleted.'}, status=status.HTTP_409_CONFLICT)
         if table.problem_samples.exists():
-            return Response({'detail': 'This table contains problem samples. Remove or archive them before deleting the table.'}, status=status.HTTP_409_CONFLICT)
+            return Response({'detail': 'This table contains tickets. Remove or archive them before deleting the table.'}, status=status.HTTP_409_CONFLICT)
         return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='status-values')
+    @transaction.atomic
+    def status_values(self, request, pk=None):
+        table = ProblemTable.objects.select_for_update().get(pk=self.get_object().pk)
+        column = ensure_status_column(table)
+        return Response({
+            'detail': 'Status values are fixed built-in values and cannot be added, renamed, or deleted.',
+            'statuses': list(PROBLEM_STATUS_CHOICES),
+            'default_status': column.default_value,
+        }, status=status.HTTP_409_CONFLICT)
+
+
+
+def _synchronize_intercolumn_controller_rows(table):
+    """Apply current controller rules to all rows after a rule-definition change."""
+    for sample in table.problem_samples.select_related('table').prefetch_related('table__columns'):
+        before_values = dict(sample.custom_values or {})
+        before_workflow = sample.workflow_status
+        before_auto = sample.dispose_automatically
+        try:
+            update_fields = sample.apply_acknowledgement_status_transition(
+                before_workflow,
+                previous_dispose_automatically=before_auto,
+                changed_at=timezone.now(),
+                strict_intercolumn=True,
+            )
+        except DjangoValidationError as exc:
+            messages = getattr(exc, 'messages', None) or [str(exc)]
+            raise DRFValidationError({'intercolumn_rules': messages}) from exc
+        if not update_fields:
+            continue
+        update_fields = list(dict.fromkeys([*update_fields, 'modified_at']))
+        sample.save(update_fields=update_fields)
+        after_values = dict(sample.custom_values or {})
+        changed_keys = sorted(key for key in set(before_values) | set(after_values) if before_values.get(key) != after_values.get(key))
+        if changed_keys:
+            names = {column.field_key: column.name for column in table.columns.all()}
+            ProblemHistory.objects.create(
+                problem=sample,
+                action=ProblemHistory.ACTION_UPDATED,
+                actor=None,
+                summary='Intercolumn value rules applied',
+                details={
+                    'automatic': True,
+                    'changes': [
+                        {
+                            'field': names.get(key, key),
+                            'before': _history_value(before_values.get(key)),
+                            'after': _history_value(after_values.get(key)),
+                        }
+                        for key in changed_keys
+                    ],
+                },
+            )
+
 
 
 class ProblemColumnViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated, IsTrackerAdminOrReadOnly]
     queryset = ProblemColumn.objects.select_related('table', 'depends_on_column')
     serializer_class = ProblemColumnSerializer
 
@@ -1335,19 +1715,21 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
 
         default = column.default_value
         has_default = not (default is None or default == '' or default == [])
-        if not has_default:
-            return
+        if has_default:
+            # Adding a column behaves like a Microsoft List column: the chosen
+            # default immediately fills that column for rows already in the table.
+            for problem in column.table.problem_samples.only('id', 'custom_values'):
+                values = dict(problem.custom_values or {})
+                values[column.field_key] = default
+                ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
 
-        # Adding a column behaves like a Microsoft List column: the chosen
-        # default immediately fills that column for rows already in the table.
-        for problem in column.table.problem_samples.only('id', 'custom_values'):
-            values = dict(problem.custom_values or {})
-            values[column.field_key] = default
-            ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
+        if column.column_type == ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER:
+            _synchronize_intercolumn_controller_rows(column.table)
 
     @transaction.atomic
     def perform_update(self, serializer):
         previous_type = serializer.instance.column_type
+        previous_rules = list(serializer.instance.intercolumn_rules or [])
         previous_dependencies = list(serializer.instance.client_email_dependencies or [])
         if not previous_dependencies and serializer.instance.depends_on_column_id:
             previous_dependencies = [str(serializer.instance.depends_on_column_id)]
@@ -1462,6 +1844,10 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                     values[column.field_key] = ''
                     ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
 
+        if column.column_type == ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER:
+            if previous_type != ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER or previous_rules != list(column.intercolumn_rules or []):
+                _synchronize_intercolumn_controller_rows(column.table)
+
     def get_queryset(self):
         queryset = super().get_queryset()
         table_id = self.request.query_params.get('table')
@@ -1473,6 +1859,14 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
         column = self.get_object()
         if column.is_system:
             return Response({'detail': 'Built-in columns cannot be deleted.'}, status=status.HTTP_409_CONFLICT)
+        referenced_by = []
+        for controller in column.table.columns.filter(column_type=ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER).exclude(pk=column.pk):
+            if any(str(rule.get('other_column_id') or '') == str(column.pk) for rule in (controller.intercolumn_rules or [])):
+                referenced_by.append(controller.name)
+        if referenced_by:
+            return Response({
+                'detail': f'Remove the Intercolumn Value Controller rule(s) in {", ".join(referenced_by)} before deleting this column.'
+            }, status=status.HTTP_409_CONFLICT)
         return super().destroy(request, *args, **kwargs)
 
     @transaction.atomic
@@ -1517,14 +1911,19 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 class ProblemAcknowledgementView(APIView):
-    """Public, tokenized problem sample tracking page API. No ALS account is required."""
+    """Public, tokenized ticket tracking page API. No ALS account is required."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
-    def _problem(self, token):
-        return (ProblemSample.objects.select_related('table')
-                .prefetch_related('images', 'attachments', 'table__columns')
-                .filter(acknowledgement_token=token).order_by('created_at').first())
+    def _problem(self, token, *, for_update=False):
+        if not is_strong_tracking_token(token):
+            return None
+        queryset = (ProblemSample.objects.select_related('table', 'tracking_link_record')
+                    .prefetch_related('images', 'attachments', 'table__columns')
+                    .filter(tracking_link_record__tracking_token=token))
+        if for_update:
+            queryset = queryset.select_for_update(of=('self',))
+        return queryset.first()
 
     def _is_link_gone(self, problem):
         return problem.tracking_link_expired
@@ -1649,7 +2048,7 @@ class ProblemAcknowledgementView(APIView):
             return ''
 
         # Preserve the exact wording used when the customer made the choice.
-        # This matters because Automatically Disposed uses a different set of
+        # This matters because Dispose Automatically = Yes uses a different set of
         # customer-facing labels for the same underlying workflow actions.
         for entry in problem.history.all()[:25]:
             details = entry.details if isinstance(entry.details, dict) else {}
@@ -1660,7 +2059,7 @@ class ProblemAcknowledgementView(APIView):
             CUSTOMER_ACTION_DISPOSE: 'Dispose Sample(s)',
             CUSTOMER_ACTION_SHIP_BACK: 'Ship back samples',
             CUSTOMER_ACTION_HOLD: 'Hold sample',
-            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Fill out requested information (if applicable)',
+            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Give us more details about this ticket',
         }.get(action, '')
 
     def _payload(self, problem):
@@ -1669,11 +2068,50 @@ class ProblemAcknowledgementView(APIView):
         public_files = self._public_files(problem)
         public_details = {'details': self._public_details(problem)}
 
-        # Customer acknowledgement is tracked independently from workflow Status.
-        # Halted Automatic Disposal is the default for new rows, so a halted row
-        # with no acknowledged_at timestamp must still show the unresolved customer-action choices.
-        if workflow_status in {PROBLEM_STATUS_AUTOMATICALLY_DISPOSED, PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL} and not problem.acknowledged_at:
-            if workflow_status == PROBLEM_STATUS_AUTOMATICALLY_DISPOSED:
+        # Only completed workflows lock the public response. Intermediate queues
+        # ("To be ...") remain editable so a customer can revise a prior choice
+        # until ALS actually disposes, returns to testing, or ships the samples.
+        if workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
+            return {
+                'state': 'testing',
+                'message': workflow_status,
+                'problem_number': problem.problem_number,
+                **public_details,
+                **public_files,
+                'visible_until': visible_until,
+                'customer_action': problem.customer_acknowledgement_action or '',
+                'customer_action_label': self._customer_action_label(problem),
+                'can_choose_action': False,
+            }
+        if workflow_status == PROBLEM_STATUS_DISPOSED:
+            return {
+                'state': 'dumped',
+                'message': 'Ticket Disposed',
+                'problem_number': problem.problem_number,
+                **public_details,
+                **public_files,
+                'visible_until': visible_until,
+                'customer_action': problem.customer_acknowledgement_action or '',
+                'customer_action_label': self._customer_action_label(problem),
+                'can_choose_action': False,
+            }
+        if workflow_status == PROBLEM_STATUS_SHIPPED_BACK:
+            return {
+                'state': 'shipping',
+                'message': 'Samples shipped back to client',
+                'problem_number': problem.problem_number,
+                **public_details,
+                **public_files,
+                'visible_until': visible_until,
+                'customer_action': problem.customer_acknowledgement_action or CUSTOMER_ACTION_SHIP_BACK,
+                'customer_action_label': self._customer_action_label(problem) or 'Ship back',
+                'can_choose_action': False,
+            }
+
+        # Customer acknowledgement is tracked independently from descriptive Status.
+        # Every non-completed workflow keeps the response controls available.
+        if not problem.acknowledged_at:
+            if problem.dispose_automatically:
                 days_remaining = problem.days_until_automatic_disposal
                 if days_remaining is None:
                     message = 'These sample(s) are scheduled for eventual disposal.'
@@ -1689,108 +2127,59 @@ class ProblemAcknowledgementView(APIView):
                     'problem_number': problem.problem_number,
                     'automatic_disposal_active': True,
                     'days_until_disposal': days_remaining,
+                    'can_choose_action': True,
                     **public_details,
-                **public_files,
+                    **public_files,
                 }
             return {
                 'state': 'pending',
-                'message': 'Please choose how ALS should handle this problem sample',
+                'message': 'Please choose how ALS should handle this ticket',
                 'problem_number': problem.problem_number,
                 'automatic_disposal_active': False,
-                **public_details,
-                **public_files,
-            }
-
-        if workflow_status == PROBLEM_STATUS_TO_BE_BACK_TO_TESTING:
-            return {
-                'state': 'testing',
-                'message': 'Sample(s) marked to go back to testing',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'visible_until': visible_until,
-            }
-        if workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
-            return {
-                'state': 'testing',
-                'message': 'Back to testing',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'visible_until': visible_until,
-            }
-        if workflow_status == PROBLEM_STATUS_DISPOSED:
-            return {
-                'state': 'dumped',
-                'message': 'Problem Sample Dumped',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'visible_until': visible_until,
-            }
-        if workflow_status in {PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_SHIPPED_BACK}:
-            return {
-                'state': 'shipping',
-                'message': 'Shipping samples back to client',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'visible_until': visible_until,
-                'customer_action': problem.customer_acknowledgement_action or CUSTOMER_ACTION_SHIP_BACK,
-                'customer_action_label': self._customer_action_label(problem) or 'Ship back',
-            }
-        if workflow_status == PROBLEM_STATUS_TO_BE_DISPOSED:
-            return {
-                'state': 'disposing',
-                'message': 'Sample(s) marked for disposal',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'visible_until': visible_until,
-                'customer_action': problem.customer_acknowledgement_action or '',
-                'customer_action_label': self._customer_action_label(problem),
-            }
-        if workflow_status == PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL:
-            return {
-                'state': 'pending',
-                'message': 'Please choose how ALS should handle this problem sample',
-                'problem_number': problem.problem_number,
-                **public_details,
-                **public_files,
-                'acknowledged_at': problem.acknowledged_at,
-                'visible_until': visible_until,
-                'customer_action': problem.customer_acknowledgement_action or '',
-                'customer_action_label': self._customer_action_label(problem),
                 'can_choose_action': True,
-                'automatic_disposal_active': False,
+                **public_details,
+                **public_files,
             }
 
         return {
-            'state': 'pending',
-            'message': 'Please choose how ALS should handle this problem sample',
+            'state': 'acknowledged',
+            'message': 'Your response has been recorded. You can change it until ALS completes the requested workflow.',
             'problem_number': problem.problem_number,
             **public_details,
             **public_files,
+            'acknowledged_at': problem.acknowledged_at,
+            'visible_until': visible_until,
+            'customer_action': problem.customer_acknowledgement_action or '',
+            'customer_action_label': self._customer_action_label(problem),
+            'can_choose_action': True,
+            'automatic_disposal_active': problem.dispose_automatically,
+            'days_until_disposal': problem.days_until_automatic_disposal,
         }
 
     def get(self, request, token):
         problem = self._problem(token)
         if not problem or self._is_link_gone(problem):
-            return Response({'detail': 'Problem sample tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(self._payload(problem))
 
     @transaction.atomic
     def post(self, request, token):
-        problem = self._problem(token)
+        problem = self._problem(token, for_update=True)
         if not problem or self._is_link_gone(problem):
-            return Response({'detail': 'Problem sample tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         workflow_status = problem.workflow_status
-        started_in_automatic_disposal = workflow_status == PROBLEM_STATUS_AUTOMATICALLY_DISPOSED
-        # Only the pre-response workflow states accept a customer choice. Completed
-        # or already-routed samples simply return their current public state.
-        if workflow_status not in {PROBLEM_STATUS_AUTOMATICALLY_DISPOSED, PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL}:
-            return Response(self._payload(problem))
+        # A customer may revise a response while work is only queued. Once ALS
+        # completes disposal, back-to-testing, or shipping, the response is final.
+        if workflow_status in {
+            PROBLEM_STATUS_DISPOSED,
+            PROBLEM_STATUS_BACK_TO_TESTING,
+            PROBLEM_STATUS_SHIPPED_BACK,
+        }:
+            return Response(
+                {'detail': 'This ticket workflow has been completed and the customer response can no longer be changed.'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         customer_action = str(request.data.get('action') or '').strip()
         customer_signature = ' '.join(str(request.data.get('signature') or '').split())
@@ -1799,19 +2188,11 @@ class ProblemAcknowledgementView(APIView):
         if len(customer_signature) > 200:
             return Response({'detail': 'Signature must be 200 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if started_in_automatic_disposal:
-            allowed_actions = {
-                CUSTOMER_ACTION_DISPOSE,
-                CUSTOMER_ACTION_SHIP_BACK,
-                CUSTOMER_ACTION_HOLD,
-                CUSTOMER_ACTION_REQUESTED_INFORMATION,
-            }
-        else:
-            allowed_actions = {
-                CUSTOMER_ACTION_DISPOSE,
-                CUSTOMER_ACTION_SHIP_BACK,
-                CUSTOMER_ACTION_REQUESTED_INFORMATION,
-            }
+        allowed_actions = {
+            CUSTOMER_ACTION_DISPOSE,
+            CUSTOMER_ACTION_SHIP_BACK,
+            CUSTOMER_ACTION_REQUESTED_INFORMATION,
+        }
         if customer_action not in allowed_actions:
             return Response({'detail': 'Choose a valid sample action.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1822,87 +2203,76 @@ class ProblemAcknowledgementView(APIView):
             if len(requested_information) > 4000:
                 return Response({'detail': 'Requested information must be 4000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # There is no separate acknowledgement button. The first explicit customer
-        # disposition choice both acknowledges receipt and records the requested action.
-        # This keeps passive email-link previews/GET requests from acknowledging a row.
+        # The first explicit customer disposition choice acknowledges receipt.
+        # Acknowledgement does not change descriptive Status; workflow routing happens only
+        # after the selected action is applied below.
         if not problem.acknowledged_at:
             now = timezone.now()
-            before_status = workflow_status
-            values = dict(problem.custom_values or {})
-            values['status'] = PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
-            problem.custom_values = values
-            problem.status = PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
             problem.acknowledged_at = now
             problem.customer_acknowledgement_action = ''
-            update_fields = [
-                'custom_values', 'status', 'acknowledged_at',
-                'customer_acknowledgement_action',
-            ]
-            update_fields.extend(problem.apply_acknowledgement_status_transition(before_status, changed_at=now))
-            problem.save(update_fields=list(dict.fromkeys(update_fields)))
-
-            after_status = problem.workflow_status
-            changes = []
-            if before_status != after_status:
-                changes.append({
-                    'field': 'Status',
-                    'before': before_status,
-                    'after': after_status,
-                })
+            problem.save(update_fields=['acknowledged_at', 'customer_acknowledgement_action'])
             ProblemHistory.objects.create(
                 problem=problem,
                 action=ProblemHistory.ACTION_ACKNOWLEDGED,
                 actor=None,
-                summary='Customer acknowledged problem sample',
+                summary='Customer acknowledged ticket',
                 details={
                     'acknowledged_via': 'public_tracking_link',
-                    'changes': changes,
+                    'changes': [],
                 },
             )
 
-        # The tracking link reflects the row's current workflow state. A customer may
-        # make a new choice whenever the row is back in an active follow-up state.
-
         before_status = problem.workflow_status
+        before_auto = problem.dispose_automatically
         problem.customer_acknowledgement_action = customer_action
         update_fields = ['customer_acknowledgement_action']
 
         values = dict(problem.custom_values or {})
         if customer_action == CUSTOMER_ACTION_DISPOSE:
-            values['status'] = PROBLEM_STATUS_TO_BE_DISPOSED
-            problem.status = PROBLEM_STATUS_TO_BE_DISPOSED
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_TO_BE_DISPOSED
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
         elif customer_action == CUSTOMER_ACTION_SHIP_BACK:
-            values['status'] = PROBLEM_STATUS_TO_BE_SHIPPED_BACK
-            problem.status = PROBLEM_STATUS_TO_BE_SHIPPED_BACK
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_TO_BE_SHIPPED_BACK
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
         elif customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
-            values['status'] = PROBLEM_STATUS_TO_BE_BACK_TO_TESTING
-            problem.status = PROBLEM_STATUS_TO_BE_BACK_TO_TESTING
-        else:
-            values['status'] = PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
-            problem.status = PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = CURRENT_WORKFLOW_DEFAULT
+            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
+
+        # The public tracking-link action is a real row modification. Record the
+        # customer as the most recent modifier in every Recent Row Modifier
+        # column so the audit field reflects the actual latest actor rather than
+        # the last authenticated staff member who touched the row.
+        if problem.table_id:
+            for column in problem.table.columns.all():
+                if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
+                    values[column.field_key] = 'Customer'
 
         problem.custom_values = values
-        update_fields.extend(['custom_values', 'status'])
+        problem.current_workflow = str(values.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or before_status)
+        # There is no authenticated ALS user behind a public tracking-link
+        # response. Clearing modified_by avoids exposing the previous staff user
+        # as though they made this customer-originated change. A later staff save
+        # sets modified_by and the Recent Row Modifier value back to that user.
+        problem.modified_by = None
+        update_fields.extend(['custom_values', 'current_workflow', 'modified_by', 'modified_at'])
 
         after_status = problem.workflow_status
-        if before_status != after_status:
-            update_fields.extend(problem.apply_acknowledgement_status_transition(before_status))
+        after_auto = problem.dispose_automatically
+        update_fields.extend(problem.apply_acknowledgement_status_transition(
+            before_status, previous_dispose_automatically=before_auto
+        ))
+        # The lifecycle helper may clear a previous customer action when automatic
+        # disposal is switched off. This POST is itself the new explicit customer
+        # action, so preserve the selection that was just submitted.
+        problem.customer_acknowledgement_action = customer_action
+        update_fields.append('customer_acknowledgement_action')
         problem.save(update_fields=list(dict.fromkeys(update_fields)))
 
-        if started_in_automatic_disposal:
-            label = {
-                CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
-                CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
-                CUSTOMER_ACTION_HOLD: 'Stop eventual disposal',
-                CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Fill out requested information (if applicable)',
-            }[customer_action]
-        else:
-            label = {
-                CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
-                CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
-                CUSTOMER_ACTION_HOLD: 'Hold sample',
-                CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Fill out requested information (if applicable)',
-            }[customer_action]
+        label = {
+            CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
+            CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
+            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Give us more details about this ticket',
+        }[customer_action]
         details = {
             'customer_action': customer_action,
             'customer_action_label': label,
@@ -1911,8 +2281,17 @@ class ProblemAcknowledgementView(APIView):
         }
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             details['customer_requested_information'] = requested_information
+        changes = []
         if before_status != after_status:
-            details['changes'] = [{'field': 'Status', 'before': before_status, 'after': after_status}]
+            changes.append({'field': 'Current Workflow', 'before': before_status, 'after': after_status})
+        if before_auto != after_auto:
+            changes.append({
+                'field': 'Dispose Automatically',
+                'before': DISPOSE_AUTOMATICALLY_YES if before_auto else DISPOSE_AUTOMATICALLY_NO,
+                'after': DISPOSE_AUTOMATICALLY_YES if after_auto else DISPOSE_AUTOMATICALLY_NO,
+            })
+        if changes:
+            details['changes'] = changes
         ProblemHistory.objects.create(
             problem=problem,
             action=ProblemHistory.ACTION_UPDATED,
@@ -1923,14 +2302,16 @@ class ProblemAcknowledgementView(APIView):
         return Response(self._payload(problem))
 
 class ProblemAcknowledgementImageView(APIView):
-    """Serve a problem image only while its problem sample tracking token is valid."""
+    """Serve a problem image only while its ticket tracking token is valid."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
     def get(self, request, token, image_id):
-        problem = ProblemSample.objects.filter(acknowledgement_token=token).first()
+        if not is_strong_tracking_token(token):
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+        problem = ProblemSample.objects.select_related('tracking_link_record').filter(tracking_link_record__tracking_token=token).first()
         if not problem or problem.tracking_link_expired:
-            return Response({'detail': 'Problem sample tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
         image = ProblemImage.objects.filter(pk=image_id, problem=problem).first()
         if not image or not image.image:
             return Response({'detail': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1944,14 +2325,16 @@ class ProblemAcknowledgementImageView(APIView):
 
 
 class ProblemAcknowledgementAttachmentView(APIView):
-    """Serve a problem attachment only while its problem sample tracking token is valid."""
+    """Serve a problem attachment only while its ticket tracking token is valid."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
     def get(self, request, token, attachment_id):
-        problem = ProblemSample.objects.filter(acknowledgement_token=token).first()
+        if not is_strong_tracking_token(token):
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+        problem = ProblemSample.objects.select_related('tracking_link_record').filter(tracking_link_record__tracking_token=token).first()
         if not problem or problem.tracking_link_expired:
-            return Response({'detail': 'Problem sample tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'detail': 'Ticket tracking link not found.'}, status=status.HTTP_404_NOT_FOUND)
         attachment = ProblemAttachment.objects.filter(pk=attachment_id, problem=problem).first()
         if not attachment or not attachment.file:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1962,4 +2345,3 @@ class ProblemAcknowledgementAttachmentView(APIView):
         except (OSError, ValueError):
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
         return FileResponse(attachment.file, as_attachment=True, filename=filename, content_type=content_type)
-

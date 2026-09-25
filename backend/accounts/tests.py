@@ -24,6 +24,14 @@ class AdminCreatedAccountTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         return response.data
 
+    def test_login_without_trailing_slash_is_accepted_for_proxy_compatibility(self):
+        response = self.client.post('/api/auth/login', {
+            'username': 'admin.user',
+            'password': 'AdminPassword123!',
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn('token', response.data)
+
     def test_admin_can_create_named_account_and_generated_password_logs_in(self):
         admin_login = self._login('admin.user', 'AdminPassword123!')
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {admin_login['token']}")

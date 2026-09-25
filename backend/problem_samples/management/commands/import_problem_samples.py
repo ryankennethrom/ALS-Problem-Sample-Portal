@@ -4,8 +4,10 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from problem_samples.models import (
     ProblemSample, ProblemComment, ProblemTable, ProblemColumn,
-    PROBLEM_STATUS_AUTOMATICALLY_DISPOSED, PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
+    PROBLEM_STATUS_DEFAULT, CURRENT_WORKFLOW_DEFAULT, PROBLEM_STATUS_CHOICES, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
+    PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING,
     PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_SHIPPED_BACK,
+    SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO,
 )
 
 
@@ -26,28 +28,44 @@ def parse_bool(value): return str(value or '').strip().lower() in {'1','true','y
 
 
 def normalize_status(value, *, email_confirmation=False):
+    """Return (fixed descriptive Status, Current Workflow, Dispose Automatically)."""
     text = str(value or '').strip()
     folded = text.casefold()
-    if folded == PROBLEM_STATUS_DISPOSED.casefold():
-        return PROBLEM_STATUS_DISPOSED
-    if folded in {'to be disposed', PROBLEM_STATUS_TO_BE_DISPOSED.casefold()}:
-        return PROBLEM_STATUS_TO_BE_DISPOSED
-    if folded == PROBLEM_STATUS_TO_BE_SHIPPED_BACK.casefold():
-        return PROBLEM_STATUS_TO_BE_SHIPPED_BACK
-    if folded == PROBLEM_STATUS_SHIPPED_BACK.casefold():
-        return PROBLEM_STATUS_SHIPPED_BACK
-    if folded in {PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL.casefold(), 'problem acknowledged by customer'}:
-        return PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
-    if folded in {
-        PROBLEM_STATUS_AUTOMATICALLY_DISPOSED.casefold(),
-        'customer not yet contacted',
-        'customer emailed by system',
-        'notified',
-    } or email_confirmation:
-        return PROBLEM_STATUS_AUTOMATICALLY_DISPOSED
-    # New/unknown rows start with automatic disposal halted unless the imported
-    # record explicitly indicates that the automatic-disposal workflow is active.
-    return PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
+    routed = {
+        PROBLEM_STATUS_TO_BE_DISPOSED.casefold(): PROBLEM_STATUS_TO_BE_DISPOSED,
+        PROBLEM_STATUS_TO_BE_SHIPPED_BACK.casefold(): PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
+        PROBLEM_STATUS_TO_BE_BACK_TO_TESTING.casefold(): PROBLEM_STATUS_TO_BE_BACK_TO_TESTING,
+        PROBLEM_STATUS_BACK_TO_TESTING.casefold(): PROBLEM_STATUS_BACK_TO_TESTING,
+        PROBLEM_STATUS_DISPOSED.casefold(): PROBLEM_STATUS_DISPOSED,
+        PROBLEM_STATUS_SHIPPED_BACK.casefold(): PROBLEM_STATUS_SHIPPED_BACK,
+    }
+    status_by_fold = {item.casefold(): item for item in PROBLEM_STATUS_CHOICES}
+    workflow = routed.get(folded, CURRENT_WORKFLOW_DEFAULT)
+
+    if folded in status_by_fold:
+        descriptive = status_by_fold[folded]
+    elif 'shipped back' in folded:
+        descriptive = 'SHIPPED BACK TO CLIENT'
+    elif folded == 'disposed' or 'disposed' in folded:
+        descriptive = 'DISPOSED'
+    elif folded in {'completed', 'complete', 'resolved', 'closed'}:
+        descriptive = 'COMPLETED'
+    elif 'hold' in folded or folded == 'halted automatic disposal':
+        descriptive = 'ON HOLD'
+    elif folded in {
+        'in progress', 'notified', 'customer emailed by system', 'problem acknowledged by customer',
+        'back to testing', 'to be shipped back to client', 'to be disposed',
+    }:
+        descriptive = 'IN PROGRESS'
+    else:
+        descriptive = PROBLEM_STATUS_DEFAULT
+
+    if folded in {'automatically disposed', 'customer not yet contacted', 'customer emailed by system', 'notified'} or email_confirmation:
+        auto = DISPOSE_AUTOMATICALLY_YES
+    else:
+        auto = DISPOSE_AUTOMATICALLY_NO
+    return descriptive, workflow, auto
+
 
 
 class Command(BaseCommand):
@@ -57,10 +75,10 @@ class Command(BaseCommand):
 
     def handle(self,*args,**opts):
         created=updated=0
-        table = ProblemTable.objects.filter(is_default=True).first() or ProblemTable.objects.create(name='Problem Samples', description='Default problem sample table', is_default=True)
+        table = ProblemTable.objects.filter(is_default=True).first() or ProblemTable.objects.create(name='Tickets', description='Default ticket table', is_default=True)
         ProblemColumn.objects.update_or_create(
             table=table, field_key='problem-id',
-            defaults={'name':'Problem ID','column_type':'number','required':True,'searchable':True,'choices':[],'default_value':None,'position':0,'is_system':True},
+            defaults={'name':'Ticket ID','column_type':'number','required':True,'searchable':True,'choices':[],'default_value':None,'position':0,'is_system':True},
         )
         available_keys = set(table.columns.filter(is_system=False).values_list('field_key', flat=True))
 
@@ -71,8 +89,11 @@ class Command(BaseCommand):
                 count = parse_int(clean(row,'Number of problem samples in shipment'))
                 notify = parse_bool(clean(row,'Notify'))
                 email_confirmation = parse_bool(clean(row,'Email Confirmation'))
+                normalized_status, current_workflow, dispose_automatically = normalize_status(
+                    clean(row,'Status'), email_confirmation=email_confirmation
+                )
                 defaults={
-                    'status':normalize_status(clean(row,'Status'), email_confirmation=email_confirmation),'als_tracking_number':clean(row,'ALS Sample Tracking Number'),
+                    'status':normalized_status,'current_workflow':current_workflow,'als_tracking_number':clean(row,'ALS Sample Tracking Number'),
                     'problem_sample_count':count,
                     'brand':clean(row,'Brand'),'distributor':clean(row,'Distributor '),'end_user':clean(row,'End User'),
                     'date_received':received,'problem_type':clean(row,'Problem Type'),
@@ -107,6 +128,8 @@ class Command(BaseCommand):
                 # were seeded by migration 0003.
                 dynamic = {
                     'status': defaults['status'],
+                    SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: current_workflow,
+                    SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY: dispose_automatically,
                     'als-sample-tracking-number': defaults['als_tracking_number'],
                     'number-of-problem-samples-in-shipment': count,
                     'brand': defaults['brand'],
@@ -123,11 +146,17 @@ class Command(BaseCommand):
                     'notify': notify,
                     'email-confirmation': email_confirmation,
                 }
+                values = dict(obj.custom_values or {})
+                values['status'] = defaults['status']
+                values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = current_workflow
+                values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = dispose_automatically
                 if available_keys:
-                    values = dict(obj.custom_values or {})
                     values.update({k:v for k,v in dynamic.items() if k in available_keys})
-                    obj.custom_values = values
-                    obj.save(update_fields=['custom_values'])
+                obj.custom_values = values
+                obj.current_workflow = current_workflow
+                if current_workflow in {PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK}:
+                    obj.container = None
+                obj.save(update_fields=['custom_values', 'current_workflow', 'container'])
 
                 created += int(was_created); updated += int(not was_created)
                 comment=clean(row,'Comment/ Follow Up')

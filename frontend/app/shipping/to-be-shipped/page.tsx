@@ -89,7 +89,7 @@ export default function ToBeShippedPage() {
 
   async function shipSelected() {
     if (!selectedCount) return;
-    const noun = selectedCount === 1 ? 'problem sample' : 'problem samples';
+    const noun = selectedCount === 1 ? 'ticket' : 'tickets';
     const reason = await requestChangeReason(`Why are you making this change to ${selectedCount} selected ${noun}?`);
     if (reason === null) return;
     if (!confirm(`Mark ${selectedCount} selected ${noun} as Shipped back to client?`)) return;
@@ -102,11 +102,11 @@ export default function ToBeShippedPage() {
         headers: changeReasonHeaders(reason),
         body: JSON.stringify({ problem_ids: Array.from(selected) }),
         successMessage: `${selectedCount} ${noun} marked Shipped back to client.`,
-        errorMessage: 'Could not ship the selected problem samples',
+        errorMessage: 'Could not ship the selected tickets',
       });
       await load();
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Could not ship the selected problem samples.');
+      setError(error instanceof Error ? error.message : 'Could not ship the selected tickets.');
     } finally {
       setShipping(false);
     }
@@ -117,7 +117,7 @@ export default function ToBeShippedPage() {
       <div>
         <div className="eyebrow">Shipping</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>To be shipped</h1>
-        <div className="muted table-description">Select one or more problem samples that are ready to be returned to the client, then mark them as shipped together.</div>
+        <div className="muted table-description">Select one or more tickets that are ready to be returned to the client, then mark them as shipped together.</div>
       </div>
       <div className="toolbar-actions">
         <button className="button" type="button" onClick={shipSelected} disabled={!selectedCount || shipping}>
@@ -133,7 +133,7 @@ export default function ToBeShippedPage() {
         <div className="search-grid table-search-grid compact-table-search-grid advanced-search-grid" style={{flex: 1}}>
           <div className="field search-wide">
             <label htmlFor="shipping-search">Search samples</label>
-            <input id="shipping-search" className="input" value={query} onChange={event => setQuery(event.target.value)} placeholder="Problem #6, container, client, tracking number…" />
+            <input id="shipping-search" className="input" value={query} onChange={event => setQuery(event.target.value)} placeholder="Ticket #6, container, client, tracking number…" />
           </div>
           <WorkflowQueueAdvancedSearch
             activeCount={advancedFilters.length}
@@ -158,7 +158,7 @@ export default function ToBeShippedPage() {
               <th className="shipping-select-column">
                 <input type="checkbox" aria-label="Select all visible samples" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={filtered.length === 0 || shipping} />
               </th>
-              <th>Problem ID</th>
+              <th>Ticket ID</th>
               <th>Date Created</th>
               <th>Table</th>
               <th>Container</th>
@@ -166,15 +166,15 @@ export default function ToBeShippedPage() {
               <th>End User</th>
               <th>Brand</th>
               <th>ALS Tracking Number</th>
-              <th>Status</th>
+              <th>Current Workflow</th>
             </tr>
           </thead>
           <tbody>
-            {!loading && filtered.length === 0 && <tr><td colSpan={10} className="empty-table">{items.length ? 'No samples match your search.' : 'No problem samples are waiting to be shipped.'}</td></tr>}
+            {!loading && filtered.length === 0 && <tr><td colSpan={10} className="empty-table">{items.length ? 'No tickets match your search.' : 'No tickets are waiting to be shipped.'}</td></tr>}
             {loading && <tr><td colSpan={10} className="empty-table">Loading samples…</td></tr>}
             {!loading && filtered.map(item => <tr key={item.id} className={selected.has(item.id) ? 'shipping-row-selected' : ''}>
               <td className="shipping-select-column"><input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={shipping} /></td>
-              <td><Link className="table-link" href={`/problems/${item.id}`}>Problem #{item.problem_number}</Link></td>
+              <td><Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link></td>
               <td>{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</td>
               <td>{item.table_name || '—'}</td>
               <td>{item.container_id || '—'}</td>

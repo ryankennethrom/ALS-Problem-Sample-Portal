@@ -3,6 +3,9 @@ from . import views
 
 urlpatterns = [
     path('login/', views.login),
+    # Compatibility alias for proxies/older frontend builds that omit the trailing slash.
+    # Avoids CommonMiddleware trying (and failing) to redirect a POST to login/.
+    path('login', views.login),
     path('accounts/', views.accounts),
     path('accounts/<int:user_id>/admin/', views.account_admin_status),
     path('accounts/<int:user_id>/reset-password/', views.reset_account_password),

@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '@/lib/api';
 import { ProblemColumn, ProblemTable } from '@/lib/problemTables';
 
 export type MatchMode = 'all' | 'any';
@@ -116,6 +117,172 @@ function inputType(column: ProblemColumn) {
   }
 }
 
+type AdvancedSuggestion = {
+  key: string;
+  value: string;
+  title: string;
+  meta: string[];
+};
+
+function usesFuzzySuggestions(column: ProblemColumn): boolean {
+  return ['distributor', 'end_user', 'brand', 'client_email'].includes(column.column_type);
+}
+
+function suggestionEndpoint(column: ProblemColumn, query: string): string {
+  const q = encodeURIComponent(query);
+  switch (column.column_type) {
+    case 'distributor': return `/customers/distributors/suggest/?q=${q}`;
+    case 'end_user': return `/customers/end-users/suggest/?q=${q}`;
+    case 'brand': return `/customers/brands/suggest/?q=${q}`;
+    case 'client_email': return `/customers/client-emails/suggest/?q=${q}`;
+    default: return '';
+  }
+}
+
+function normalizeSuggestions(column: ProblemColumn, raw: unknown): AdvancedSuggestion[] {
+  const source = column.column_type === 'client_email' && raw && !Array.isArray(raw)
+    ? (raw as { results?: unknown[] }).results || []
+    : raw;
+  if (!Array.isArray(source)) return [];
+
+  const seen = new Set<string>();
+  const result: AdvancedSuggestion[] = [];
+  for (const item of source) {
+    if (!item || typeof item !== 'object') continue;
+    const data = item as Record<string, unknown>;
+    let value = '';
+    let title = '';
+    const meta: string[] = [];
+
+    if (column.column_type === 'brand') {
+      value = String(data.brand || '').trim();
+      title = value;
+      if (typeof data.customer_count === 'number') meta.push(`${data.customer_count} customer record${data.customer_count === 1 ? '' : 's'}`);
+      if (Array.isArray(data.company_examples) && data.company_examples.length) meta.push(`Examples: ${data.company_examples.map(String).join(', ')}`);
+    } else if (column.column_type === 'client_email') {
+      value = String(data.email || '').trim();
+      title = value;
+      if (data.primary_contact) meta.push(String(data.primary_contact));
+      if (data.company_name) meta.push(String(data.company_name));
+      const place = [data.city, data.state].filter(Boolean).map(String).join(', ');
+      if (place) meta.push(place);
+    } else {
+      value = String(data.company_name || '').trim();
+      title = value;
+      if (data.external_customer_id) meta.push(`CoyId ${String(data.external_customer_id)}`);
+      const place = [data.city, data.state].filter(Boolean).map(String).join(', ');
+      if (place) meta.push(place);
+      if (data.brand) meta.push(`Brand ${String(data.brand)}`);
+    }
+
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    result.push({ key, value, title, meta });
+  }
+  return result;
+}
+
+function AdvancedSuggestionInput({
+  column,
+  value,
+  placeholder,
+  onChange,
+}: {
+  column: ProblemColumn;
+  value: string | boolean | undefined;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  const text = value == null ? '' : String(value);
+  const [suggestions, setSuggestions] = useState<AdvancedSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [searchEnabled, setSearchEnabled] = useState(false);
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    if (!searchEnabled) {
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+    const query = text.trim();
+    if (!query) {
+      setSuggestions([]);
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+
+    const endpoint = suggestionEndpoint(column, query);
+    if (!endpoint) return;
+    const currentRequest = ++requestId.current;
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const raw = await api(endpoint);
+        if (currentRequest !== requestId.current) return;
+        setSuggestions(normalizeSuggestions(column, raw));
+        setOpen(true);
+      } catch {
+        if (currentRequest === requestId.current) {
+          setSuggestions([]);
+          setOpen(false);
+        }
+      } finally {
+        if (currentRequest === requestId.current) setLoading(false);
+      }
+    }, 180);
+
+    return () => window.clearTimeout(timer);
+  }, [column, searchEnabled, text]);
+
+  function choose(suggestion: AdvancedSuggestion) {
+    requestId.current += 1;
+    setSearchEnabled(false);
+    setSuggestions([]);
+    setOpen(false);
+    onChange(suggestion.value);
+  }
+
+  return <div className="advanced-suggestion-input distributor-autocomplete advanced-value">
+    <input
+      className="input advanced-value"
+      type={column.column_type === 'client_email' ? 'email' : 'text'}
+      value={text}
+      autoComplete="off"
+      placeholder={placeholder}
+      onFocus={() => {
+        setSearchEnabled(true);
+        if (suggestions.length) setOpen(true);
+      }}
+      onBlur={() => window.setTimeout(() => {
+        requestId.current += 1;
+        setSearchEnabled(false);
+        setOpen(false);
+      }, 140)}
+      onChange={event => {
+        setSearchEnabled(true);
+        onChange(event.target.value);
+      }}
+    />
+    {loading && <span className="distributor-loading">Searching…</span>}
+    {open && <div className="distributor-suggestions advanced-suggestions" role="listbox">
+      {suggestions.length ? suggestions.map(suggestion => <button
+        type="button"
+        className="distributor-suggestion"
+        key={suggestion.key}
+        onMouseDown={event => event.preventDefault()}
+        onClick={() => choose(suggestion)}
+      >
+        <span className="distributor-company">{suggestion.title}</span>
+        {!!suggestion.meta.length && <span className="distributor-meta">{suggestion.meta.map((item, index) => <span className="distributor-meta-item" key={`${suggestion.key}-${index}`}>{item}</span>)}</span>}
+      </button>) : <div className="distributor-empty">No suggestions found</div>}
+    </div>}
+  </div>;
+}
+
 function FilterValue({
   column,
   condition,
@@ -148,6 +315,15 @@ function FilterValue({
       <option value="">Select a value…</option>
       {column.choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}
     </select>;
+  }
+
+  if (usesFuzzySuggestions(column)) {
+    return <AdvancedSuggestionInput
+      column={column}
+      value={value}
+      placeholder={second ? 'Second value' : 'Type to search suggestions…'}
+      onChange={next => onChange(next)}
+    />;
   }
 
   return <input

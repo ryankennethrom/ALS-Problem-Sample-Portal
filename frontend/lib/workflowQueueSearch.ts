@@ -31,18 +31,10 @@ export type QueueFilterField = {
 };
 
 export const WORKFLOW_QUEUE_FIELDS: QueueFilterField[] = [
-  { key: 'problem_number', label: 'Problem ID', type: 'number' },
-  { key: 'table_name', label: 'Problem Sample Table', type: 'text' },
-  { key: 'workflow_status', label: 'Status', type: 'choice', choices: [
-    'Automatically Disposed',
-    'Halted Automatic Disposal',
-    'To be Disposed',
-    'To be shipped back to client',
-    'Shipped back to client',
-    'To be back to testing',
-    'Back to testing',
-    'Disposed',
-  ] },
+  { key: 'problem_number', label: 'Ticket ID', type: 'number' },
+  { key: 'table_name', label: 'Ticket Table', type: 'text' },
+  { key: 'workflow_status', label: 'Current Workflow', type: 'text' },
+  { key: 'dispose_automatically', label: 'Dispose Automatically', type: 'choice', choices: ['Yes', 'No'] },
   { key: 'container_id', label: 'Container ID', type: 'text' },
   { key: 'distributor', label: 'Distributor', type: 'text' },
   { key: 'end_user', label: 'End User', type: 'text' },
@@ -91,7 +83,7 @@ export function matchesWorkflowQueueSearch(item: QueueSearchItem, query: string)
   const identifierNeedle = normalizeIdentifier(raw);
   const dynamicValues = Object.values(item.custom_values || {});
   const values: unknown[] = [
-    `Problem #${item.problem_number}`,
+    `Ticket #${item.problem_number}`,
     `Problem ${item.problem_number}`,
     item.problem_number,
     item.table_name,
@@ -116,6 +108,7 @@ export function matchesWorkflowQueueSearch(item: QueueSearchItem, query: string)
 
 function valueFor(item: QueueSearchItem, fieldKey: string): unknown {
   if (fieldKey === 'any_custom') return Object.values(item.custom_values || {}).map(textValue).join(' ');
+  if (fieldKey === 'dispose_automatically') return item.custom_values?.['dispose-automatically'] || 'No';
   return (item as unknown as Record<string, unknown>)[fieldKey];
 }
 

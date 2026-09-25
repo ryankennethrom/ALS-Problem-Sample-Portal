@@ -1,4 +1,5 @@
 import { CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
+import { api } from '@/lib/api';
 
 export type CustomerEmailContext = {
   table?: ProblemTable | null;
@@ -8,6 +9,7 @@ export type CustomerEmailContext = {
   additionalTo?: string[];
   cc?: string[];
   trackingUrl?: string;
+  edmontonRecipient?: string;
 };
 
 type ProblemDetail = { label: string; value: string; position: number; fieldKey: string };
@@ -88,7 +90,68 @@ export function findCustomerEmail(table: ProblemTable | null | undefined, values
   return findCustomerEmails(table, values).join(',');
 }
 
-export function buildCustomerEmailContent(email: string | string[], context: CustomerEmailContext = {}) {
+export type CustomerEmailTemplate = {
+  subject_template: string;
+  body_template: string;
+};
+
+export const DEFAULT_CUSTOMER_EMAIL_TEMPLATE: CustomerEmailTemplate = {
+  subject_template: '{{problem_type}} / Ticket ID #{{problem_id}}',
+  body_template: `To Whom It May Concern,
+
+Thank you for submitting your samples to ALS for fluid analysis. We are writing to notify you that we have received the affected sample(s) from your organization; however, we are currently unable to proceed with testing.
+
+{{multiple_contacts_notice}}
+
+Please review the following details regarding the affected sample(s) and the reason for the sample processing hold:
+{{problem_details}}
+
+{{additional_information}}
+
+Please review and update this ticket using the secure Ticket Tracking Link below, or contact our Customer Service team at {{na_edm_email}} for assistance:
+
+TICKET TRACKING LINK
+
+{{tracking_link}}
+
+The Ticket Tracking page also shows the available ticket details, images, and files.
+
+{{automatic_disposal_notice}}
+
+We value your partnership and remain committed to processing your samples as efficiently as possible once the reason for the hold identified above has been addressed.
+
+Should you have any questions or require further assistance, please do not hesitate to reach out.
+
+Thank you for your prompt attention to this matter.
+
+Regards,
+ALS`,
+};
+
+function renderTemplate(template: string, values: Record<string, string>): string {
+  return template.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match,
+  ).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+async function loadCustomerEmailTemplate(): Promise<CustomerEmailTemplate> {
+  try {
+    const result = await api('/email-templates/customer-notification/');
+    if (result?.subject_template && result?.body_template) {
+      return { subject_template: result.subject_template, body_template: result.body_template };
+    }
+  } catch {
+    // Keep customer notification available if template retrieval is temporarily
+    // unavailable. The built-in copy matches the seeded server template.
+  }
+  return DEFAULT_CUSTOMER_EMAIL_TEMPLATE;
+}
+
+export function buildCustomerEmailContent(
+  email: string | string[],
+  context: CustomerEmailContext = {},
+  template: CustomerEmailTemplate = DEFAULT_CUSTOMER_EMAIL_TEMPLATE,
+) {
   const recipientList = normalizeEmails(email);
   const additionalTo = normalizeEmails(context.additionalTo || []);
   const ccRecipients = normalizeEmails(context.cc || []);
@@ -117,81 +180,71 @@ export function buildCustomerEmailContent(email: string | string[], context: Cus
   ]);
   const dateReceived = findDetail(allDetails, ['Date Received', 'Received Date']);
 
-  const subjectType = problemType?.value || 'Problem Sample';
-  const subject = problemNumber
-    ? `${subjectType} / Problem ID #${problemNumber}`
-    : `${subjectType} / Problem Sample Notification`;
-
-  const lines: string[] = [];
-  lines.push('To Whom It May Concern,');
-  lines.push('');
-  lines.push('Thank you for submitting your samples to ALS for fluid analysis. We are writing to notify you that we have received the affected sample(s) from your organization; however, we are currently unable to proceed with testing.');
-
-  if (multipleCustomerContacts) {
-    lines.push('');
-    lines.push('This notification is being sent to multiple contacts because a primary contact for the affected sample(s) could not be confirmed from our records. If another person in your organization should handle this matter, please forward this message to them or let ALS Customer Service know.');
-  }
-
-  lines.push('');
-  lines.push('Please review the following details regarding the affected sample(s) and the reason for the sample processing hold:');
-  if (problemNumber) lines.push(`Problem ID: ${problemNumber}`);
-  if (problemType?.value) lines.push(`Problem Type: ${problemType.value}`);
-  lines.push(`ALS Sample Tracking Number: ${sampleTracking?.value || 'Not provided'}`);
-  lines.push(`Reason for Hold: ${reasonForHold?.value || 'Please contact ALS Customer Service for details'}`);
-  lines.push(`Date Received: ${dateReceived?.value || 'Not provided'}`);
-
-  // Preserve the table-level "Include in customer notification" setting for
-  // any useful fields beyond the core automation template above.
+  const subjectType = problemType?.value || 'Ticket';
   const coreFieldKeys = new Set(
     [problemType, sampleTracking, reasonForHold, dateReceived]
       .filter((detail): detail is ProblemDetail => Boolean(detail))
       .map(detail => detail.fieldKey),
   );
   const extraDetails = includedDetails.filter(detail => !coreFieldKeys.has(detail.fieldKey));
-  if (extraDetails.length) {
-    lines.push('');
-    lines.push('Additional information:');
-    for (const detail of extraDetails) lines.push(`${detail.label}: ${detail.value}`);
-  }
+  const additionalInformation = extraDetails.length
+    ? ['Additional information:', ...extraDetails.map(detail => `${detail.label}: ${detail.value}`)].join('\n')
+    : '';
 
-  lines.push('');
-  if (context.trackingUrl) {
-    lines.push('');
-    lines.push('Please review and update this problem sample using the secure Problem Sample Tracking Link below, or contact our Customer Service team at naedm.de@alsglobal.com for assistance:');
-    lines.push('');
-    lines.push('PROBLEM SAMPLE TRACKING LINK');
-    lines.push('');
-    lines.push(context.trackingUrl);
-    lines.push('');
-    lines.push('The Problem Sample Tracking page also shows the available problem sample details, images, and files.');
-  } else {
-    lines.push('Please contact our Customer Service team at naedm.de@alsglobal.com for assistance.');
-  }
-  lines.push('');
+  const problemDetailLines: string[] = [];
+  if (problemNumber) problemDetailLines.push(`Ticket ID: ${problemNumber}`);
+  if (problemType?.value) problemDetailLines.push(`Problem Type: ${problemType.value}`);
+  problemDetailLines.push(`ALS Sample Tracking Number: ${sampleTracking?.value || 'Not provided'}`);
+  problemDetailLines.push(`Reason for Hold: ${reasonForHold?.value || 'Please contact ALS Customer Service for details'}`);
+  problemDetailLines.push(`Date Received: ${dateReceived?.value || 'Not provided'}`);
+
   const expirationDays = context.table?.pt_days ?? 30;
-  if (expirationDays === 0) {
-    lines.push('Please note: this notification activates automatic disposal. If no customer action is selected, the sample is eligible for disposal immediately.');
-  } else {
-    lines.push(`Please note: this notification activates automatic disposal and starts a new ${expirationDays}-day expiration period. If no customer action is selected, the sample becomes eligible for disposal when that period ends.`);
-  }
-  lines.push('');
-  lines.push('We value your partnership and remain committed to processing your samples as efficiently as possible once the reason for the hold identified above has been addressed.');
-  lines.push('');
-  lines.push('Should you have any questions or require further assistance, please do not hesitate to reach out.');
-  lines.push('');
-  lines.push('Thank you for your prompt attention to this matter.');
-  lines.push('');
-  lines.push('Regards,');
-  lines.push('ALS');
+  const automaticDisposalNotice = expirationDays === 0
+    ? 'Please note: this notification activates automatic disposal. If no customer action is selected, Current Workflow will be changed to To be Disposed immediately.'
+    : `Please note: this notification activates automatic disposal and starts a new ${expirationDays}-day expiration period. If no customer action is selected, Current Workflow will be changed to To be Disposed when that period ends.`;
 
-  return { to: toRecipients, cc: ccRecipients, subject, body: lines.join('\n') };
+  const multipleContactsNotice = multipleCustomerContacts
+    ? 'This notification is being sent to multiple contacts because a primary contact for the affected sample(s) could not be confirmed from our records. If another person in your organization should handle this matter, please forward this message to them or let ALS Customer Service know.'
+    : '';
+
+  const values: Record<string, string> = {
+    na_edm_email: context.edmontonRecipient || 'NAEDM.DE@ALSGlobal.com',
+    problem_id: problemNumber,
+    problem_type: subjectType,
+    als_sample_tracking_number: sampleTracking?.value || 'Not provided',
+    reason_for_hold: reasonForHold?.value || 'Please contact ALS Customer Service for details',
+    date_received: dateReceived?.value || 'Not provided',
+    problem_details: problemDetailLines.join('\n'),
+    additional_information: additionalInformation,
+    multiple_contacts_notice: multipleContactsNotice,
+    tracking_link: context.trackingUrl || '',
+    automatic_disposal_notice: automaticDisposalNotice,
+  };
+
+  const subject = renderTemplate(template.subject_template, values);
+  const body = renderTemplate(template.body_template, values);
+  return { to: toRecipients, cc: ccRecipients, subject, body };
 }
 
-export async function buildCustomerMailto(email: string | string[], context: CustomerEmailContext = {}): Promise<string> {
-  const content = buildCustomerEmailContent(email, context);
+export type CustomerEmailContent = ReturnType<typeof buildCustomerEmailContent>;
+
+export function mailtoForCustomerEmail(content: CustomerEmailContent): string {
   const query = [`subject=${encodeURIComponent(content.subject)}`, `body=${encodeURIComponent(content.body)}`];
   if (content.cc.length) query.push(`cc=${encodeURIComponent(content.cc.join(','))}`);
   return `mailto:${content.to.join(',')}?${query.join('&')}`;
+}
+
+export async function prepareCustomerEmail(email: string | string[], context: CustomerEmailContext = {}) {
+  const [template, edmontonRecipient] = await Promise.all([
+    loadCustomerEmailTemplate(),
+    context.edmontonRecipient ? Promise.resolve(context.edmontonRecipient) : api('/email-templates/edmonton-recipient/').then((data: { email: string }) => data.email),
+  ]);
+  const content = buildCustomerEmailContent(email, { ...context, edmontonRecipient }, template);
+  return { content, mailto: mailtoForCustomerEmail(content) };
+}
+
+export async function buildCustomerMailto(email: string | string[], context: CustomerEmailContext = {}): Promise<string> {
+  return (await prepareCustomerEmail(email, context)).mailto;
 }
 
 export function invokeCustomerEmail(mailto: string): void {

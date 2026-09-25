@@ -74,7 +74,7 @@ export default function DisposeSamplesPage() {
     } catch (error) {
       if (serial !== searchSerial.current) return;
       setItems([]);
-      setError(error instanceof Error ? error.message : 'Could not search problem samples.');
+      setError(error instanceof Error ? error.message : 'Could not search tickets.');
     } finally {
       if (serial === searchSerial.current) setLoading(false);
     }
@@ -143,7 +143,7 @@ export default function DisposeSamplesPage() {
 
   async function disposeIds(ids: string[], oneId?: string) {
     if (!ids.length) return;
-    const noun = ids.length === 1 ? 'problem sample' : 'problem samples';
+    const noun = ids.length === 1 ? 'ticket' : 'tickets';
     const reason = await requestChangeReason(`Why are you disposing ${ids.length} ${noun}?`);
     if (reason === null) return;
     if (!confirm(`Mark ${ids.length} ${noun} as Disposed? This should only be done after the sample${ids.length === 1 ? ' has' : 's have'} actually been disposed.`)) return;
@@ -157,7 +157,7 @@ export default function DisposeSamplesPage() {
         headers: changeReasonHeaders(reason),
         body: JSON.stringify({ problem_ids: ids }),
         successMessage: `${ids.length} ${noun} marked Disposed.`,
-        errorMessage: 'Could not dispose the selected problem samples',
+        errorMessage: 'Could not dispose the selected tickets',
       });
       setSelected(previous => {
         const next = new Set(previous);
@@ -171,7 +171,7 @@ export default function DisposeSamplesPage() {
       });
       await runSearch(query, advancedFilters.length > 0);
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Could not dispose the selected problem samples.');
+      setError(error instanceof Error ? error.message : 'Could not dispose the selected tickets.');
     } finally {
       if (oneId) setDisposingOne(null);
       else setDisposing(false);
@@ -183,7 +183,7 @@ export default function DisposeSamplesPage() {
       <div>
         <div className="eyebrow">Disposal</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>Dispose Samples</h1>
-        <div className="muted table-description">Quickly search for problem samples and mark one or several as Disposed. Individually disposed samples are ignored by later container-disposal readiness checks.</div>
+        <div className="muted table-description">Quickly search for tickets and mark one or several as Disposed. Tickets disposed individually do not block later container disposal.</div>
       </div>
       <div className="toolbar-actions">
         <button className="button danger" type="button" onClick={() => disposeIds(Array.from(selected))} disabled={!selectedCount || disposing || disposingOne !== null}>
@@ -198,14 +198,14 @@ export default function DisposeSamplesPage() {
       <div className="shipping-toolbar">
         <div className="search-grid table-search-grid compact-table-search-grid advanced-search-grid" style={{flex: 1}}>
           <div className="field search-wide">
-            <label htmlFor="disposal-sample-search">Search problem samples</label>
+            <label htmlFor="disposal-sample-search">Search tickets</label>
             <input
               id="disposal-sample-search"
               className="input"
               autoFocus
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="Problem #6, container, client, tracking number, any searchable field…"
+              placeholder="Ticket #6, container, client, tracking number, any searchable field…"
             />
           </div>
           <WorkflowQueueAdvancedSearch
@@ -231,7 +231,7 @@ export default function DisposeSamplesPage() {
               <th className="shipping-select-column">
                 <input type="checkbox" aria-label="Select all disposable search results" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={selectableItems.length === 0 || disposing || disposingOne !== null} />
               </th>
-              <th>Problem ID</th>
+              <th>Ticket ID</th>
               <th>Date Created</th>
               <th>Table</th>
               <th>Container</th>
@@ -239,14 +239,14 @@ export default function DisposeSamplesPage() {
               <th>End User</th>
               <th>Brand</th>
               <th>ALS Tracking Number</th>
-              <th>Status</th>
+              <th>Current Workflow</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {!query.trim() && advancedFilters.length === 0 && selectedCount === 0 && <tr><td colSpan={11} className="empty-table">Search for a problem sample to dispose or use Advanced Search.</td></tr>}
+            {!query.trim() && advancedFilters.length === 0 && selectedCount === 0 && <tr><td colSpan={11} className="empty-table">Search for a ticket to dispose or use Advanced Search.</td></tr>}
             {(query.trim() || advancedFilters.length > 0) && loading && <tr><td colSpan={11} className="empty-table">Searching…</td></tr>}
-            {(query.trim() || advancedFilters.length > 0) && !loading && filteredItems.length === 0 && selectedCount === 0 && <tr><td colSpan={11} className="empty-table">No problem samples match your search.</td></tr>}
+            {(query.trim() || advancedFilters.length > 0) && !loading && filteredItems.length === 0 && selectedCount === 0 && <tr><td colSpan={11} className="empty-table">No tickets match your search.</td></tr>}
             {!loading && visibleItems.map(item => {
               const alreadyDisposed = item.workflow_status === 'Disposed';
               const blockedByContainer = Boolean(item.container_disposed) && !alreadyDisposed;
@@ -256,7 +256,7 @@ export default function DisposeSamplesPage() {
                   <input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={disabled} />
                 </td>
                 <td>
-                  <Link className="table-link" href={`/problems/${item.id}`}>Problem #{item.problem_number}</Link>
+                  <Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link>
                   {selected.has(item.id) && !filteredItems.some(result => result.id === item.id) && <div className="muted result-meta">Selected — kept visible</div>}
                 </td>
                 <td>{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</td>

@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, PROBLEM_STATUS_AUTOMATICALLY_DISPOSED, PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, PROBLEM_STATUS_DEFAULT, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
 
 
 class ProblemColumnSerializer(serializers.ModelSerializer):
@@ -26,7 +26,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
             'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
-            'client_email_dependencies', 'client_email_dependency_details', 'position', 'is_system',
+            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'position', 'is_system',
             'created_at', 'modified_at',
         ]
         read_only_fields = ['field_key', 'is_system', 'group_users', 'depends_on_column_name', 'depends_on_field_key', 'client_email_dependency_details', 'created_at', 'modified_at']
@@ -71,7 +71,11 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         proposed_name = attrs.get('name', getattr(self.instance, 'name', ''))
         reserved = slugify(proposed_name)
         if reserved == 'problem-id':
-            raise serializers.ValidationError({'name': 'Problem ID is reserved as a built-in column.'})
+            raise serializers.ValidationError({'name': 'Ticket ID is reserved as a built-in column.'})
+        if reserved in {'current-workflow'}:
+            raise serializers.ValidationError({'name': 'Current Workflow is reserved as a built-in column.'})
+        if reserved in {'dispose-automatically'}:
+            raise serializers.ValidationError({'name': 'Dispose Automatically is reserved as a built-in column.'})
         if reserved in {
             'days-until-up-for-disposal',
             'days-until-automatic-disposal',
@@ -83,6 +87,15 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         if reserved in {'tracking-link-expiry', 'system-tracking-link-expiry'}:
             raise serializers.ValidationError({'name': 'Tracking Link Expiry is reserved as a built-in column.'})
         column_type = attrs.get('column_type', getattr(self.instance, 'column_type', ProblemColumn.TYPE_TEXT))
+        if self.instance and column_type != self.instance.column_type:
+            referenced_by = []
+            for controller in self.instance.table.columns.filter(column_type=ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER).exclude(pk=self.instance.pk):
+                if any(str(rule.get('other_column_id') or '') == str(self.instance.pk) for rule in (controller.intercolumn_rules or [])):
+                    referenced_by.append(controller.name)
+            if referenced_by:
+                raise serializers.ValidationError({
+                    'column_type': f'Remove the Intercolumn Value Controller rule(s) in {", ".join(referenced_by)} before changing this field type.'
+                })
         group_role = attrs.get('group_role', getattr(self.instance, 'group_role', ''))
         table = attrs.get('table', getattr(self.instance, 'table', None))
         depends_on_column = attrs.get('depends_on_column', getattr(self.instance, 'depends_on_column', None))
@@ -134,6 +147,86 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             attrs['depends_on_column'] = None
             dependency_columns = []
             depends_on_column = None
+
+        rules = attrs.get(
+            'intercolumn_rules',
+            getattr(self.instance, 'intercolumn_rules', []) if self.instance else [],
+        ) or []
+        if column_type == ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER:
+            if not isinstance(rules, list):
+                raise serializers.ValidationError({'intercolumn_rules': 'Rules must be a list.'})
+            if not table:
+                raise serializers.ValidationError({'intercolumn_rules': 'Choose a table before configuring rules.'})
+            eligible_types = {
+                ProblemColumn.TYPE_TEXT, ProblemColumn.TYPE_LONG_TEXT, ProblemColumn.TYPE_NUMBER,
+                ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATETIME,
+                ProblemColumn.TYPE_TIME, ProblemColumn.TYPE_BOOLEAN, ProblemColumn.TYPE_EMAIL,
+                ProblemColumn.TYPE_URL, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
+            }
+            editable_system_keys = {'status', SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+            cleaned_rules = []
+            for index, raw_rule in enumerate(rules, start=1):
+                if not isinstance(raw_rule, dict):
+                    raise serializers.ValidationError({'intercolumn_rules': f'Rule {index} must be an object.'})
+                other_id = str(raw_rule.get('other_column_id') or '').strip()
+                try:
+                    other = table.columns.filter(pk=other_id).first() if other_id else None
+                except (DjangoValidationError, ValueError):
+                    other = None
+                if not other:
+                    raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: choose another field.'})
+                if self.instance and other.pk == self.instance.pk:
+                    raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: a controller cannot reference itself as the other field.'})
+                if other.is_system and other.field_key not in editable_system_keys:
+                    raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: {other.name} is read-only and cannot be controlled.'})
+                if not other.is_system and other.column_type not in eligible_types:
+                    raise serializers.ValidationError({
+                        'intercolumn_rules': f'Rule {index}: {other.name} is not a supported single-value field for intercolumn rules.'
+                    })
+                direction = str(raw_rule.get('direction') or '').strip()
+                if direction not in INTERCOLUMN_RULE_DIRECTIONS:
+                    raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: choose a valid direction.'})
+
+                cleaned = {'other_column_id': other_id, 'direction': direction}
+                if direction in {INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_BOTH}:
+                    trigger = raw_rule.get('when_other_equals')
+                    result = raw_rule.get('set_controller_to')
+                    if _is_empty(trigger):
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: enter the other-field trigger value.'})
+                    if _is_empty(result):
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: enter the controller value to assign.'})
+                    try:
+                        cleaned['when_other_equals'] = _validate_custom_value(other, trigger)
+                    except serializers.ValidationError as exc:
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: invalid trigger for {other.name}: {exc.detail}'})
+                    if not isinstance(result, str):
+                        result = str(result)
+                    cleaned['set_controller_to'] = result
+                else:
+                    cleaned['when_other_equals'] = None
+                    cleaned['set_controller_to'] = None
+
+                if direction in {INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH}:
+                    trigger = raw_rule.get('when_controller_equals')
+                    result = raw_rule.get('set_other_to')
+                    if _is_empty(trigger):
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: enter the controller trigger value.'})
+                    if _is_empty(result):
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: enter the value to assign to {other.name}.'})
+                    if not isinstance(trigger, str):
+                        trigger = str(trigger)
+                    cleaned['when_controller_equals'] = trigger
+                    try:
+                        cleaned['set_other_to'] = _validate_custom_value(other, result)
+                    except serializers.ValidationError as exc:
+                        raise serializers.ValidationError({'intercolumn_rules': f'Rule {index}: invalid assigned value for {other.name}: {exc.detail}'})
+                else:
+                    cleaned['when_controller_equals'] = None
+                    cleaned['set_other_to'] = None
+                cleaned_rules.append(cleaned)
+            attrs['intercolumn_rules'] = cleaned_rules
+        else:
+            attrs['intercolumn_rules'] = []
 
         if column_type == ProblemColumn.TYPE_GROUP:
             if group_role not in {ProblemColumn.GROUP_LAB_TECHNICIAN, ProblemColumn.GROUP_CUSTOMER_SERVICE}:
@@ -279,7 +372,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
 class HistorySerializer(serializers.ModelSerializer):
     actor_email = serializers.EmailField(source='actor.email', read_only=True)
     actor_name = serializers.SerializerMethodField()
-    action_label = serializers.CharField(source='get_action_display', read_only=True)
+    action_label = serializers.SerializerMethodField()
     summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -287,15 +380,27 @@ class HistorySerializer(serializers.ModelSerializer):
         fields = ['id', 'action', 'action_label', 'summary', 'details', 'actor_email', 'actor_name', 'created_at']
 
     def get_summary(self, obj):
+        if obj.action == ProblemHistory.ACTION_CREATED:
+            return 'Created ticket'
         if obj.action == ProblemHistory.ACTION_CUSTOMER_NOTIFICATION:
-            return 'Sent an email to the customer'
+            # Preserve the event-specific wording stored when the email was
+            # confirmed. In particular, the first notification records that
+            # the tracking link was sent to the customer.
+            return (obj.summary or 'Sent an email to the customer').replace('problem sample', 'ticket').replace('Problem Sample', 'Ticket')
         if obj.action == ProblemHistory.ACTION_ACKNOWLEDGED:
-            return 'Customer acknowledged problem sample'
+            return 'Customer acknowledged ticket'
         return obj.summary
+
+    def get_action_label(self, obj):
+        if obj.action == ProblemHistory.ACTION_ACKNOWLEDGED:
+            return 'Customer acknowledged ticket'
+        return obj.get_action_display()
 
     def get_actor_name(self, obj):
         if not obj.actor:
             details = obj.details or {}
+            if details.get('automatic'):
+                return 'System'
             if (
                 obj.action == ProblemHistory.ACTION_ACKNOWLEDGED
                 or details.get('acknowledged_via') == 'public_verification_link'
@@ -358,18 +463,10 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
         return bool(samples) and all(sample.expiration_status == 'expired' for sample in samples)
 
     def _sample_ready_for_disposal(self, sample):
-        return sample.is_disposal_eligible
-
-    def _disposal_samples(self, obj):
-        # Samples already shipped back or individually disposed are no longer
-        # part of the physical container disposal workload.
-        return [
-            sample for sample in self._samples(obj)
-            if sample.workflow_status not in {PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED}
-        ]
+        return sample.workflow_status in {PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED}
 
     def get_ready_to_dispose(self, obj):
-        samples = self._disposal_samples(obj)
+        samples = self._samples(obj)
         return bool(samples) and all(self._sample_ready_for_disposal(sample) for sample in samples)
 
     def get_status(self, obj):
@@ -378,9 +475,7 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
         all_samples = self._samples(obj)
         if not all_samples:
             return 'empty'
-        samples = self._disposal_samples(obj)
-        if not samples:
-            return 'active'
+        samples = all_samples
         if all(self._sample_ready_for_disposal(sample) for sample in samples):
             return 'ready_to_dispose'
         if any(self._sample_ready_for_disposal(sample) for sample in samples):
@@ -405,6 +500,7 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
                 'expires_at': expires_at,
                 'expiration_status': sample.expiration_status,
                 'status': str((sample.custom_values or {}).get('status') or sample.status or ''),
+                'current_workflow': sample.workflow_status,
                 'ready_for_disposal': self._sample_ready_for_disposal(sample),
                 'days_until_expiration': days_remaining,
             })
@@ -450,7 +546,7 @@ def _validate_custom_value(column, value):
         return value
 
     kind = column.column_type
-    if kind in {ProblemColumn.TYPE_TEXT, ProblemColumn.TYPE_LONG_TEXT, ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER}:
+    if kind in {ProblemColumn.TYPE_TEXT, ProblemColumn.TYPE_LONG_TEXT, ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER}:
         if not isinstance(value, str):
             raise serializers.ValidationError('Must be text.')
         return value
@@ -591,7 +687,7 @@ class ShippingProblemSampleSerializer(serializers.ModelSerializer):
             'id', 'problem_number', 'table', 'table_name', 'container_id', 'workflow_status',
             'brand', 'distributor', 'end_user', 'als_tracking_number', 'courier',
             'courier_tracking_number', 'custom_values', 'pt_days', 'customer_notified_at',
-            'days_until_automatic_disposal', 'tracking_url', 'tracking_link_expiry', 'container_disposed', 'created_at', 'modified_at',
+            'days_until_automatic_disposal', 'tracking_url', 'tracking_link_expiry', 'back_to_testing_notified_at', 'container_disposed', 'created_at', 'modified_at',
         ]
         read_only_fields = fields
 
@@ -630,6 +726,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     expiration_status = serializers.SerializerMethodField()
     days_until_expiration = serializers.SerializerMethodField()
     days_until_automatic_disposal = serializers.SerializerMethodField()
+    acknowledgement_token = serializers.SerializerMethodField()
     acknowledgement_url = serializers.SerializerMethodField()
     tracking_url = serializers.SerializerMethodField()
     tracking_link_expiry = serializers.SerializerMethodField()
@@ -637,13 +734,16 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemSample
         fields = '__all__'
-        read_only_fields = ['problem_number', 'container', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'created_by', 'modified_by', 'created_at', 'modified_at']
+        read_only_fields = ['problem_number', 'container', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'created_at', 'modified_at']
 
     def get_expires_at(self, obj):
         return obj.expires_at
 
     def get_expiration_status(self, obj):
         return obj.expiration_status
+
+    def get_acknowledgement_token(self, obj):
+        return obj.acknowledgement_token
 
     def get_acknowledgement_url(self, obj):
         if not obj.acknowledgement_token:
@@ -670,28 +770,31 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         instance = self.instance
         container_code = attrs.pop('container_code', None)
         if instance is None:
-            container = ProblemContainer.resolve_identifier(container_code)
-            if not container:
-                raise serializers.ValidationError({
-                    'container_code': 'Enter a valid Container ID or create a new container before saving the problem sample.'
-                })
-            if container.disposed_at:
-                raise serializers.ValidationError({'container_code': 'A problem sample cannot be assigned to a disposed container. Undo that container disposal first.'})
-            attrs['container'] = container
+            if container_code:
+                container = ProblemContainer.resolve_identifier(container_code)
+                if not container:
+                    raise serializers.ValidationError({'container_code': 'Container not found.'})
+                if container.disposed_at:
+                    raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
+                attrs['container'] = container
         elif container_code:
             container = ProblemContainer.resolve_identifier(container_code)
             if not container:
                 raise serializers.ValidationError({'container_code': 'Container not found.'})
             if instance.container_id and instance.container_id != container.pk:
                 if instance.container and instance.container.disposed_at:
-                    raise serializers.ValidationError({'container_code': 'A problem sample cannot be moved out of a disposed container. Undo that container disposal first.'})
+                    raise serializers.ValidationError({'container_code': 'A ticket cannot be moved out of a disposed container. Undo that container disposal first.'})
                 if container.disposed_at:
-                    raise serializers.ValidationError({'container_code': 'A problem sample cannot be moved into a disposed container. Undo that container disposal first.'})
+                    raise serializers.ValidationError({'container_code': 'A ticket cannot be moved into a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
             elif not instance.container_id:
                 if container.disposed_at:
-                    raise serializers.ValidationError({'container_code': 'A problem sample cannot be assigned to a disposed container. Undo that container disposal first.'})
+                    raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
+        elif instance is not None and container_code == '' and instance.container_id:
+            if instance.container and instance.container.disposed_at:
+                raise serializers.ValidationError({'container_code': 'Undo container disposal before removing a ticket from it.'})
+            attrs['container'] = None
         table = attrs.get('table') or (instance.table if instance else None)
         if instance and 'table' in attrs and attrs['table'] != instance.table:
             raise serializers.ValidationError({'table': 'Move between tables is not supported. Create a new row in the target table instead.'})
@@ -701,7 +804,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 attrs['table'] = table
 
         if not table:
-            raise serializers.ValidationError({'table': 'A problem sample table is required.'})
+            raise serializers.ValidationError({'table': 'A ticket table is required.'})
 
         incoming = attrs.get('custom_values', None)
         if incoming is None:
@@ -714,12 +817,18 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
         columns = {
             c.field_key: c for c in table.columns.all()
-            if not c.is_system or c.field_key == 'status'
+            if not c.is_system or c.field_key in {'status', SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
         }
-        # Problem ID is always server-generated. Status is the one built-in row field users can change.
+        # Ticket ID is always server-generated. Status is descriptive; Current
+        # Workflow and Dispose Automatically are the built-in routing controls.
         merged.pop('problem-id', None)
+        status_column = columns.get('status')
         if _is_empty(merged.get('status')):
-            merged['status'] = PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL
+            merged['status'] = (status_column.default_value if status_column else PROBLEM_STATUS_DEFAULT) or PROBLEM_STATUS_DEFAULT
+        if _is_empty(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY)):
+            merged[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = (instance.workflow_status if instance else CURRENT_WORKFLOW_DEFAULT)
+        if _is_empty(merged.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY)):
+            merged[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
 
         # Fixed Value columns are controlled by the column definition, never by
         # an individual row. Re-apply them on both create and update so clients
@@ -808,11 +917,30 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             except serializers.ValidationError as exc:
                 errors[key] = exc.detail
 
+        if not errors:
+            try:
+                merged, _ = apply_intercolumn_rules_to_values(table, merged)
+            except DjangoValidationError as exc:
+                errors['intercolumn_rules'] = '; '.join(exc.messages) if hasattr(exc, 'messages') else str(exc)
+
         status_value = str(merged.get('status') or '').strip()
         allowed_statuses = table.status_choices()
         if status_value not in allowed_statuses:
             errors['status'] = 'Choose a valid status for this table.'
 
+        workflow_value = str(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
+        if workflow_value not in CURRENT_WORKFLOW_CHOICES:
+            errors[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = 'Choose a valid Current Workflow.'
+
+        # Routed/terminal workflows always stop automatic disposal. This keeps
+        # disposal/shipping/testing actions authoritative even if a stale client
+        # submits Dispose Automatically = Yes in the same request.
+        if workflow_value in TERMINAL_PROBLEM_STATUSES:
+            merged[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
+        if workflow_value in {PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_BACK_TO_TESTING}:
+            if instance and instance.container_id and instance.container and instance.container.disposed_at:
+                raise serializers.ValidationError({'container_code': 'Undo container disposal before moving this ticket out of it.'})
+            attrs['container'] = None
 
         for key, column in columns.items():
             if column.required and _is_empty(merged.get(key)):
@@ -823,13 +951,18 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
         attrs['custom_values'] = merged
         attrs['status'] = status_value
+        attrs['current_workflow'] = workflow_value
         return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
         values = dict(data.get('custom_values') or {})
         values['problem-id'] = instance.problem_number
-        values['status'] = str(values.get('status') or instance.status or PROBLEM_STATUS_HALTED_AUTOMATIC_DISPOSAL)
+        status_column = instance.table.columns.filter(field_key='status').first() if instance.table_id else None
+        status_default = (status_column.default_value if status_column else PROBLEM_STATUS_DEFAULT) or PROBLEM_STATUS_DEFAULT
+        values['status'] = str(values.get('status') or instance.status or status_default)
+        values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = instance.workflow_status
+        values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = str(values.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY) or DISPOSE_AUTOMATICALLY_NO)
         if instance.table_id:
             for column in instance.table.columns.all():
                 if column.column_type == ProblemColumn.TYPE_FIXED:

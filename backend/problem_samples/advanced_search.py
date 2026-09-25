@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 
 from rest_framework.exceptions import ValidationError
 
-from .models import ProblemColumn, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from .models import ProblemColumn, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
 from .search import score_record
 
 
@@ -18,6 +18,7 @@ TEXT_TYPES = {
     ProblemColumn.TYPE_ROW_CREATOR,
     ProblemColumn.TYPE_RECENT_ROW_MODIFIER,
     ProblemColumn.TYPE_BRAND,
+    ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
 }
 NUMBER_TYPES = {ProblemColumn.TYPE_NUMBER}
 DATE_TYPES = {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATETIME, ProblemColumn.TYPE_TIME}
@@ -46,6 +47,7 @@ ALLOWED_OPERATORS = {
     'row_creator': {'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', *EMPTY_OPERATORS},
     'recent_row_modifier': {'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', *EMPTY_OPERATORS},
     'brand': {'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', *EMPTY_OPERATORS},
+    'intercolumn_controller': {'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', *EMPTY_OPERATORS},
 }
 
 
@@ -56,6 +58,8 @@ def _empty(value):
 def _value_for(problem, column):
     if column.field_key == 'problem-id':
         return problem.problem_number
+    if column.field_key == SYSTEM_CURRENT_WORKFLOW_FIELD_KEY:
+        return problem.workflow_status
     if column.field_key == SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY:
         return problem.days_until_automatic_disposal
     if column.field_key == SYSTEM_TRACKING_LINK_FIELD_KEY:

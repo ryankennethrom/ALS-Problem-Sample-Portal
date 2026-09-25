@@ -16,6 +16,7 @@ type ContainerSample = {
   expires_at: string | null;
   expiration_status: 'active' | 'expired';
   status: string;
+  current_workflow: string;
   ready_for_disposal: boolean;
   days_until_expiration: number | null;
 };
@@ -90,7 +91,7 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
   }
 
   async function disposeContainer(container: ProblemContainer) {
-    if (!confirm(`Dispose ${container.container_id}? Disposal-eligible samples will be changed to Status = Disposed. Samples already Disposed or Shipped back to client will be ignored and keep their status.`)) return;
+    if (!confirm(`Dispose ${container.container_id}? Tickets marked To be Disposed will change to Disposed. Tickets already Disposed will stay Disposed.`)) return;
     const reason = await requestChangeReason(`Why are you disposing ${container.container_id}?`);
     if (reason === null) return;
     setDisposingId(container.id); setError('');
@@ -102,7 +103,7 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
   }
 
   async function undoContainerDisposal(container: ProblemContainer) {
-    if (!confirm(`Undo disposal of ${container.container_id}? The samples will be restored to the statuses they had immediately before the container was disposed.`)) return;
+    if (!confirm(`Undo disposal of ${container.container_id}? The samples will be restored to the Current Workflow values they had immediately before the container was disposed.`)) return;
     const reason = await requestChangeReason(`Why are you undoing disposal of ${container.container_id}?`);
     if (reason === null) return;
     setUndoingId(container.id); setError('');
@@ -135,7 +136,7 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
 
   return <div>
     <div className="page-toolbar">
-      <div><div className="eyebrow">Disposal</div><h1 className="page-heading" style={{marginBottom:2}}>{readyOnly ? 'Ready to Dispose' : recentlyDisposed ? 'Recently Disposed' : 'Dispose Containers'}</h1><div className="muted table-description">{readyOnly ? 'Only containers that can be disposed now are shown here. Samples already Disposed or Shipped back to client are ignored. Every remaining sample must either be To be Disposed, or be Automatically Disposed and past its problem sample expiration period.' : recentlyDisposed ? 'Disposed containers are shown newest first. Use Undo Disposal if a container was disposed by mistake.' : 'A container is ready to dispose when, ignoring samples already Disposed or Shipped back to client, every remaining sample is either To be Disposed or is Automatically Disposed and past its problem sample expiration period. Halted Automatic Disposal, To be shipped back to client, To be back to testing, and Back to testing block disposal. Disposing a container changes only the remaining disposal samples to Disposed; samples already Disposed or Shipped back to client keep their status.'}</div></div>
+      <div><div className="eyebrow">Disposal</div><h1 className="page-heading" style={{marginBottom:2}}>{readyOnly ? 'Ready to Dispose' : recentlyDisposed ? 'Recently Disposed' : 'Dispose Containers'}</h1><div className="muted table-description">{readyOnly ? 'Only containers with attached tickets all marked To be Disposed or Disposed appear here. Empty containers are not ready.' : recentlyDisposed ? 'Disposed containers are shown newest first. Use Undo Disposal if a container was disposed by mistake.' : 'A container is ready only when every attached ticket has Current Workflow = To be Disposed or Disposed. Empty containers are not ready. Shipping back or moving a ticket Back to testing removes it from its container; pending shipping or testing tickets still attached block disposal.'}</div></div>
       {mode === 'all' && <div className="toolbar-actions"><button className="button" type="button" onClick={createContainer} disabled={creating}>{creating ? 'Creating…' : '+ Create Container'}</button></div>}
     </div>
 
@@ -145,7 +146,7 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
       <Link href="/disposal/containers/all" className={`container-view-tab ${mode === 'all' ? 'active' : ''}`}>All Containers</Link>
     </nav>
 
-    {createdId && <div className="container-created-banner"><div><strong>New Container ID</strong><div className="container-created-id">{createdId}</div></div><div className="muted">Label the physical container with this ID. It can now be selected when creating a problem sample.</div></div>}
+    {createdId && <div className="container-created-banner"><div><strong>New Container ID</strong><div className="container-created-id">{createdId}</div></div><div className="muted">Label the physical container with this ID. It can now be selected when creating a ticket.</div></div>}
     {error && <div className="card error" style={{marginBottom:14}}>{error}</div>}
 
     <div className="container-summary-grid">
@@ -168,11 +169,11 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
             <div className="container-counts"><span>{container.sample_count} sample{container.sample_count === 1 ? '' : 's'}</span><span>{container.expired_count} expired</span><span>{container.active_count} active</span><span>{container.unnotified_count} not notified</span></div>
             {container.samples.length > 0 && <div className="container-sample-list">
               {container.samples.map(sample => <div className="container-sample-row" key={sample.id}>
-                <div><Link className="table-link" href={`/problems/${sample.id}`}>Problem #{sample.problem_number}</Link><div className="muted result-meta">{sample.table_name || 'Unknown table'} · Expiration {sample.pt_days == null ? '—' : sample.pt_days === 0 ? 'Immediate' : `${sample.pt_days} day${sample.pt_days === 1 ? '' : 's'}`} </div></div>
-                <div className="container-sample-expiration"><div><span className={`badge ${sample.ready_for_disposal ? 'expiration-expired' : 'expiration-active'}`}>{sample.status || 'No status'}</span></div>{sampleStatus(sample)}{sample.expires_at && <div className="muted result-meta">Expires {new Date(sample.expires_at).toLocaleString()}</div>}</div>
+                <div><Link className="table-link" href={`/problems/${sample.id}`}>Ticket #{sample.problem_number}</Link><div className="muted result-meta">{sample.table_name || 'Unknown table'} · Expiration {sample.pt_days == null ? '—' : sample.pt_days === 0 ? 'Immediate' : `${sample.pt_days} day${sample.pt_days === 1 ? '' : 's'}`} </div></div>
+                <div className="container-sample-expiration"><div><span className={`badge ${sample.ready_for_disposal ? 'expiration-expired' : 'expiration-active'}`}>{sample.current_workflow || 'CS Follow-Up'}</span></div>{sampleStatus(sample)}{sample.expires_at && <div className="muted result-meta">Expires {new Date(sample.expires_at).toLocaleString()}</div>}</div>
               </div>)}
             </div>}
-            {container.samples.length === 0 && <div className="muted container-empty-copy">No problem samples are assigned to this container yet.</div>}
+            {container.samples.length === 0 && <div className="muted container-empty-copy">No tickets are assigned to this container yet.</div>}
           </article>)}
         </div>
       </div>

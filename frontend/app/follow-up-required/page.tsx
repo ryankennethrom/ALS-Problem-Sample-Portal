@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import AdvancedSearch, { AdvancedFilter, MatchMode } from '@/components/AdvancedSearch';
 import ColumnInfo from '@/components/ColumnInfo';
+import { useCurrentUser } from '@/components/CurrentUserContext';
 import { displayProblemValue, ProblemTable, systemColumnHint } from '@/lib/problemTables';
 
 type FollowUpSample = {
@@ -48,7 +50,7 @@ function formatAge(createdAt: string, nowMs: number) {
 
 
 function automaticDisposalRowClass(item: FollowUpSample) {
-  if (item.workflow_status !== 'Automatically Disposed') return '';
+  if (String(item.custom_values?.['dispose-automatically'] || 'No').toLowerCase() !== 'yes') return '';
   const days = item.days_until_automatic_disposal;
   if (days == null) return '';
 
@@ -75,7 +77,10 @@ function formatCreatedAt(createdAt: string) {
   });
 }
 
-export default function FollowUpRequiredPage() {
+function FollowUpContent() {
+  const currentUser = useCurrentUser();
+  const pathname = usePathname();
+  const trackingNotSent = pathname === '/follow-up-required/tracking-not-sent';
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [tableId, setTableId] = useState('');
   const [items, setItems] = useState<FollowUpSample[]>([]);
@@ -94,11 +99,12 @@ export default function FollowUpRequiredPage() {
         if (!active) return;
         const rows: ProblemTable[] = Array.isArray(data) ? data : (data.results || []);
         setTables(rows);
-        setTableId((rows.find(table => table.is_default) || rows[0])?.id || '');
+        const firstTableId = (rows.find(table => table.is_default) || rows[0])?.id || '';
+        setTableId(firstTableId);
       })
       .catch(error => {
         if (!active) return;
-        setError(error instanceof Error ? error.message : 'Failed to load problem sample tables.');
+        setError(error instanceof Error ? error.message : 'Failed to load ticket tables.');
       })
       .finally(() => { if (active) setTablesLoading(false); });
     return () => { active = false; };
@@ -126,6 +132,7 @@ export default function FollowUpRequiredPage() {
             method: 'POST',
             body: JSON.stringify({
               table: tableId,
+              tracking_not_sent: trackingNotSent ? '1' : '',
               q: query.trim(),
               filters: activeAdvanced?.filters || [],
               match: activeAdvanced?.match || 'all',
@@ -134,7 +141,7 @@ export default function FollowUpRequiredPage() {
           });
         } else {
           const suffix = query.trim() ? `&q=${encodeURIComponent(query.trim())}` : '';
-          data = await api(`/problem-samples/follow-up-required/?table=${encodeURIComponent(tableId)}${suffix}`);
+          data = await api(`/problem-samples/follow-up-required/?table=${encodeURIComponent(tableId)}${trackingNotSent ? '&tracking_not_sent=1' : ''}${suffix}`);
         }
         setItems(Array.isArray(data) ? data : (data.results || []));
       } catch (error) {
@@ -145,7 +152,7 @@ export default function FollowUpRequiredPage() {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [tableId, query, advanced, quickFiltersByTable]);
+  }, [tableId, query, advanced, quickFiltersByTable, trackingNotSent]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 60000);
@@ -158,7 +165,8 @@ export default function FollowUpRequiredPage() {
     () => selectedTable?.columns.filter(column => column.column_type === 'choice' && column.choices.length > 0) || [],
     [selectedTable],
   );
-  const currentQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;
+  const savedQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;
+  const currentQuickFilters = savedQuickFilters;
   const activeQuickFilterCount = Object.values(currentQuickFilters).filter(Boolean).length;
   // The oldest card follows the exact currently displayed result set,
   // including basic search, Quick Filters, and Advanced Search.
@@ -188,20 +196,25 @@ export default function FollowUpRequiredPage() {
   return <div>
     <div className="page-toolbar">
       <div>
-        <div className="eyebrow">Problem Samples</div>
-        <h1 className="page-heading" style={{marginBottom: 2}}>Follow-Up Required</h1>
+        <div className="eyebrow">Tickets</div>
+        <h1 className="page-heading" style={{marginBottom: 2}}>CS Follow-Up</h1>
         <div className="muted table-description">
-          Problem samples under this workflow must be put for disposal, shipping, or back to testing.
+          {trackingNotSent ? 'Tickets in an open workflow without a tracking link, ordered oldest first.' : 'Tickets in CS Follow-Up or Waiting For Customer, ordered oldest first.'}
         </div>
       </div>
     </div>
+
+    <nav className="container-view-tabs" aria-label="CS Follow-Up views">
+      <Link className={`container-view-tab ${trackingNotSent ? 'active' : ''}`} aria-current={trackingNotSent ? 'page' : undefined} href="/follow-up-required/tracking-not-sent">Tracking Not Sent</Link>
+      <Link className="container-view-tab" href="/follow-up-required/customer-responded">New Customer Response</Link>
+    </nav>
 
     {error && <div className="card error" style={{marginBottom: 14}}>{error}</div>}
 
     <section className="panel panel-blue search-panel" style={{marginBottom: 18}}>
       <div className="search-grid table-search-grid advanced-search-grid followup-table-search-grid">
         <div className="field">
-          <label htmlFor="follow-up-table">Problem sample table</label>
+          <label htmlFor="follow-up-table">Ticket table</label>
           <select
             id="follow-up-table"
             className="select"
@@ -272,30 +285,30 @@ export default function FollowUpRequiredPage() {
         textAlign: 'center',
       }}
     >
-      <div className="eyebrow" style={{marginBottom: 6}}>Oldest problem sample requiring follow up</div>
+      <div className="eyebrow" style={{marginBottom: 6}}>{trackingNotSent ? 'Oldest ticket without a tracking link' : 'Oldest ticket requiring follow up'}</div>
       <div style={{fontSize: 'clamp(2.4rem, 6vw, 4.5rem)', fontWeight: 800, lineHeight: 1}}>
         {formatAge(oldest.created_at, nowMs)}
       </div>
       <div className="muted" style={{marginTop: 9, fontSize: '0.95rem'}}>
-        Problem #{oldest.problem_number} · {selectedTable?.name || oldest.table_name || 'Problem sample table'} · Created {formatCreatedAt(oldest.created_at)}
+        Ticket #{oldest.problem_number} · {selectedTable?.name || oldest.table_name || 'Ticket table'} · Created {formatCreatedAt(oldest.created_at)}
       </div>
     </section>}
 
     {!tablesLoading && selectedTable && !loading && !oldest && !error && <section className="card" style={{marginBottom: 18, padding: '20px 24px', textAlign: 'center'}}>
-      <div className="eyebrow" style={{marginBottom: 5}}>Oldest problem sample requiring follow up</div>
-      <div style={{fontSize: '1.5rem', fontWeight: 700}}>No follow-up required</div>
+      <div className="eyebrow" style={{marginBottom: 5}}>{trackingNotSent ? 'Oldest ticket without a tracking link' : 'Oldest ticket requiring follow up'}</div>
+      <div style={{fontSize: '1.5rem', fontWeight: 700}}>{trackingNotSent ? 'No tracking links to send' : 'No CS follow-up'}</div>
     </section>}
 
     {selectedTable && <section className="panel data-grid-panel">
       <div className="panel-header">
         <strong>{selectedTable.name}</strong>
-        <span className="muted" style={{marginLeft: 8}}>({items.length} sample{items.length === 1 ? '' : 's'} requiring follow-up)</span>
+        <span className="muted" style={{marginLeft: 8}}>({items.length} {trackingNotSent ? 'ticket' : 'sample'}{items.length === 1 ? '' : 's'} {trackingNotSent ? 'without a tracking link' : 'requiring follow-up'})</span>
         {loading && <span className="muted" style={{marginLeft: 'auto'}}>Searching…</span>}
       </div>
       <div className="data-table-wrap">
         <table className="data-table">
           <thead><tr>
-            <th className="row-action-column" aria-label="Open row"></th>
+            <th className="row-action-column" aria-label="Open ticket"></th>
             <th>Date Created<div className="column-type-hint">Built-in</div></th>
             {selectedTable.columns.map(column => <th key={column.id}>
               <div className="table-column-heading"><span>{column.name}</span><ColumnInfo text={column.description} label={column.name} /></div>
@@ -303,15 +316,15 @@ export default function FollowUpRequiredPage() {
             </th>)}
           </tr></thead>
           <tbody>
-            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">No problem samples currently require follow-up in this table.</td></tr>}
+            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">{trackingNotSent ? 'No tickets without a tracking link in an open workflow in this table.' : 'No tickets currently require follow-up in this table.'}</td></tr>}
             {loading && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">Loading samples…</td></tr>}
             {!loading && items.map(item => <tr key={item.id} className={automaticDisposalRowClass(item)}>
-              <td className="row-action-column"><Link className="row-open-link" href={`/problems/${item.id}`} title="Open row">›</Link></td>
+              <td className="row-action-column"><Link className="row-open-link" href={`/problems/${item.id}`} title="Open ticket">›</Link></td>
               <td>{formatCreatedAt(item.created_at) || '—'}</td>
               {selectedTable.columns.map(column => <td key={column.id}>
                 {column.field_key === 'problem-id'
-                  ? <Link className="table-link" href={`/problems/${item.id}`}>Problem #{item.problem_number}</Link>
-                  : column.field_key === 'status'
+                  ? <Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link>
+                  : ['status', 'current-workflow'].includes(column.field_key)
                     ? <span className="badge">{displayProblemValue(column, item)}</span>
                     : column.field_key === 'system-tracking-link' && item.tracking_url
                       ? <a className="table-link" href={item.tracking_url} target="_blank" rel="noreferrer">Open tracking link</a>
@@ -324,7 +337,12 @@ export default function FollowUpRequiredPage() {
     </section>}
 
     {!tablesLoading && tables.length === 0 && !error && <section className="card" style={{padding: 20}}>
-      No problem sample tables exist yet. <Link className="table-link" href="/tables">Manage Tables</Link>
+      No ticket tables exist yet. {currentUser?.is_admin && <Link className="table-link" href="/tables">Manage Tables</Link>}
     </section>}
   </div>;
+}
+
+
+export default function FollowUpRequiredPage() {
+  return <Suspense fallback={<div className="muted">Loading CS Follow-Up...</div>}><FollowUpContent /></Suspense>;
 }

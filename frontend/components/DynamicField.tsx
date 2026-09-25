@@ -59,7 +59,7 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
       label: dependency.name,
       value: allValues[dependency.field_key],
     }));
-    return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><ClientEmailAutocomplete
+    return <div className="field client-email-field"><ColumnFieldLabel column={column} htmlFor={id}/><ClientEmailAutocomplete
       id={id}
       required={column.required}
       value={value}

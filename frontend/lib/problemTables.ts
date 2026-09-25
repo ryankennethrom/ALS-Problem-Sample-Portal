@@ -17,7 +17,8 @@ export type ColumnType =
   | 'client_email'
   | 'row_creator'
   | 'recent_row_modifier'
-  | 'brand';
+  | 'brand'
+  | 'intercolumn_controller';
 
 export type GroupRole = 'lab_technician' | 'customer_service';
 
@@ -27,6 +28,18 @@ export type GroupUser = {
   name: string;
   role: GroupRole;
   role_label: string;
+};
+
+
+export type IntercolumnRuleDirection = 'other_to_controller' | 'controller_to_other' | 'both';
+
+export type IntercolumnRule = {
+  other_column_id: string;
+  direction: IntercolumnRuleDirection;
+  when_other_equals: unknown;
+  set_controller_to: string | null;
+  when_controller_equals: string | null;
+  set_other_to: unknown;
 };
 
 export type ClientEmailDependency = {
@@ -57,6 +70,7 @@ export type ProblemColumn = {
   depends_on_field_key: string;
   client_email_dependencies: string[];
   client_email_dependency_details: ClientEmailDependency[];
+  intercolumn_rules: IntercolumnRule[];
   position: number;
   is_system: boolean;
 };
@@ -94,6 +108,7 @@ export const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'client_email', label: 'Client Email' },
   { value: 'row_creator', label: 'Row Creator' },
   { value: 'recent_row_modifier', label: 'Recent Row Modifier' },
+  { value: 'intercolumn_controller', label: 'Intercolumn Value Controller' },
 ];
 
 export function initialValue(column: ProblemColumn): unknown {
@@ -125,6 +140,56 @@ export function systemColumnHint(column: ProblemColumn): string {
   return 'Built-in';
 }
 
+
+function intercolumnValuesEqual(column: ProblemColumn | undefined, left: unknown, right: unknown): boolean {
+  if (column?.column_type === 'number') {
+    const a = typeof left === 'number' ? left : Number(left);
+    const b = typeof right === 'number' ? right : Number(right);
+    return Number.isFinite(a) && Number.isFinite(b) && a === b;
+  }
+  if (column?.column_type === 'boolean') return left === right;
+  return left === right || String(left ?? '') === String(right ?? '');
+}
+
+export function applyIntercolumnRules(table: ProblemTable, values: CustomValues): CustomValues {
+  const working: CustomValues = { ...values };
+  const byId = new Map(table.columns.map(column => [column.id, column]));
+  const controllers = table.columns.filter(column => column.column_type === 'intercolumn_controller' && (column.intercolumn_rules || []).length > 0);
+  const totalRules = controllers.reduce((count, column) => count + (column.intercolumn_rules || []).length, 0);
+  const maxPasses = Math.max(6, totalRules * 4 + 4);
+  const seen = new Set<string>();
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const state = JSON.stringify(working, Object.keys(working).sort());
+    if (seen.has(state)) return working;
+    seen.add(state);
+    let changed = false;
+
+    for (const controller of controllers) {
+      for (const rule of controller.intercolumn_rules || []) {
+        const other = byId.get(rule.other_column_id);
+        if (!other) continue;
+        if ((rule.direction === 'other_to_controller' || rule.direction === 'both')
+            && intercolumnValuesEqual(other, working[other.field_key], rule.when_other_equals)) {
+          if (!intercolumnValuesEqual(controller, working[controller.field_key], rule.set_controller_to)) {
+            working[controller.field_key] = rule.set_controller_to ?? '';
+            changed = true;
+          }
+        }
+        if ((rule.direction === 'controller_to_other' || rule.direction === 'both')
+            && intercolumnValuesEqual(controller, working[controller.field_key], rule.when_controller_equals)) {
+          if (!intercolumnValuesEqual(other, working[other.field_key], rule.set_other_to)) {
+            working[other.field_key] = rule.set_other_to;
+            changed = true;
+          }
+        }
+      }
+    }
+    if (!changed) return working;
+  }
+  return working;
+}
+
 export function automaticDisposalDisplay(problem: {
   custom_values?: CustomValues;
   workflow_status?: string;
@@ -132,8 +197,8 @@ export function automaticDisposalDisplay(problem: {
   customer_notified_at?: string | null;
   days_until_automatic_disposal?: number | null;
 }): string {
-  const workflowStatus = String(problem.workflow_status || problem.custom_values?.status || problem.status || '');
-  if (workflowStatus !== 'Automatically Disposed') return 'Not automatic';
+  const disposeAutomatically = String(problem.custom_values?.['dispose-automatically'] || 'No');
+  if (disposeAutomatically.toLowerCase() !== 'yes') return 'Unknown';
   const days = problem.days_until_automatic_disposal;
   if (days === null || days === undefined) return '—';
   if (days <= 0) return 'Eligible now';
@@ -154,6 +219,7 @@ export function displayProblemValue(
   },
 ): string {
   if (column.field_key === 'problem-id') return String(problem.problem_number);
+  if (column.field_key === 'current-workflow') return problem.workflow_status || String(problem.custom_values?.['current-workflow'] || 'CS Follow-Up');
   if (column.field_key === 'system-days-until-automatic-disposal') return automaticDisposalDisplay(problem);
   if (column.field_key === 'system-tracking-link') return problem.tracking_url || '—';
   if (column.field_key === 'system-tracking-link-expiry') {

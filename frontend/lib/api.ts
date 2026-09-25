@@ -1,6 +1,6 @@
 import { toastError, toastSuccess } from '@/lib/toast';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const API = '/backend-api';
 
 export function getToken(){ if(typeof window==='undefined') return null; return sessionStorage.getItem('pst_token'); }
 export function setToken(token:string){ sessionStorage.setItem('pst_token',token); }
@@ -20,7 +20,7 @@ export async function api(path:string, init:ApiInit={}){
   const { successMessage, errorMessage, ...requestInit } = init;
   const headers = new Headers(requestInit.headers || {});
   if(!(requestInit.body instanceof FormData)) headers.set('Content-Type','application/json');
-  const token=getToken(); if(token) headers.set('Authorization',`Bearer ${token}`);
+  const token=getToken(); if(token && path !== '/auth/login/') headers.set('Authorization',`Bearer ${token}`);
 
   let res: Response;
   try {
@@ -51,7 +51,7 @@ export async function apiBlob(path:string, init:ApiInit={}){
   const { successMessage, errorMessage, ...requestInit } = init;
   const headers = new Headers(requestInit.headers || {});
   if(!(requestInit.body instanceof FormData)) headers.set('Content-Type','application/json');
-  const token=getToken(); if(token) headers.set('Authorization',`Bearer ${token}`);
+  const token=getToken(); if(token && path !== '/auth/login/') headers.set('Authorization',`Bearer ${token}`);
 
   let res: Response;
   try {

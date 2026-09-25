@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '@/lib/api';
 import {
   QueueAdvancedFilter,
   QueueFilterField,
@@ -64,6 +65,118 @@ function makeId() {
 
 function makeFilter(field: QueueFilterField): DraftFilter {
   return { id: makeId(), field_key: field.key, operator: operatorsFor(field)[0].value, value: '', value2: '' };
+}
+
+type QueueSuggestion = { key: string; value: string; meta: string[] };
+
+function queueSuggestionEndpoint(field: QueueFilterField, query: string) {
+  const q = encodeURIComponent(query);
+  if (field.key === 'distributor') return `/customers/distributors/suggest/?q=${q}`;
+  if (field.key === 'end_user') return `/customers/end-users/suggest/?q=${q}`;
+  if (field.key === 'brand') return `/customers/brands/suggest/?q=${q}`;
+  return '';
+}
+
+function normalizeQueueSuggestions(field: QueueFilterField, raw: unknown): QueueSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const result: QueueSuggestion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const data = item as Record<string, unknown>;
+    const value = field.key === 'brand' ? String(data.brand || '').trim() : String(data.company_name || '').trim();
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    const meta: string[] = [];
+    if (field.key === 'brand') {
+      if (typeof data.customer_count === 'number') meta.push(`${data.customer_count} customer record${data.customer_count === 1 ? '' : 's'}`);
+      if (Array.isArray(data.company_examples) && data.company_examples.length) meta.push(`Examples: ${data.company_examples.map(String).join(', ')}`);
+    } else {
+      if (data.external_customer_id) meta.push(`CoyId ${String(data.external_customer_id)}`);
+      const place = [data.city, data.state].filter(Boolean).map(String).join(', ');
+      if (place) meta.push(place);
+      if (data.brand) meta.push(`Brand ${String(data.brand)}`);
+    }
+    result.push({ key, value, meta });
+  }
+  return result;
+}
+
+function QueueSuggestionInput({ field, value, onChange }: { field: QueueFilterField; value: string; onChange: (value: string) => void }) {
+  const [suggestions, setSuggestions] = useState<QueueSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [searchEnabled, setSearchEnabled] = useState(false);
+  const requestId = useRef(0);
+
+  useEffect(() => {
+    if (!searchEnabled) {
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+    const query = value.trim();
+    if (!query) {
+      setSuggestions([]);
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+    const endpoint = queueSuggestionEndpoint(field, query);
+    if (!endpoint) return;
+    const currentRequest = ++requestId.current;
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const raw = await api(endpoint);
+        if (currentRequest !== requestId.current) return;
+        setSuggestions(normalizeQueueSuggestions(field, raw));
+        setOpen(true);
+      } catch {
+        if (currentRequest === requestId.current) {
+          setSuggestions([]);
+          setOpen(false);
+        }
+      } finally {
+        if (currentRequest === requestId.current) setLoading(false);
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [field, searchEnabled, value]);
+
+  function choose(suggestion: QueueSuggestion) {
+    requestId.current += 1;
+    setSearchEnabled(false);
+    setOpen(false);
+    setSuggestions([]);
+    onChange(suggestion.value);
+  }
+
+  return <div className="advanced-suggestion-input distributor-autocomplete advanced-value">
+    <input
+      className="input advanced-value"
+      value={value}
+      autoComplete="off"
+      placeholder="Type to search suggestions…"
+      onFocus={() => { setSearchEnabled(true); if (suggestions.length) setOpen(true); }}
+      onBlur={() => window.setTimeout(() => { requestId.current += 1; setSearchEnabled(false); setOpen(false); }, 140)}
+      onChange={event => { setSearchEnabled(true); onChange(event.target.value); }}
+    />
+    {loading && <span className="distributor-loading">Searching…</span>}
+    {open && <div className="distributor-suggestions advanced-suggestions" role="listbox">
+      {suggestions.length ? suggestions.map(suggestion => <button
+        type="button"
+        className="distributor-suggestion"
+        key={suggestion.key}
+        onMouseDown={event => event.preventDefault()}
+        onClick={() => choose(suggestion)}
+      >
+        <span className="distributor-company">{suggestion.value}</span>
+        {!!suggestion.meta.length && <span className="distributor-meta">{suggestion.meta.map((item, index) => <span className="distributor-meta-item" key={`${suggestion.key}-${index}`}>{item}</span>)}</span>}
+      </button>) : <div className="distributor-empty">No suggestions found</div>}
+    </div>}
+  </div>;
 }
 
 export default function WorkflowQueueAdvancedSearch({
@@ -155,7 +268,9 @@ export default function WorkflowQueueAdvancedSearch({
                 ? <select className="select advanced-value" value={String(condition.value || '')} onChange={event => patch(condition.id, { value: event.target.value })}>
                     <option value="">Select a value…</option>{(field.choices || []).map(choice => <option key={choice} value={choice}>{choice}</option>)}
                   </select>
-                : <input className="input advanced-value" type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} value={String(condition.value || '')} placeholder="Value" onChange={event => patch(condition.id, { value: event.target.value })} />)}
+                : queueSuggestionEndpoint(field, '')
+                  ? <QueueSuggestionInput field={field} value={String(condition.value || '')} onChange={value => patch(condition.id, { value })} />
+                  : <input className="input advanced-value" type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} value={String(condition.value || '')} placeholder="Value" onChange={event => patch(condition.id, { value: event.target.value })} />)}
               {!valueless && condition.operator === 'between' && <>
                 <span className="advanced-and">and</span>
                 <input className="input advanced-value" type={field.type === 'number' ? 'number' : field.type === 'datetime' ? 'datetime-local' : 'text'} value={String(condition.value2 || '')} placeholder="Second value" onChange={event => patch(condition.id, { value2: event.target.value })} />

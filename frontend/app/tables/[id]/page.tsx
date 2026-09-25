@@ -5,11 +5,24 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { queueToastForReload } from '@/lib/toast';
-import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, ProblemColumn, ProblemTable } from '@/lib/problemTables';
+import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable } from '@/lib/problemTables';
 import DistributorAutocomplete from '@/components/DistributorAutocomplete';
 import EndUserAutocomplete from '@/components/EndUserAutocomplete';
 import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
 import BrandAutocomplete from '@/components/BrandAutocomplete';
+
+const CURRENT_WORKFLOWS = [
+  'CS Follow-Up',
+  'Waiting For Customer',
+  'To be Disposed',
+  'To be shipped back to client',
+  'To be back to testing',
+  'Back to testing',
+  'Disposed',
+  'Shipped back to client',
+] as const;
+
+const STATUS_VALUES = ['NEW', 'IN PROGRESS', 'ON HOLD', 'SHIPPED BACK TO CLIENT', 'DISPOSED', 'COMPLETED'] as const;
 
 function blankDefault(type: ColumnType): unknown {
   if (type === 'multi_choice' || type === 'client_email') return [];
@@ -155,6 +168,117 @@ function ClientEmailDependencyPriority({
   </div>;
 }
 
+
+const INTERCOLUMN_EDITABLE_SYSTEM_KEYS = new Set(['status', 'current-workflow', 'dispose-automatically']);
+const INTERCOLUMN_OTHER_TYPES = new Set<ColumnType>([
+  'text', 'long_text', 'number', 'choice', 'date', 'datetime', 'time',
+  'boolean', 'email', 'url', 'intercolumn_controller',
+]);
+
+function isIntercolumnCandidate(column: ProblemColumn, excludeId?: string) {
+  if (excludeId && column.id === excludeId) return false;
+  if (column.is_system) return INTERCOLUMN_EDITABLE_SYSTEM_KEYS.has(column.field_key);
+  return INTERCOLUMN_OTHER_TYPES.has(column.column_type);
+}
+
+function emptyRuleValue(column?: ProblemColumn): unknown {
+  return column?.column_type === 'boolean' ? null : '';
+}
+
+function RuleValueInput({ column, label, value, onChange, id }: { column: ProblemColumn; label: string; value: unknown; onChange: (value: unknown) => void; id: string }) {
+  if (column.column_type === 'choice') {
+    return <div className="field"><label htmlFor={id}>{label}</label><select id={id} className="select" value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)}><option value="">-- Choose value --</option>{(column.choices || []).map(choice => <option value={choice} key={choice}>{choice}</option>)}</select></div>;
+  }
+  if (column.column_type === 'boolean') {
+    const current = value === true ? 'true' : value === false ? 'false' : '';
+    return <div className="field"><label htmlFor={id}>{label}</label><select id={id} className="select" value={current} onChange={e => onChange(e.target.value === '' ? null : e.target.value === 'true')}><option value="">-- Choose value --</option><option value="true">Yes</option><option value="false">No</option></select></div>;
+  }
+  if (column.column_type === 'long_text') {
+    return <div className="field"><label htmlFor={id}>{label}</label><textarea id={id} className="textarea compact-textarea" value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} /></div>;
+  }
+  const inputType = column.column_type === 'number' ? 'number'
+    : column.column_type === 'date' ? 'date'
+    : column.column_type === 'datetime' ? 'datetime-local'
+    : column.column_type === 'time' ? 'time'
+    : column.column_type === 'email' ? 'email'
+    : column.column_type === 'url' ? 'url'
+    : 'text';
+  return <div className="field"><label htmlFor={id}>{label}</label><input id={id} className="input" type={inputType} step={column.column_type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} /></div>;
+}
+
+function IntercolumnRulesEditor({
+  rules,
+  onChange,
+  columns,
+  controllerName,
+  excludeId,
+  idPrefix,
+}: {
+  rules: IntercolumnRule[];
+  onChange: (rules: IntercolumnRule[]) => void;
+  columns: ProblemColumn[];
+  controllerName: string;
+  excludeId?: string;
+  idPrefix: string;
+}) {
+  const candidates = columns.filter(column => isIntercolumnCandidate(column, excludeId));
+
+  function addRule() {
+    const other = candidates[0];
+    if (!other) return;
+    onChange([...rules, {
+      other_column_id: other.id,
+      direction: 'other_to_controller',
+      when_other_equals: emptyRuleValue(other),
+      set_controller_to: '',
+      when_controller_equals: '',
+      set_other_to: emptyRuleValue(other),
+    }]);
+  }
+
+  function updateRule(index: number, patch: Partial<IntercolumnRule>) {
+    onChange(rules.map((rule, position) => position === index ? { ...rule, ...patch } : rule));
+  }
+
+  function changeOther(index: number, otherId: string) {
+    const other = candidates.find(candidate => candidate.id === otherId);
+    updateRule(index, {
+      other_column_id: otherId,
+      when_other_equals: emptyRuleValue(other),
+      set_other_to: emptyRuleValue(other),
+    });
+  }
+
+  return <div className="field intercolumn-rules-field">
+    <label>Intercolumn rules</label>
+    <div className="stack">
+      {rules.map((rule, index) => {
+        const other = candidates.find(candidate => candidate.id === rule.other_column_id) || candidates[0];
+        if (!other) return null;
+        const controllerLabel = controllerName.trim() || 'this controller';
+        return <div className="intercolumn-rule-card" key={`${idPrefix}-${index}`}>
+          <div className="intercolumn-rule-header"><strong>Rule {index + 1}</strong><button type="button" className="button danger" onClick={() => onChange(rules.filter((_, position) => position !== index))}>Remove</button></div>
+          <div className="intercolumn-rule-grid">
+            <div className="field"><label>Other field</label><select className="select" value={other.id} onChange={e => changeOther(index, e.target.value)}>{candidates.map(candidate => <option value={candidate.id} key={candidate.id}>{candidate.name} ({candidate.column_type_label})</option>)}</select></div>
+            <div className="field"><label>Direction</label><select className="select" value={rule.direction} onChange={e => updateRule(index, { direction: e.target.value as IntercolumnRuleDirection })}><option value="other_to_controller">Other field → Controller</option><option value="controller_to_other">Controller → Other field</option><option value="both">Both directions</option></select></div>
+          </div>
+          {(rule.direction === 'other_to_controller' || rule.direction === 'both') && <div className="intercolumn-condition-row">
+            <RuleValueInput column={other} label={`If ${other.name} equals`} value={rule.when_other_equals} onChange={value => updateRule(index, { when_other_equals: value })} id={`${idPrefix}-${index}-other-trigger`} />
+            <div className="field"><label htmlFor={`${idPrefix}-${index}-controller-result`}>Set {controllerLabel} to</label><input id={`${idPrefix}-${index}-controller-result`} className="input" value={rule.set_controller_to ?? ''} onChange={e => updateRule(index, { set_controller_to: e.target.value })} /></div>
+          </div>}
+          {(rule.direction === 'controller_to_other' || rule.direction === 'both') && <div className="intercolumn-condition-row">
+            <div className="field"><label htmlFor={`${idPrefix}-${index}-controller-trigger`}>If {controllerLabel} equals</label><input id={`${idPrefix}-${index}-controller-trigger`} className="input" value={rule.when_controller_equals ?? ''} onChange={e => updateRule(index, { when_controller_equals: e.target.value })} /></div>
+            <RuleValueInput column={other} label={`Set ${other.name} to`} value={rule.set_other_to} onChange={value => updateRule(index, { set_other_to: value })} id={`${idPrefix}-${index}-other-result`} />
+          </div>}
+        </div>;
+      })}
+      {rules.length === 0 && <div className="muted result-meta">No rules yet. Add a rule to connect this controller to another single-value field.</div>}
+      {candidates.length > 0 ? <div><button type="button" className="button secondary" onClick={addRule}>+ Add Rule</button></div> : <div className="muted result-meta">Add another supported field before creating a controller rule.</div>}
+      <div className="muted result-meta">Rules use exact equality. Both-direction rules are allowed. The backend repeatedly applies chained rules until values stabilize and rejects non-converging cycles.</div>
+    </div>
+  </div>;
+}
+
 function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn; allColumns: ProblemColumn[]; onChanged: () => Promise<void>}) {
   const [name, setName] = useState(column.name);
   const [columnDescription, setColumnDescription] = useState(column.description || '');
@@ -163,6 +287,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
   const [defaultValue, setDefaultValue] = useState<unknown>(column.default_value);
   const [groupRole, setGroupRole] = useState<GroupRole>((column.group_role || 'lab_technician') as GroupRole);
   const [dependencyIds, setDependencyIds] = useState<string[]>(column.client_email_dependencies || (column.depends_on_column ? [column.depends_on_column] : []));
+  const [intercolumnRules, setIntercolumnRules] = useState<IntercolumnRule[]>(column.intercolumn_rules || []);
   const [required, setRequired] = useState(column.required);
   const [searchable, setSearchable] = useState(column.searchable);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(column.include_in_customer_notification);
@@ -193,6 +318,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         choices: choiceList,
         group_role: type === 'group' ? groupRole : '',
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
+        intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
         default_value: (type === 'row_creator' || type === 'recent_row_modifier') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
       }), successMessage:'Column updated successfully.', errorMessage:'Could not update column'});
       await onChanged();
@@ -212,6 +338,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
     setRequired(next === 'fixed');
     if (next === 'group') setGroupRole('lab_technician');
     setDependencyIds([]);
+    if (next !== 'intercolumn_controller') setIntercolumnRules([]);
   }
 
   return <div className="column-editor">
@@ -222,10 +349,11 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       {(type === 'choice' || type === 'multi_choice') && <div className="field column-choice-options"><label>Choices (one per line)</label><textarea className="textarea compact-textarea" value={choices} onChange={e=>setChoices(e.target.value)}/></div>}
       {type === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={groupRole} onChange={e=>{ setGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab Technician</option><option value="customer_service">Customer Service</option></select></div>}
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
+      {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label></div>
     </div>
-    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server updates this value to the email of the user who most recently saves the row.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is Distributor.' : type === 'end_user' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is End User.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
+    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is Distributor.' : type === 'end_user' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is End User.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
     <div className="column-actions"><button className="button secondary" onClick={save} disabled={busy}>Save</button><button className="button danger" onClick={remove} disabled={busy}>Delete</button></div>
   </div>;
 }
@@ -245,6 +373,7 @@ export default function TableSettings() {
   const [defaultValue, setDefaultValue] = useState<unknown>('');
   const [colGroupRole, setColGroupRole] = useState<GroupRole>('lab_technician');
   const [colDependencyIds, setColDependencyIds] = useState<string[]>([]);
+  const [colIntercolumnRules, setColIntercolumnRules] = useState<IntercolumnRule[]>([]);
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
@@ -277,6 +406,7 @@ export default function TableSettings() {
         choices:choiceList,
         group_role: colType === 'group' ? colGroupRole : '',
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
+        intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
         default_value: (colType === 'row_creator' || colType === 'recent_row_modifier') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
       setColName('');
@@ -286,6 +416,7 @@ export default function TableSettings() {
       setDefaultValue('');
       setColGroupRole('lab_technician');
       setColDependencyIds([]);
+      setColIntercolumnRules([]);
       setRequired(false);
       setSearchable(true);
       setIncludeInCustomerNotification(false);
@@ -295,7 +426,7 @@ export default function TableSettings() {
 
   async function deleteTable() {
     if (!table || !confirm(`Delete table "${table.name}"? Only empty non-default tables can be deleted.`)) return;
-    try { await api(`/problem-tables/${id}/`, {method:'DELETE', successMessage:'Problem sample table deleted successfully.', errorMessage:'Could not delete problem sample table'}); router.push('/tables'); }
+    try { await api(`/problem-tables/${id}/`, {method:'DELETE', successMessage:'Ticket table deleted successfully.', errorMessage:'Could not delete ticket table'}); router.push('/tables'); }
     catch(e) { setError(e instanceof Error ? e.message : 'Could not delete table'); }
   }
 
@@ -305,6 +436,7 @@ export default function TableSettings() {
     setRequired(next === 'fixed');
     if (next === 'group') setColGroupRole('lab_technician');
     setColDependencyIds([]);
+    if (next !== 'intercolumn_controller') setColIntercolumnRules([]);
   }
 
   if (!table) return <div>{error || 'Loading…'}</div>;
@@ -313,7 +445,7 @@ export default function TableSettings() {
   return <div>
     <div className="page-toolbar">
       <div><div className="eyebrow">Table settings</div><h1 className="page-heading" style={{marginBottom:0}}>{table.name}</h1></div>
-      <div className="toolbar-actions"><Link className="button secondary" href={`/?table=${table.id}`}>Open Table</Link>{!table.is_default && <button className="button danger" onClick={deleteTable}>Delete Table</button>}</div>
+      <div className="toolbar-actions"><Link className="button secondary" href={`/problem-samples?table=${table.id}`}>Open Table</Link>{!table.is_default && <button className="button danger" onClick={deleteTable}>Delete Table</button>}</div>
     </div>
 
     {error && <div className="card error" style={{marginBottom:14}}>{error}</div>}
@@ -331,17 +463,21 @@ export default function TableSettings() {
           <form className="panel-body stack" onSubmit={saveTable}>
             <div className="field"><label>Name</label><input className="input" value={name} onChange={e=>setName(e.target.value)} required/></div>
             <div className="field"><label>Description</label><textarea className="textarea" value={description} onChange={e=>setDescription(e.target.value)}/></div>
-            <div className="field"><label>Problem Sample Expiration Period (days)</label><input className="input" type="number" min={0} max={3650} value={ptDays} onChange={e=>{ const value = Number(e.target.value); setPtDays(Number.isFinite(value) ? Math.min(3650, Math.max(0, value)) : 0); }} required/><div className="muted result-meta">Each time a sample changes to Automatically Disposed, a new expiration period of this many days starts. Enter 0 for immediate eligibility.</div></div>
-            <div className="muted result-meta">Problem Sample Tracking Links remain available for 30 days after the most recent change to Halted Automatic Disposal, To be Disposed, To be shipped back to client, To be back to testing, Back to testing, Disposed, or Shipped back to client. Returning to Automatically Disposed clears that expiry clock and returns the tracking link to its pre-response state.</div>
+            <div className="field"><label>Ticket Expiration Period (days)</label><input className="input" type="number" min={0} max={3650} value={ptDays} onChange={e=>{ const value = Number(e.target.value); setPtDays(Number.isFinite(value) ? Math.min(3650, Math.max(0, value)) : 0); }} required/><div className="muted result-meta">Each time Dispose Automatically changes from No to Yes, a new expiration period of this many days starts. When it ends, Current Workflow automatically changes to To be Disposed. Enter 0 for an immediate transition.</div></div>
+            <div className="muted result-meta">Ticket Tracking Links remain available for 30 days after the most recent change to a routed disposal, shipping, or back-to-testing Current Workflow. Returning Current Workflow to CS Follow-Up clears that expiry clock and makes the tracking link accessible again.</div>
             <div><button className="button">Save Table Details</button></div>
           </form>
         </section>
         <section className="panel">
           <div className="panel-header">Statuses</div>
           <div className="panel-body stack">
-            <div className="muted result-meta">Status is a fixed system field. These are the only allowed values and they cannot be added to, renamed, or removed.</div>
+            <div className="muted result-meta">Status is a required built-in descriptive field with the same fixed values on every ticket table. Workflow routing is controlled separately by Current Workflow.</div>
             <div className="status-settings-list">
-              {['Automatically Disposed','Halted Automatic Disposal','To be Disposed','To be shipped back to client','To be back to testing','Back to testing','Disposed','Shipped back to client'].map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge blue">Fixed</span></div>)}
+              {STATUS_VALUES.map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge">Status</span></div>)}
+            </div>
+            <div className="muted result-meta">Current Workflow is a separate required built-in field. These workflow values are fixed because the system uses them for routing:</div>
+            <div className="status-settings-list">
+              {CURRENT_WORKFLOWS.map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge blue">Workflow</span></div>)}
             </div>
           </div>
         </section>
@@ -357,12 +493,13 @@ export default function TableSettings() {
             {(colType === 'choice' || colType === 'multi_choice') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
             {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab Technician</option><option value="customer_service">Customer Service</option></select></div>}
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
+            {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
-            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a problem sample.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the email of the user who most recently saved the row. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future problem samples.'}</div>
+            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label>
-            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, date & time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, and Recent Row Modifier.</div>
+            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, date & time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
             <div><button className="button">+ Add Column</button></div>
           </form>
         </div>
