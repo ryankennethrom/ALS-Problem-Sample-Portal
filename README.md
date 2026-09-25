@@ -539,3 +539,6 @@ Choosing **I didn't send the email** in the Send Tracking Link or Back to Testin
 ## Ticket table Image Search
 
 Ticket tables include an **Image Search (N)** action. The count reflects the images attached to tickets in the table's current result set. Opening Image Search carries the current basic query, Advanced Search conditions/match mode, and Quick Filters into a dedicated image gallery. Gallery cards use large contained previews so images can usually be inspected without enlargement, while each image can also be opened in a full-screen viewer. Every image result includes a direct **Go to ticket** action.
+
+### Direct camera capture
+Staff can use **Take Photo** anywhere ticket images are added. The browser requests camera permission, prefers the rear/environment camera, captures a JPEG in-browser, and uses the existing ticket-image upload API. On the Create Ticket form the photo is queued until the tracking-link email step is finalized; on an existing ticket it uploads immediately after capture. Camera access requires HTTPS or localhost.

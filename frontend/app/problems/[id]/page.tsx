@@ -13,6 +13,7 @@ import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackT
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
+import CameraCapture from '@/components/CameraCapture';
 
 type Comment = { id: number; body: string; author_email: string; legacy_author: string; created_at: string };
 type ProblemImage = { id:number; image:string; original_name:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
@@ -148,6 +149,23 @@ export default function Detail() {
       setImageFiles([]); setImageInputKey(key => key + 1);
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to upload image'); }
     finally { setUploadingImages(false); }
+  }
+
+  async function uploadCapturedImage(file: File) {
+    if (!p || uploadingImages) return;
+    setUploadingImages(true); setError('');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('include_in_customer_notification', 'false');
+      const created: ProblemImage = await api(`/problem-samples/${id}/images/`, { method:'POST', body:formData, successMessage:'Photo added to ticket.', errorMessage:'Could not upload captured photo' });
+      setP(current => current ? { ...current, images:[...(current.images || []), created] } : current);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to upload captured photo');
+      throw e;
+    } finally {
+      setUploadingImages(false);
+    }
   }
 
   async function uploadAttachments() {
@@ -456,8 +474,9 @@ export default function Detail() {
               <div className="file-upload-row">
                 <input key={imageInputKey} className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
                 <button type="button" className="button secondary" disabled={!imageFiles.length || uploadingImages} onClick={uploadImages}>{uploadingImages ? 'Uploading…' : `Add Image${imageFiles.length === 1 ? '' : 's'}`}</button>
+                <CameraCapture onCapture={uploadCapturedImage} disabled={uploadingImages} />
               </div>
-              <div className="muted file-help">JPEG, PNG, GIF, or WebP · maximum 25 MB each</div>
+              <div className="muted file-help">Upload JPEG, PNG, GIF, or WebP, or take a photo directly with this device · maximum 25 MB each</div>
             </div>
 
             <div className="file-subsection">

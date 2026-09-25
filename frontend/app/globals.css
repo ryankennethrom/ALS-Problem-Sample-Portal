@@ -857,3 +857,21 @@ a.result:hover{background:#f7f9fb}
 .image-search-lightbox-image-wrap img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain}
 @media(max-width:1050px){.advanced-search-grid{grid-template-columns:minmax(0,1fr) auto auto}.image-search-gallery{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}}
 @media(max-width:700px){.advanced-search-grid{grid-template-columns:1fr}.image-search-button{width:100%}.image-search-gallery{grid-template-columns:1fr}.image-search-preview{height:min(72vh,480px)}.image-search-lightbox-header{align-items:flex-start;flex-direction:column}.image-search-lightbox-actions{width:100%}.image-search-lightbox-actions .button{flex:1}.image-search-card-heading{flex-direction:column;gap:4px}.image-search-date{text-align:left;max-width:none}}
+
+/* Direct camera capture for ticket images */
+.camera-upload-controls{display:grid;gap:8px}
+.camera-upload-controls .camera-button{justify-self:start}
+.camera-overlay{position:fixed;inset:0;z-index:1300;background:rgba(10,14,18,.82);display:flex;align-items:center;justify-content:center;padding:18px}
+.camera-dialog{width:min(900px,100%);max-height:calc(100vh - 36px);overflow:auto;background:#fff;border-radius:8px;border:1px solid #cfd4d8;box-shadow:0 18px 60px rgba(0,0,0,.38);padding:14px;display:grid;gap:12px}
+.camera-header{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+.camera-header h2{margin-bottom:3px}
+.camera-subtitle{font-size:12px;line-height:1.4}
+.camera-preview-wrap{position:relative;min-height:300px;max-height:66vh;background:#101316;border-radius:7px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.camera-preview{display:block;width:100%;height:min(66vh,620px);object-fit:contain;background:#101316}
+.camera-preview-message{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:28px;color:#fff;background:rgba(10,14,18,.7);font-weight:600}
+.camera-preview-error{color:#ffd6d6}
+.camera-actions{display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap}
+.camera-shutter{min-width:130px}
+.camera-permission-note{font-size:11px;text-align:right}
+.file-upload-row .camera-button{white-space:nowrap}
+@media(max-width:720px){.camera-overlay{padding:0}.camera-dialog{width:100%;height:100%;max-height:none;border-radius:0;border:0;padding:12px;grid-template-rows:auto minmax(0,1fr) auto auto}.camera-preview-wrap{min-height:0;max-height:none}.camera-preview{height:100%;max-height:none}.camera-actions .button{flex:1}.camera-permission-note{text-align:left}.file-upload-row .camera-button{width:100%}}

@@ -323,3 +323,6 @@ Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Wor
 ### Ticket-table Image Search
 
 `frontend/app/problem-samples/page.tsx` derives an image count from the currently matched ticket rows and serializes the active basic query, Advanced Search filters/match mode, and Quick Filters into the Image Search route. `frontend/app/problem-samples/image-search/page.tsx` replays that same query against the existing ticket APIs, flattens each matching ticket's `images` relation into gallery results, and provides large contained previews, a full-screen lightbox, and links back to the owning ticket. No separate image-search database index is required because ticket serializers already include image metadata.
+
+## Direct camera capture
+`frontend/components/CameraCapture.tsx` provides a reusable browser-camera modal using `navigator.mediaDevices.getUserMedia`. It prefers the environment-facing camera and renders a video preview. Captures are drawn to a canvas and encoded as JPEG before being passed back as a `File`, keeping them compatible with the backend image validator (JPEG/PNG/GIF/WebP). New-ticket captures are held in `ProblemForm` until prepared-ticket finalization; existing-ticket captures upload immediately through the standard `/problem-samples/{id}/images/` endpoint.

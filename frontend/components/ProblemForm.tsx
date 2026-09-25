@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, initialValue, ProblemTable } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
+import CameraCapture from '@/components/CameraCapture';
 import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, prepareCustomerEmail } from '@/lib/customerEmail';
 
 type PendingTicketCreation = {
@@ -267,8 +268,11 @@ export default function ProblemForm() {
       <div className="panel-body"><div className="muted file-notification-note">The tracking-link email is prepared before the ticket is created. Selected files are uploaded only after you confirm that the email was sent or not sent.</div><div className="file-upload-grid">
         <div className="field">
           <label>Images</label>
-          <input className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
-          <div className="muted file-help">JPEG, PNG, GIF, or WebP. Up to 25 MB per image.{imageFiles.length ? ` ${imageFiles.length} selected.` : ''}</div>
+          <div className="camera-upload-controls">
+            <input className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
+            <CameraCapture onCapture={file => setImageFiles(current => [...current, file])} disabled={saving || Boolean(pendingCreation)} />
+          </div>
+          <div className="muted file-help">Upload JPEG, PNG, GIF, or WebP, or take a photo with this device. Up to 25 MB per image.{imageFiles.length ? ` ${imageFiles.length} selected.` : ''}</div>
         </div>
         <div className="field">
           <label>Attachments</label>
