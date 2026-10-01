@@ -2091,6 +2091,37 @@ class ProblemTableViewSet(viewsets.ModelViewSet):
     queryset = ProblemTable.objects.prefetch_related('columns').select_related('created_by')
     serializer_class = ProblemTableSerializer
 
+    @action(detail=True, methods=['post'], url_path='reorder-columns')
+    @transaction.atomic
+    def reorder_columns(self, request, pk=None):
+        table = self.get_object()
+        column_ids = request.data.get('column_ids')
+        if not isinstance(column_ids, list):
+            return Response({'detail': 'column_ids must be a list.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        requested = [str(value) for value in column_ids]
+        if len(requested) != len(set(requested)):
+            return Response({'detail': 'Each field may appear only once in the field order.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        columns = list(ProblemColumn.objects.select_for_update().filter(table=table))
+        by_id = {str(column.id): column for column in columns}
+        if set(requested) != set(by_id) or len(requested) != len(columns):
+            return Response({
+                'detail': 'Field order must contain every field in this table exactly once.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        changed = []
+        for position, column_id in enumerate(requested):
+            column = by_id[column_id]
+            if column.position != position:
+                column.position = position
+                changed.append(column)
+        if changed:
+            ProblemColumn.objects.bulk_update(changed, ['position'])
+
+        refreshed = ProblemTable.objects.prefetch_related('columns').select_related('created_by').get(pk=table.pk)
+        return Response(ProblemTableSerializer(refreshed, context=self.get_serializer_context()).data)
+
     def perform_create(self, serializer):
         table = serializer.save(created_by=self.request.user)
         ensure_builtin_columns(table)
@@ -2290,40 +2321,6 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                 values = dict(problem.custom_values or {})
                 current = values.get(column.field_key)
                 if current and str(current).strip().lower() not in eligible:
-                    values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
-                    ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
-
-        if column.column_type == ProblemColumn.TYPE_DISTRIBUTOR:
-            # Distributor values must still refer to a current customer record
-            # whose CoyType is Distributor after a column is converted/edited.
-            from customers.models import Customer
-            from customers.normalization import customer_type_is
-            valid_names = {
-                customer.company_name.casefold()
-                for customer in Customer.objects.filter(customer_type__icontains='distributor').only('company_name', 'customer_type')
-                if customer.company_name and customer_type_is(customer.customer_type, 'Distributor')
-            }
-            for problem in column.table.problem_samples.only('id', 'custom_values'):
-                values = dict(problem.custom_values or {})
-                current = values.get(column.field_key)
-                if current and str(current).strip().casefold() not in valid_names:
-                    values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
-                    ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
-
-        if column.column_type == ProblemColumn.TYPE_END_USER:
-            # End User values must still refer to a current customer record
-            # whose CoyType is End User after a column is converted/edited.
-            from customers.models import Customer
-            from customers.normalization import customer_type_is
-            valid_names = {
-                customer.company_name.casefold()
-                for customer in Customer.objects.filter(customer_type__icontains='end').only('company_name', 'customer_type')
-                if customer.company_name and customer_type_is(customer.customer_type, 'End User')
-            }
-            for problem in column.table.problem_samples.only('id', 'custom_values'):
-                values = dict(problem.custom_values or {})
-                current = values.get(column.field_key)
-                if current and str(current).strip().casefold() not in valid_names:
                     values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
                     ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
 

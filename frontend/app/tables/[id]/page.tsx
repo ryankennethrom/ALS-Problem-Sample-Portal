@@ -353,7 +353,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label></div>
     </div>
-    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'date_today' ? 'Editable like a normal Date field. New tickets start with the current date automatically; changing this column setting does not overwrite existing valid dates.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is Distributor.' : type === 'end_user' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is End User.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
+    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'date_today' ? 'Editable like a normal Date field. New tickets start with the current date automatically; changing this column setting does not overwrite existing valid dates.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is Distributor. Suggestions do not restrict what can be saved.' : type === 'end_user' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is End User. Suggestions do not restrict what can be saved.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
     <div className="column-actions"><button className="button secondary" onClick={save} disabled={busy}>Save</button><button className="button danger" onClick={remove} disabled={busy}>Delete</button></div>
   </div>;
 }
@@ -377,10 +377,13 @@ export default function TableSettings() {
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
+  const [savingColumnOrder, setSavingColumnOrder] = useState(false);
 
   async function load() {
     const d: ProblemTable = await api(`/problem-tables/${id}/`);
     setTable(d); setName(d.name); setDescription(d.description || ''); setPtDays(d.pt_days ?? 30);
+    setColumnOrder(d.columns.map(column => column.id));
   }
   useEffect(() => { load().catch(e=>setError(e instanceof Error ? e.message : 'Failed')); }, [id]);
 
@@ -424,6 +427,37 @@ export default function TableSettings() {
     } catch(e) { setError(e instanceof Error ? e.message : 'Failed to add column'); }
   }
 
+  function moveColumn(columnId: string, direction: -1 | 1) {
+    setColumnOrder(current => {
+      const index = current.indexOf(columnId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  async function saveColumnOrder() {
+    if (!table || savingColumnOrder) return;
+    setSavingColumnOrder(true);
+    setError('');
+    try {
+      const updated: ProblemTable = await api(`/problem-tables/${id}/reorder-columns/`, {
+        method: 'POST',
+        body: JSON.stringify({ column_ids: columnOrder }),
+        successMessage: 'Field order saved successfully.',
+        errorMessage: 'Could not save field order',
+      });
+      setTable(updated);
+      setColumnOrder(updated.columns.map(column => column.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save field order');
+    } finally {
+      setSavingColumnOrder(false);
+    }
+  }
+
   async function deleteTable() {
     if (!table || !confirm(`Delete table "${table.name}"? Only empty non-default tables can be deleted.`)) return;
     try { await api(`/problem-tables/${id}/`, {method:'DELETE', successMessage:'Ticket table deleted successfully.', errorMessage:'Could not delete ticket table'}); router.push('/tables'); }
@@ -452,6 +486,27 @@ export default function TableSettings() {
 
     <div className="two-col table-settings-layout">
       <div className="stack">
+        <section className="panel panel-blue">
+          <div className="panel-header">Field order</div>
+          <div className="panel-body stack">
+            <div className="muted result-meta">Move fields earlier or later to control their left-to-right order in this table. The same order is also used when ticket fields are shown in forms and details.</div>
+            <div className="field-order-list">
+              {columnOrder.map((columnId, index) => {
+                const column = table.columns.find(candidate => candidate.id === columnId);
+                if (!column) return null;
+                return <div className="field-order-row" key={column.id}>
+                  <div className="field-order-index">{index + 1}</div>
+                  <div className="field-order-label"><strong>{column.name}</strong><span>{column.is_system ? 'Built-in' : column.column_type_label}</span></div>
+                  <div className="field-order-actions">
+                    <button type="button" className="button secondary" onClick={() => moveColumn(column.id, -1)} disabled={index === 0 || savingColumnOrder} aria-label={`Move ${column.name} earlier`}>↑ Earlier</button>
+                    <button type="button" className="button secondary" onClick={() => moveColumn(column.id, 1)} disabled={index === columnOrder.length - 1 || savingColumnOrder} aria-label={`Move ${column.name} later`}>↓ Later</button>
+                  </div>
+                </div>;
+              })}
+            </div>
+            <div><button type="button" className="button" onClick={saveColumnOrder} disabled={savingColumnOrder}>{savingColumnOrder ? 'Saving…' : 'Save field order'}</button></div>
+          </div>
+        </section>
         <section className="panel panel-blue">
           <div className="panel-header">Columns ({table.columns.length})</div>
           <div className="panel-body stack">
