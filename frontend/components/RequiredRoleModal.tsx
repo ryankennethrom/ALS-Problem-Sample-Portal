@@ -14,6 +14,7 @@ export type RoleModalUser = {
   role: string;
   role_label: string;
   needs_role: boolean;
+  needs_email: boolean;
   is_admin: boolean;
 };
 
@@ -74,7 +75,7 @@ export default function RequiredRoleModal({
           >
             <span className="required-role-radio" aria-hidden="true" />
             <span>
-              <strong>Lab Technician</strong>
+              <strong>Lab</strong>
               <small>For laboratory staff handling and updating tickets.</small>
             </span>
           </button>

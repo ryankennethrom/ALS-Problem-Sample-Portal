@@ -57,7 +57,7 @@ export default function ProblemForm() {
   useEffect(() => {
     if (!table) return;
     const initial: CustomValues = {};
-    for (const column of table.columns.filter(c => !c.is_system || ['status', 'current-workflow', 'dispose-automatically'].includes(c.field_key))) initial[column.field_key] = initialValue(column);
+    for (const column of table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key))) initial[column.field_key] = initialValue(column);
     setCustomValues(applyIntercolumnRules(table, initial));
   }, [tableId, table?.columns.length]);
 
@@ -252,7 +252,7 @@ export default function ProblemForm() {
     {table ? <>
       <div className="grid">
         <div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value="Assigned when the tracking-link email step begins" disabled readOnly aria-disabled="true" /></div>
-        {table.columns.filter(c => !c.is_system || ['status', 'current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
+        {table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
           ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
           : column.field_key === 'system-tracking-link'
             ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value="Created only after you confirm the tracking-link email step" disabled readOnly aria-disabled="true" /></div>
@@ -260,7 +260,7 @@ export default function ProblemForm() {
               ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value="Does not expire yet" disabled readOnly aria-disabled="true" /></div>
               : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)}/>) }
       </div>
-      {table.columns.filter(c => !c.is_system || ['status', 'current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
+      {table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
     </> : null}
 
     <section className="panel file-create-panel">

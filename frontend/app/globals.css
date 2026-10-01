@@ -883,3 +883,31 @@ a.result:hover{background:#f7f9fb}
 .staff-image-open .image-preview{width:100%}
 .image-search-preview .staff-image-state{width:min(320px,calc(100vw - 56px));height:220px;line-height:1.4}
 .image-search-lightbox-image-wrap .staff-image-state{width:min(100%,720px);height:min(70vh,520px)}
+
+/* Staff @mentions */
+.side-count-badge{margin-left:auto;min-width:22px;height:22px;padding:0 6px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;background:#eaf4ff;color:#075f9e;font-size:11px;font-weight:800;line-height:1}
+.sidebar-collapsed .side-count-badge{position:absolute;right:4px;top:3px;min-width:16px;height:16px;padding:0 4px;font-size:9px}
+.mention-composer{position:relative}
+.mention-composer .textarea{width:100%;min-height:92px}
+.mention-suggestions{position:absolute;z-index:40;left:0;right:0;top:calc(100% - 22px);max-height:260px;overflow:auto;background:#fff;border:1px solid #cfd6dc;border-radius:6px;box-shadow:0 8px 24px rgba(25,36,46,.16);padding:4px}
+.mention-suggestion{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name username" "role role";gap:2px 10px;border:0;background:#fff;padding:8px 10px;border-radius:4px;text-align:left;cursor:pointer;color:#2f3438}
+.mention-suggestion:hover,.mention-suggestion.active{background:#edf5fb}
+.mention-suggestion-name{grid-area:name;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mention-suggestion-username{grid-area:username;color:#1267a9;font-size:12px;font-weight:700}
+.mention-suggestion-role{grid-area:role;color:#737b82;font-size:11px}
+.mention-suggestion-empty{padding:10px;color:#737b82;font-size:13px}
+.mention-help{margin-top:5px;font-size:12px}
+.mention-token{display:inline;color:#075f9e;background:#eaf4ff;border-radius:3px;padding:0 2px;font-weight:700}
+.mention-page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.mention-inbox-list{padding-top:0;padding-bottom:0}
+.mention-inbox-item{padding:15px 2px;border-bottom:1px solid #e2e6e9}
+.mention-inbox-item:last-child{border-bottom:0}
+.mention-inbox-item.unread{background:linear-gradient(90deg,#f1f8ff 0,#fff 32%);margin-left:-16px;margin-right:-16px;padding-left:18px;padding-right:18px;border-left:3px solid #2b78b8}
+.mention-inbox-topline{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mention-unread-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:10px;background:#e4f1fc;color:#075f9e;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em}
+.mention-inbox-comment{margin-top:9px;padding:9px 10px;background:#f7f8f9;border-left:3px solid #8ca7ba;border-radius:2px;white-space:pre-wrap;overflow-wrap:anywhere}
+.mention-inbox-meta{margin-top:7px;font-size:12px;color:#737b82}
+.mention-inbox-actions{margin-top:10px}
+@media(max-width:900px){.side-count-badge{position:absolute;right:3px;top:3px;min-width:16px;height:16px;padding:0 4px;font-size:9px}.mention-page-header{flex-direction:column}.mention-suggestion{grid-template-columns:1fr;grid-template-areas:"name" "username" "role"}}
+
+.side-link{position:relative}

@@ -13,7 +13,7 @@ import BrandAutocomplete from '@/components/BrandAutocomplete';
 
 const CURRENT_WORKFLOWS = [
   'CS Follow-Up',
-  'Waiting For Customer',
+  'Waiting for Customer Response',
   'To be Disposed',
   'To be shipped back to client',
   'To be back to testing',
@@ -21,8 +21,6 @@ const CURRENT_WORKFLOWS = [
   'Disposed',
   'Shipped back to client',
 ] as const;
-
-const STATUS_VALUES = ['NEW', 'IN PROGRESS', 'ON HOLD', 'SHIPPED BACK TO CLIENT', 'DISPOSED', 'COMPLETED'] as const;
 
 function blankDefault(type: ColumnType): unknown {
   if (type === 'multi_choice' || type === 'client_email') return [];
@@ -169,7 +167,7 @@ function ClientEmailDependencyPriority({
 }
 
 
-const INTERCOLUMN_EDITABLE_SYSTEM_KEYS = new Set(['status', 'current-workflow', 'dispose-automatically']);
+const INTERCOLUMN_EDITABLE_SYSTEM_KEYS = new Set(['current-workflow', 'dispose-automatically']);
 const INTERCOLUMN_OTHER_TYPES = new Set<ColumnType>([
   'text', 'long_text', 'number', 'choice', 'date', 'datetime', 'time',
   'boolean', 'email', 'url', 'intercolumn_controller',
@@ -347,7 +345,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       <div className="field"><label>Type</label><select className="select" value={type} onChange={e=>changeType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
       <div className="field column-description-field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={columnDescription} onChange={e=>setColumnDescription(e.target.value)} placeholder="Explain what this column is for or what users should enter. An (i) icon appears anywhere the column is shown." /></div>
       {(type === 'choice' || type === 'multi_choice') && <div className="field column-choice-options"><label>Choices (one per line)</label><textarea className="textarea compact-textarea" value={choices} onChange={e=>setChoices(e.target.value)}/></div>}
-      {type === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={groupRole} onChange={e=>{ setGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab Technician</option><option value="customer_service">Customer Service</option></select></div>}
+      {type === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={groupRole} onChange={e=>{ setGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
@@ -469,13 +467,9 @@ export default function TableSettings() {
           </form>
         </section>
         <section className="panel">
-          <div className="panel-header">Statuses</div>
+          <div className="panel-header">Current Workflow</div>
           <div className="panel-body stack">
-            <div className="muted result-meta">Status is a required built-in descriptive field with the same fixed values on every ticket table. Workflow routing is controlled separately by Current Workflow.</div>
-            <div className="status-settings-list">
-              {STATUS_VALUES.map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge">Status</span></div>)}
-            </div>
-            <div className="muted result-meta">Current Workflow is a separate required built-in field. These workflow values are fixed because the system uses them for routing:</div>
+            <div className="muted result-meta">Current Workflow is the required built-in routing field. These values are fixed because the system uses them for CS Follow-Up, disposal, shipping, back-to-testing, and customer tracking:</div>
             <div className="status-settings-list">
               {CURRENT_WORKFLOWS.map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge blue">Workflow</span></div>)}
             </div>
@@ -491,7 +485,7 @@ export default function TableSettings() {
             <div className="field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={colDescription} onChange={e=>setColDescription(e.target.value)} placeholder="Explain what this column means. Leave blank to hide the (i) icon." /></div>
             <div className="field"><label>Column type</label><select className="select" value={colType} onChange={e=>changeNewColumnType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
             {(colType === 'choice' || colType === 'multi_choice') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
-            {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab Technician</option><option value="customer_service">Customer Service</option></select></div>}
+            {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />

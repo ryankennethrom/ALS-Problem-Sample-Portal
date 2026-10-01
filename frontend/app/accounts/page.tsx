@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 type Account = {
   id: number;
   username: string;
+  email: string;
   first_name: string;
   last_name: string;
   name: string;
@@ -167,7 +168,7 @@ export default function AccountsPage() {
     <div className="page-heading-row">
       <div>
         <h1 className="page-heading">Staff Accounts</h1>
-        <div className="muted">Administrators can create accounts, grant administrator access, reset passwords, and delete other users. Email addresses will be added later through Microsoft Entra.</div>
+        <div className="muted">Administrators can create accounts, grant administrator access, reset passwords, and delete other users. Each staff member must set an @alsglobal.com email before using the tracker or being mentioned.</div>
       </div>
     </div>
 
@@ -208,7 +209,7 @@ export default function AccountsPage() {
       <div className="panel-body">
         {loading ? <div className="muted">Loading accounts…</div> : accounts.length === 0 ? <div className="muted">No accounts found.</div> : <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th>Name</th><th>Username</th><th>Workflow Role</th><th>Administrator</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Username</th><th>ALS Email</th><th>Workflow Role</th><th>Administrator</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>{accounts.map(account => {
               const isSelf = account.id === currentUserId;
               const adminBusy = busyAction === `admin-${account.id}`;
@@ -218,6 +219,7 @@ export default function AccountsPage() {
               return <tr key={account.id}>
                 <td>{account.name}{isSelf && <div className="muted result-meta">Your account</div>}</td>
                 <td>{account.username}</td>
+                <td>{account.email || <span className="muted">Not set</span>}</td>
                 <td>{account.role_label || 'Not selected'}</td>
                 <td>{account.is_admin ? 'Yes' : 'No'}</td>
                 <td>{account.is_active ? 'Active' : 'Disabled'}</td>

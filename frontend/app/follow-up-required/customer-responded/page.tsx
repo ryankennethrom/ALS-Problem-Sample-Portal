@@ -6,8 +6,7 @@ import { api } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
 
 type Ticket = {
-  id: string; problem_number: number; table_name: string; status: string;
-  current_workflow: string; customer_response: string; responded_at: string; created_at: string;
+  id: string; problem_number: number; table_name: string; current_workflow: string; customer_response: string; responded_at: string; created_at: string;
 };
 type TicketsResult = { count: number; page: number; page_size: number; results: Ticket[] };
 
@@ -63,7 +62,7 @@ export default function CustomerRespondedPage() {
           </select>
         </div>
         <div className="field search-wide"><label htmlFor="responded-search">Search tickets</label>
-          <input id="responded-search" className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder="Ticket number, table, status, workflow…" />
+          <input id="responded-search" className="input" value={search} onChange={event => setSearch(event.target.value)} placeholder="Ticket number, table, workflow…" />
         </div>
         <div className="field"><label aria-hidden="true">&nbsp;</label><button className="button" type="submit">Search</button></div>
       </form>
@@ -74,15 +73,14 @@ export default function CustomerRespondedPage() {
         <span className="muted" style={{marginLeft: 8}}>({loading && !data ? '…' : data?.count ?? 0} ticket{data?.count === 1 ? '' : 's'})</span>
       </div>
       <div className="data-table-wrap"><table className="data-table">
-        <thead><tr><th className="row-action-column" aria-label="Open ticket"></th><th>Ticket ID</th><th>Table</th><th>Status</th><th>Current Workflow</th><th>Customer Response</th><th>Responded At</th><th>Date Created</th></tr></thead>
+        <thead><tr><th className="row-action-column" aria-label="Open ticket"></th><th>Ticket ID</th><th>Table</th><th>Current Workflow</th><th>Customer Response</th><th>Responded At</th><th>Date Created</th></tr></thead>
         <tbody>
-          {loading && <tr><td colSpan={8} className="empty-table">Loading tickets…</td></tr>}
-          {!loading && !error && data?.results.length === 0 && <tr><td colSpan={8} className="empty-table">No customer responses found.</td></tr>}
+          {loading && <tr><td colSpan={7} className="empty-table">Loading tickets…</td></tr>}
+          {!loading && !error && data?.results.length === 0 && <tr><td colSpan={7} className="empty-table">No customer responses found.</td></tr>}
           {!loading && data?.results.map(ticket => <tr key={ticket.id}>
             <td className="row-action-column"><Link className="row-open-link" href={`/problems/${ticket.id}`} title="Open ticket">›</Link></td>
             <td><Link className="table-link" href={`/problems/${ticket.id}`}>Ticket #{ticket.problem_number}</Link></td>
-            <td>{ticket.table_name}</td><td><span className="badge">{ticket.status || '—'}</span></td>
-            <td><span className="badge">{ticket.current_workflow || '—'}</span></td>
+            <td>{ticket.table_name}</td><td><span className="badge">{ticket.current_workflow || '—'}</span></td>
             <td>{ticket.customer_response}</td><td>{dateTime(ticket.responded_at)}</td><td>{dateTime(ticket.created_at)}</td>
           </tr>)}
         </tbody>

@@ -171,7 +171,7 @@ For a larger production dataset, the search service can later switch to PostgreS
 
 The temporary MVP uses administrator-created username/password accounts. An administrator creates an account from **Staff Accounts** by entering First Name and Last Name. The server derives a lowercase username such as `jane.smith` (adding a numeric suffix for duplicates), generates a cryptographically random password, and stores only Django's password hash. Email is not required. The generated password is returned only in the account-creation response so the administrator can hand it to the user.
 
-Administrator permission is separate from the existing **Lab Technician** / **Customer Service** workflow role. Regular users still choose one of those workflow roles after first login. From **Staff Accounts**, an administrator can grant or remove administrator access for another user, reset another user's password to a newly generated random password, and delete another user. Password reset revokes that user's existing tracker sessions. These account-management actions cannot be used on the administrator's own account from the Staff Accounts page. Every authenticated user, including administrators, can change their own password from **My Account** by entering the current password and a new password of at least 12 characters. The new password is saved with Django's password hashing; other active tracker sessions for that account are revoked while the session performing the change remains signed in. The initial administrator is bootstrapped with `python manage.py create_tracker_admin --first-name <First> --last-name <Last>`. Microsoft Entra ID can later replace this temporary login layer and add staff email identities without changing the problem-sample domain model.
+Administrator permission is separate from the existing **Lab** / **Customer Service** workflow role. Regular users still choose one of those workflow roles after first login. From **Staff Accounts**, an administrator can grant or remove administrator access for another user, reset another user's password to a newly generated random password, and delete another user. Password reset revokes that user's existing tracker sessions. These account-management actions cannot be used on the administrator's own account from the Staff Accounts page. Every authenticated user, including administrators, can change their own password from **My Account** by entering the current password and a new password of at least 12 characters. The new password is saved with Django's password hashing; other active tracker sessions for that account are revoked while the session performing the change remains signed in. The initial administrator is bootstrapped with `python manage.py create_tracker_admin --first-name <First> --last-name <Last>`. Microsoft Entra ID can later replace this temporary login layer and add staff email identities without changing the problem-sample domain model.
 
 ## Railway deployment
 
@@ -184,7 +184,7 @@ New Problem Sample Tables start with only the protected auto-incrementing **Prob
 
 ## User roles
 
-Regular accounts choose **Lab Technician** or **Customer Service** after their first username/password login. This remains workflow/profile metadata. **Administrator** is a separate security permission used for account creation and is not selectable from My Account.
+Regular accounts choose **Lab** or **Customer Service** after their first username/password login. This remains workflow/profile metadata. **Administrator** is a separate security permission used for account creation and is not selectable from My Account.
 
 
 ### Customer-service email template
@@ -308,7 +308,7 @@ The **Containers** page shows every container and the expiration state of its sa
 The sidebar has a direct **To be shipped** tab at `/shipping/to-be-shipped`. This page shows only problem samples whose **Current Workflow** is **To be shipped back to client**. Users can search the queue, select one or many rows (including Select all visible), and choose **Ship Selected**. The backend validates the selection transactionally and changes every selected row to **Shipped back to client**, updates Recent Row Modifier fields, applies the existing tracking-link status-transition timing, and writes a History entry for each row. Completed **Shipped back to client** rows disappear from the queue and are removed from their containers.
 
 ## Current Workflow, Status, and container disposal
-Every problem sample table has three required built-in controls: **Status**, **Current Workflow**, and **Dispose Automatically**. **Status** is descriptive and has six fixed built-in values: **NEW**, **IN PROGRESS**, **ON HOLD**, **SHIPPED BACK TO CLIENT**, **DISPOSED**, and **COMPLETED**. **Current Workflow** is the authoritative system-routing field and has immutable values **CS Follow-Up**, **Waiting For Customer**, **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, and **Shipped back to client**. **Dispose Automatically** is fixed to **Yes** or **No**. New rows default to **Current Workflow = CS Follow-Up** and **Dispose Automatically = No**. The first confirmed customer email turns **Dispose Automatically** to **Yes** without changing Status or Current Workflow. When that period expires, **Current Workflow** is automatically persisted as **To be Disposed** and **Dispose Automatically** is turned back to **No**; Status is left unchanged and History records the workflow change.
+Every problem sample table has three required built-in controls: **Status**, **Current Workflow**, and **Dispose Automatically**. **Status** is descriptive and has six fixed built-in values: **NEW**, **IN PROGRESS**, **ON HOLD**, **SHIPPED BACK TO CLIENT**, **DISPOSED**, and **COMPLETED**. **Current Workflow** is the authoritative system-routing field and has immutable values **CS Follow-Up**, **Waiting for Customer Response**, **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, and **Shipped back to client**. **Dispose Automatically** is fixed to **Yes** or **No**. New rows default to **Current Workflow = CS Follow-Up** and **Dispose Automatically = No**. The first confirmed customer email turns **Dispose Automatically** to **Yes** without changing Status or Current Workflow. When that period expires, **Current Workflow** is automatically persisted as **To be Disposed** and **Dispose Automatically** is turned back to **No**; Status is left unchanged and History records the workflow change.
 
 Migration `0051_current_workflow` adds the indexed Current Workflow mirror and required built-in column. Existing rows that were in one of the old protected workflow Status values retain that routing value as Current Workflow; their Status is reset to the table descriptive default. Existing rows with a custom/non-workflow Status keep that Status and migrate to Current Workflow = CS Follow-Up.
 
@@ -461,7 +461,7 @@ The CS Follow-Up workflow exposes a Quick Filters section for the currently sele
 - Every problem-sample table has read-only built-in Tracking Link and Tracking Link Expiry columns.
 
 ### Required role selection for new accounts
-New staff accounts with no role are blocked by a non-dismissible role-selection modal until they explicitly choose Lab Technician or Customer Service. The modal has no close/cancel path, does not preselect a role, and saves through the existing `/api/auth/me/` role update endpoint. Existing accounts with a role are unaffected.
+New staff accounts with no role are blocked by a non-dismissible role-selection modal until they explicitly choose Lab or Customer Service. The modal has no close/cancel path, does not preselect a role, and saves through the existing `/api/auth/me/` role update endpoint. Existing accounts with a role are unaffected.
 
 ### Migration branch merge
 
@@ -487,7 +487,7 @@ Pages/components that use `useSearchParams()` are rendered below React `Suspense
 
 ## Current temporary staff authentication (supersedes earlier login-link notes)
 
-Staff email magic-link/Brevo login is disabled. The current endpoints are `POST /api/auth/login/` for username/password sign-in and administrator-only `GET/POST /api/auth/accounts/` for account listing/creation. Accounts require First Name, Last Name, and a server-derived username; no email address is required. `UserProfile.is_admin` is the account-management permission. Existing Lab Technician/Customer Service values remain separate workflow roles.
+Staff email magic-link/Brevo login is disabled. The current endpoints are `POST /api/auth/login/` for username/password sign-in and administrator-only `GET/POST /api/auth/accounts/` for account listing/creation. Accounts require First Name, Last Name, and a server-derived username; no email address is required. `UserProfile.is_admin` is the account-management permission. Existing Lab/Customer Service values remain separate workflow roles.
 
 ## Customer Export administration
 
@@ -509,7 +509,7 @@ Administrators have an **Admin > Email Templates** page. The **Send Tracking Lin
 
 Creating a ticket does not create an active tracking link. On the ticket detail page, **Send Tracking Link** prepares a secure URL, opens the tracking email in the staff member's email app, and activates the URL only after **I sent the email** is confirmed. Resending an existing link reuses its token. The first confirmed tracking-link email in CS Follow-Up may activate Dispose Automatically according to the existing workflow; general **Email Customer** messages do not change that field, the tracking link, or the customer-notified timestamp.
 
-**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. An open-workflow ticket with no active link, including one whose link was revoked, appears in **Tracking Not Sent**. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
+**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. A ticket appears in **Tracking Not Sent** only when its Current Workflow is **CS Follow-Up** and it has no active persisted tracking link. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
 
 
 ### Client Email clipboard controls
@@ -523,10 +523,10 @@ Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Wor
 
 ## Dashboard
 
-The dashboard is grouped into **Action Required** (Tracking Not Sent, New Customer Response, To be shipped, To be back to testing, and Old Tickets) and **Analytics** (all remaining metrics, date-range cards, and charts).
-The Dashboard is tracker-wide across all problem-sample tables. "Opened" means the problem sample row's `created_at` timestamp. It shows rolling counts for the last 24 hours, 7 days, 30 days, 183 days, and 365 days plus an inclusive custom date range. The graph supports week, month, 6 months, year, and custom ranges and uses daily, weekly, or monthly buckets as appropriate.
+The dashboard is grouped into **Action Required** (Tracking Not Sent, New Tracking Link Response, To be shipped, To be back to testing, and Old Tickets) and **Analytics** (all remaining metrics, date-range cards, and charts).
+The Dashboard is tracker-wide across all problem-sample tables. "Opened" means the problem sample row's `created_at` timestamp. It shows rolling counts for the last 24 hours, 7 days, 30 days, 183 days, and 365 days plus an inclusive custom date range. The graph supports week, month, 6 months, year, and custom ranges and uses daily, weekly, or monthly buckets as appropriate. Each opened-ticket count card includes **See samples >**, which opens a paginated cross-table list using the same rolling or custom date window and links each result directly to its ticket.
 
-**Tracking Not Sent** counts tickets across all tables whose Current Workflow is not a terminating or terminal workflow and which have no persisted `ProblemTrackingLink` row. Pending email tokens do not count as sent links. The Dashboard card links to the CS Follow-Up > Tracking Not Sent subtab; its selected-table list applies the same database filter before search and quick filters. The former NEW shortcut redirects there.
+**Tracking Not Sent** counts tickets across all tables whose Current Workflow is exactly **CS Follow-Up** and which have no persisted `ProblemTrackingLink` row. Pending email tokens do not count as sent links. The Dashboard card links to the Customer Service > Tracking Not Sent page; its selected-table list applies the same database filter before search and quick filters. The former NEW shortcut redirects there.
 
 ## Finished ticket deletion
 
@@ -551,8 +551,37 @@ Staff ticket images are no longer rendered from raw Django `/media/` URLs. Ticke
 
 Uploads still require durable file storage. `MEDIA_ROOT` now uses, in order: an explicit `MEDIA_ROOT` environment variable, Railway's automatically provided `RAILWAY_VOLUME_MOUNT_PATH`, or the local `backend/media` directory. In Railway, attach a persistent Volume to the Django backend (for example at `/app/media`) before relying on uploaded ticket images across deployments. Database rows only store file paths; they do not preserve the image bytes if ephemeral storage is replaced.
 
+### Ticket image compression
+
+All newly uploaded ticket images are normalized by the Django backend before storage. JPEG, PNG, GIF, and WebP inputs are auto-oriented from EXIF, camera/EXIF/ICC/XMP metadata is discarded, animated inputs are reduced to their first frame, and the stored file is WebP. Oversized images are reduced from a maximum 1600-pixel long edge only as needed, with adaptive WebP quality/resolution steps targeting **450 KiB or less per stored image**. The original upload name remains metadata for staff display, while the stored object uses a `.webp` filename. Existing images are not recompressed retroactively.
+
 ### Staff image transport
 Staff ticket API responses intentionally do not expose Django `ImageField` storage URLs. Ticket Details and Image Search load image bytes only through the authenticated `/api/problem-samples/<ticket-id>/images/<image-id>/content/` endpoint (proxied by the frontend as `/backend-api/...`). This prevents mixed-content requests such as `http://.../media/...` when the frontend is served over HTTPS.
 
 ### Dispose by Date
 The Dispose Containers area includes a **Dispose by Date** tab. Staff select a cutoff date; a non-empty, non-disposed container is eligible only when every ticket assigned to it was created before that date. Tickets created on the cutoff date itself do not qualify. Disposing by date re-validates eligibility on the backend, changes any remaining ticket workflows in the container to `Disposed`, records the cutoff in ticket history, and supports the existing Undo Disposal workflow.
+
+### Dashboard image storage
+
+The Dashboard's Analytics section shows actual ticket-image storage usage, image
+count and average size, media-volume free space, an estimated remaining image
+count, and storage-integrity warnings for missing/orphaned image files. The
+backend endpoint is `/api/dashboard/storage/`. No database migration is required
+for this feature.
+
+## Staff @mentions
+
+Ticket follow-up comments support `@username`, `@Lab`, and `@CustomerService` mentions. Typing `@` in the comment editor suggests active staff accounts and the two role groups. Saving a comment creates an unread mention for each resolved eligible user. Staff can open **Mentions** from the sidebar, mark mentions read, and jump directly to the referenced ticket. Mentions are linked to the ticket/comment and are removed automatically if that ticket/comment is deleted.
+
+## Required ALS emails and @mention email confirmation
+
+- Every staff account must have a valid `@alsglobal.com` email before the authenticated tracker can be used. Accounts created by administrators still start without an email; the user is blocked by a required-email prompt after login until they save one.
+- ALS emails are stored in Django's built-in `User.email` field. Duplicate addresses are rejected case-insensitively by the account API.
+- Staff without a valid ALS email are excluded from @mention suggestions and cannot be mentioned by manually typing their handle.
+- Follow-up comments containing valid @mentions use a two-step commit. `prepare-comment-mentions` validates the current recipients and builds one email for the entire follow-up, addressed to every resolved recipient, with the complete message and a direct `/problems/<ticket-id>#follow-ups` link. `@Lab` creates in-app mentions for eligible Lab users while routing the outbound email through `NA.EDM@alsglobal.com`; `@CustomerService` addresses the same email to all eligible Customer Service users. It does not write the comment or mention records.
+- The preview returns a short-lived signed confirmation tied to the ticket, author, exact comment text, recipient user IDs and current recipient emails. The final comment POST is rejected when a mention exists unless that confirmation is supplied and still matches.
+- The frontend opens the user's email application with one combined message addressed to all resolved recipients and requires one explicit `I sent this email` confirmation before it performs the final comment POST. Cancel leaves the follow-up unsaved.
+- Saved `ProblemMention` rows record the recipient email and the time the sender confirmed the email was sent. In-app unread mention notifications continue to work as before.
+
+### Dashboard table-scoped opened-ticket analytics
+The Dashboard's "opened in the last…" analytics use a ticket-table dropdown. The selected table scopes the Last day/Week/Month/6 Months/Year/Custom counts and the opened-over-time chart. Each See all link opens that same table with an `opened_range` date filter, which is also preserved by table search, Advanced Search, and Image Search. Action Required counts remain cross-table operational totals.

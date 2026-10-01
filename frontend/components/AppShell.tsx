@@ -4,12 +4,14 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api, clearToken, getToken } from '@/lib/api';
+import { accountSetupUrl, currentReturnPath, loginUrl, requestedReturnPath } from '@/lib/authRedirect';
 import { ProblemTable } from '@/lib/problemTables';
 import RequiredRoleModal from '@/components/RequiredRoleModal';
+import RequiredEmailModal from '@/components/RequiredEmailModal';
 import { CurrentUserContext } from '@/components/CurrentUserContext';
 
-type User = { id: number; username: string; email: string; first_name: string; last_name: string; name: string; role: string; role_label: string; needs_role: boolean; is_admin: boolean };
-type IconName = 'dashboard' | 'samples' | 'customers' | 'logout' | 'table' | 'settings' | 'account' | 'chevron' | 'container' | 'shipping' | 'flask' | 'clock' | 'create' | 'mail';
+type User = { id: number; username: string; email: string; first_name: string; last_name: string; name: string; role: string; role_label: string; needs_role: boolean; needs_email: boolean; is_admin: boolean };
+type IconName = 'dashboard' | 'samples' | 'customers' | 'logout' | 'table' | 'settings' | 'account' | 'chevron' | 'container' | 'shipping' | 'flask' | 'clock' | 'create' | 'mail' | 'mention';
 
 function Icon({ name }: { name: IconName }) {
   const common = { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -23,6 +25,7 @@ function Icon({ name }: { name: IconName }) {
   if (name === 'flask') return <svg {...common}><path d="M9 3h6"/><path d="M10 3v6l-5 9a2 2 0 0 0 1.74 3h10.52A2 2 0 0 0 19 18l-5-9V3"/><path d="M7.5 15h9"/></svg>;
   if (name === 'clock') return <svg {...common}><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>;
   if (name === 'mail') return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>;
+  if (name === 'mention') return <svg {...common}><circle cx="12" cy="12" r="9"/><path d="M15.5 9.5v3a3.5 3.5 0 1 1-1-2.45v2.45a2 2 0 0 0 4 0V12"/></svg>;
   if (name === 'create') return <svg {...common}><path d="M12 5v14"/><path d="M5 12h14"/><rect x="3" y="3" width="18" height="18" rx="3"/></svg>;
   if (name === 'settings') return <svg {...common}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.6v-.1a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3V9.6h.1A1.7 1.7 0 0 0 4.65 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.5 4.65a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.16.37.39.71.7 1 .3.29.69.43 1.1.4h.1v4h-.1c-.68-.01-1.29.39-1.55 1z"/></svg>;
   if (name === 'chevron') return <svg {...common}><path d="M9 18l6-6-6-6"/></svg>;
@@ -36,15 +39,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [problemSamplesOpen, setProblemSamplesOpen] = useState(pathname === '/problem-samples');
-  const [followUpOpen, setFollowUpOpen] = useState(pathname.startsWith('/follow-up-required'));
   const [disposalOpen, setDisposalOpen] = useState(false);
+  const [mentionUnread, setMentionUnread] = useState(0);
 
   useEffect(() => {
     if (pathname.startsWith('/tables') && user && !user.is_admin) router.replace('/dashboard');
   }, [pathname, user, router]);
 
   useEffect(() => {
-    if (pathname.startsWith('/follow-up-required')) setFollowUpOpen(true);
     if (pathname === '/problem-samples') setProblemSamplesOpen(true);
   }, [pathname]);
 
@@ -52,19 +54,42 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const publicRoute = pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/');
     if (publicRoute) return;
     if (!getToken()) {
-      router.replace('/login');
+      router.replace(loginUrl(currentReturnPath()));
       return;
     }
     api('/auth/me/').then((u:User) => {
       setUser(u);
-      if (u.needs_role && pathname !== '/account') router.push('/account');
+      if (u.needs_email) return;
+      if (u.needs_role && pathname !== '/account') router.push(accountSetupUrl(currentReturnPath()));
+      api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
     }).catch(() => {
       clearToken();
       setUser(null);
-      router.replace('/login');
+      router.replace(loginUrl(currentReturnPath()));
     });
-    api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
   }, [pathname, router]);
+
+  useEffect(() => {
+    if (!user || user.needs_email || !getToken()) return;
+    let cancelled = false;
+    async function refreshMentions() {
+      try {
+        const result = await api('/problem-samples/mentions/?summary=1');
+        if (!cancelled) setMentionUnread(Number(result?.unread_count || 0));
+      } catch {
+        if (!cancelled) setMentionUnread(0);
+      }
+    }
+    refreshMentions();
+    const timer = window.setInterval(refreshMentions, 30000);
+    const onUpdated = () => refreshMentions();
+    window.addEventListener('mentions-updated', onUpdated);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('mentions-updated', onUpdated);
+    };
+  }, [user?.id, user?.needs_email, pathname]);
 
   if (pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/')) return <>{children}</>;
 
@@ -81,33 +106,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/dashboard" className={`side-link ${pathname.startsWith('/dashboard') ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="dashboard"/></span><span className="side-label">Dashboard</span>
         </Link>
+        <Link href="/mentions" className={`side-link ${pathname === '/mentions' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="mention"/></span><span className="side-label">Mentions</span>{mentionUnread > 0 && <span className="side-count-badge" aria-label={`${mentionUnread} unread mentions`}>{mentionUnread > 99 ? '99+' : mentionUnread}</span>}
+        </Link>
 
-        <div className="side-section-label">Workflows</div>
+        <div className="side-section-label">Customer Service</div>
+
+        <Link href="/follow-up-required/tracking-not-sent" className={`side-link ${pathname === '/follow-up-required/tracking-not-sent' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="clock"/></span><span className="side-label">Tracking Not Sent</span>
+        </Link>
+        <Link href="/follow-up-required/customer-responded" className={`side-link ${pathname === '/follow-up-required/customer-responded' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="mail"/></span><span className="side-label">New Tracking Link Response</span>
+        </Link>
+
+        <div className="side-section-label">Lab</div>
 
         <Link href="/create-problem-sample" className={`side-link ${pathname === '/create-problem-sample' || pathname === '/problems/new' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="create"/></span><span className="side-label">Create Ticket</span>
         </Link>
-
-        <div className="side-group">
-          <div className="side-group-header">
-            <Link href="/follow-up-required" className={`side-link side-group-toggle ${pathname.startsWith('/follow-up-required') ? 'active' : ''}`}>
-              <span className="side-icon"><Icon name="clock"/></span><span className="side-label">CS Follow-Up</span>
-            </Link>
-            <button type="button" className={`side-group-expand ${followUpOpen ? 'open' : ''}`}
-              aria-label={`${followUpOpen ? 'Collapse' : 'Expand'} CS Follow-Up views`}
-              aria-expanded={followUpOpen} onClick={() => setFollowUpOpen(v => !v)}>
-              <Icon name="chevron"/>
-            </button>
-          </div>
-          {followUpOpen && <div className="side-subnav container-side-subnav">
-            <Link href="/follow-up-required/tracking-not-sent" className={`side-link table-side-link ${pathname === '/follow-up-required/tracking-not-sent' ? 'active' : ''}`}>
-              <span className="side-icon"><Icon name="samples"/></span><span className="side-label">Tracking Not Sent</span>
-            </Link>
-            <Link href="/follow-up-required/customer-responded" className={`side-link table-side-link ${pathname === '/follow-up-required/customer-responded' ? 'active' : ''}`}>
-              <span className="side-icon"><Icon name="mail"/></span><span className="side-label">New Customer Response</span>
-            </Link>
-          </div>}
-        </div>
 
         <div className="side-group">
           <button
@@ -198,11 +214,25 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     </aside>
     <div className="main-column"><header className="admin-topbar"><button className="menu-toggle" type="button" aria-label="Toggle sidebar" onClick={()=>setCollapsed(v=>!v)}><span></span><span></span><span></span></button><div className="topbar-title">Edmonton Ticket Tracker</div></header><main className="page-content">
       <CurrentUserContext.Provider value={user}>
-        {pathname.startsWith('/tables') && !user?.is_admin
-          ? <div className="muted">{user ? 'Administrator access is required.' : 'Checking access…'}</div>
-          : children}
+        {!user
+          ? <div className="muted">Checking session…</div>
+          : user.needs_email
+            ? <div className="muted">Set your ALS email to continue.</div>
+            : pathname.startsWith('/tables') && !user.is_admin
+              ? <div className="muted">Administrator access is required.</div>
+              : children}
       </CurrentUserContext.Provider>
     </main></div>
-    {user?.needs_role && <RequiredRoleModal user={user} onSaved={setUser} />}
+    {user?.needs_email && <RequiredEmailModal user={user} onSaved={updated => {
+      setUser(updated);
+      if (!updated.needs_email) api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
+      const destination = requestedReturnPath();
+      if (!updated.needs_email && !updated.needs_role && pathname === '/account' && destination) window.location.replace(destination);
+    }} onLogout={logout} />}
+    {user && !user.needs_email && user.needs_role && <RequiredRoleModal user={user} onSaved={updated => {
+      setUser(updated as User);
+      const destination = requestedReturnPath();
+      if (!updated.needs_role && pathname === '/account' && destination) window.location.replace(destination);
+    }} />}
   </div>;
 }

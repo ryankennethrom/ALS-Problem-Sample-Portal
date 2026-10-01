@@ -44,6 +44,9 @@ function HomeContent() {
   const currentUser = useCurrentUser();
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table') || '';
+  const openedRange = searchParams.get('opened_range') || '';
+  const openedStart = searchParams.get('start_date') || '';
+  const openedEnd = searchParams.get('end_date') || '';
   const [q, setQ] = useState('');
   const [items, setItems] = useState<Problem[]>([]);
   const [tables, setTables] = useState<ProblemTable[]>([]);
@@ -52,6 +55,27 @@ function HomeContent() {
   const [quickFiltersByTable, setQuickFiltersByTable] = useState<Record<string, QuickFilterValues>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const openedFilterParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (openedRange) params.set('opened_range', openedRange);
+    if (openedRange === 'custom' && openedStart && openedEnd) {
+      params.set('start_date', openedStart);
+      params.set('end_date', openedEnd);
+    }
+    return params;
+  }, [openedRange, openedStart, openedEnd]);
+
+  const openedFilterLabel = useMemo(() => {
+    if (!openedRange) return '';
+    if (openedRange === 'day') return 'Opened in the past 24 hours';
+    if (openedRange === 'week') return 'Opened in the past 7 days';
+    if (openedRange === 'month') return 'Opened in the past 30 days';
+    if (openedRange === 'six_months') return 'Opened in the past 183 days';
+    if (openedRange === 'year') return 'Opened in the past 365 days';
+    if (openedRange === 'custom' && openedStart && openedEnd) return `Opened ${openedStart} → ${openedEnd}`;
+    return '';
+  }, [openedRange, openedStart, openedEnd]);
 
   useEffect(() => {
     api('/problem-tables/').then(data => {
@@ -74,7 +98,8 @@ function HomeContent() {
           .map(([field_key, value]) => ({ field_key, value }));
         let d;
         if (activeAdvanced?.filters.length || quickFilters.length) {
-          d = await api('/problem-samples/advanced-search/', {
+          const openedQuery = openedFilterParams.toString();
+          d = await api(`/problem-samples/advanced-search/${openedQuery ? `?${openedQuery}` : ''}`, {
             method: 'POST',
             body: JSON.stringify({
               table: tableId,
@@ -85,7 +110,9 @@ function HomeContent() {
             }),
           });
         } else {
-          const suffix = `table=${encodeURIComponent(tableId)}`;
+          const params = new URLSearchParams(openedFilterParams);
+          params.set('table', tableId);
+          const suffix = params.toString();
           const path = q.trim() ? `/problem-samples/search/?q=${encodeURIComponent(q)}&${suffix}` : `/problem-samples/?${suffix}`;
           d = await api(path);
         }
@@ -94,7 +121,7 @@ function HomeContent() {
       finally { setLoading(false); }
     }, 250);
     return () => clearTimeout(t);
-  }, [q, tableId, advanced, quickFiltersByTable]);
+  }, [q, tableId, advanced, quickFiltersByTable, openedFilterParams]);
 
   const selectedTable = useMemo(() => tables.find(t => t.id === tableId), [tables, tableId]);
   const activeAdvancedCount = advanced?.tableId === tableId ? advanced.filters.length : 0;
@@ -112,6 +139,7 @@ function HomeContent() {
     if (!tableId) return '/problem-samples/image-search';
     const params = new URLSearchParams();
     params.set('table', tableId);
+    openedFilterParams.forEach((value, key) => params.set(key, value));
     if (q.trim()) params.set('q', q.trim());
 
     const activeAdvanced = advanced?.tableId === tableId ? advanced : null;
@@ -126,7 +154,7 @@ function HomeContent() {
     if (quickFilters.length) params.set('quick_filters', JSON.stringify(quickFilters));
 
     return `/problem-samples/image-search?${params.toString()}`;
-  }, [tableId, q, advanced, currentQuickFilters]);
+  }, [tableId, q, advanced, currentQuickFilters, openedFilterParams]);
 
   function setQuickFilter(fieldKey: string, value: string) {
     if (!tableId) return;
@@ -166,6 +194,10 @@ function HomeContent() {
         />}
         {selectedTable && <Link className="button secondary image-search-button" href={imageSearchHref}>Image Search ({loading ? '…' : imageCount})</Link>}
       </div>
+      {openedFilterLabel && <div className="active-filter-summary">
+        <span className="badge blue">{openedFilterLabel}</span>
+        <Link className="filter-clear-link" href={tableId ? `/problem-samples?table=${encodeURIComponent(tableId)}` : '/problem-samples'}>Clear dashboard date filter</Link>
+      </div>}
       {activeAdvancedCount > 0 && <div className="active-filter-summary">
         <span className="badge blue">Advanced search active: {activeAdvancedCount} condition{activeAdvancedCount === 1 ? '' : 's'}</span>
         <button className="filter-clear-link" type="button" onClick={() => setAdvanced(null)}>Clear advanced search</button>

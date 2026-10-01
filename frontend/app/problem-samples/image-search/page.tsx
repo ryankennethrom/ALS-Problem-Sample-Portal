@@ -56,8 +56,20 @@ function ImageSearchContent() {
   const match: MatchMode = searchParams.get('match') === 'any' ? 'any' : 'all';
   const rawFilters = searchParams.get('filters');
   const rawQuickFilters = searchParams.get('quick_filters');
+  const openedRange = searchParams.get('opened_range') || '';
+  const openedStart = searchParams.get('start_date') || '';
+  const openedEnd = searchParams.get('end_date') || '';
   const filters = useMemo(() => parseArrayParam<AdvancedFilter>(rawFilters), [rawFilters]);
   const quickFilters = useMemo(() => parseArrayParam<QuickFilter>(rawQuickFilters), [rawQuickFilters]);
+  const openedFilterParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (openedRange) params.set('opened_range', openedRange);
+    if (openedRange === 'custom' && openedStart && openedEnd) {
+      params.set('start_date', openedStart);
+      params.set('end_date', openedEnd);
+    }
+    return params;
+  }, [openedRange, openedStart, openedEnd]);
 
   const [table, setTable] = useState<ProblemTable | null>(null);
   const [items, setItems] = useState<Problem[]>([]);
@@ -81,7 +93,8 @@ function ImageSearchContent() {
           api(`/problem-tables/${encodeURIComponent(tableId)}/`),
           (async () => {
             if (filters.length || quickFilters.length) {
-              return api('/problem-samples/advanced-search/', {
+              const openedQuery = openedFilterParams.toString();
+              return api(`/problem-samples/advanced-search/${openedQuery ? `?${openedQuery}` : ''}`, {
                 method: 'POST',
                 body: JSON.stringify({
                   table: tableId,
@@ -92,7 +105,9 @@ function ImageSearchContent() {
                 }),
               });
             }
-            const tableSuffix = `table=${encodeURIComponent(tableId)}`;
+            const params = new URLSearchParams(openedFilterParams);
+            params.set('table', tableId);
+            const tableSuffix = params.toString();
             return q.trim()
               ? api(`/problem-samples/search/?q=${encodeURIComponent(q.trim())}&${tableSuffix}`)
               : api(`/problem-samples/?${tableSuffix}`);
@@ -109,7 +124,7 @@ function ImageSearchContent() {
     })();
 
     return () => { cancelled = true; };
-  }, [tableId, q, match, filters, quickFilters]);
+  }, [tableId, q, match, filters, quickFilters, openedFilterParams]);
 
   useEffect(() => {
     if (!fullScreenImage) return;
@@ -135,10 +150,19 @@ function ImageSearchContent() {
   ), [items]);
 
   const queryParts = [
+    openedRange === 'day' ? 'Opened in the past 24 hours' :
+      openedRange === 'week' ? 'Opened in the past 7 days' :
+      openedRange === 'month' ? 'Opened in the past 30 days' :
+      openedRange === 'six_months' ? 'Opened in the past 183 days' :
+      openedRange === 'year' ? 'Opened in the past 365 days' :
+      openedRange === 'custom' && openedStart && openedEnd ? `Opened ${openedStart} → ${openedEnd}` : '',
     q.trim() ? `Search: “${q.trim()}”` : '',
     filters.length ? `${filters.length} advanced condition${filters.length === 1 ? '' : 's'} (${match === 'all' ? 'match all' : 'match any'})` : '',
     quickFilters.length ? `${quickFilters.length} quick filter${quickFilters.length === 1 ? '' : 's'}` : '',
   ].filter(Boolean);
+
+  const backParams = new URLSearchParams(openedFilterParams);
+  if (tableId) backParams.set('table', tableId);
 
   return <div>
     <div className="page-toolbar image-search-page-toolbar">
@@ -148,7 +172,7 @@ function ImageSearchContent() {
         <div className="muted table-description">Images from the tickets matched by the table query you opened this gallery from.</div>
       </div>
       <div className="toolbar-actions">
-        <Link className="button secondary" href={tableId ? `/problem-samples?table=${encodeURIComponent(tableId)}` : '/problem-samples'}>← Back to table</Link>
+        <Link className="button secondary" href={tableId ? `/problem-samples?${backParams.toString()}` : '/problem-samples'}>← Back to table</Link>
       </div>
     </div>
 

@@ -14,12 +14,14 @@ type User = {
   role: Role | '';
   role_label: string;
   needs_role: boolean;
+  needs_email: boolean;
   is_admin: boolean;
 };
 
 export default function AccountPage() {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<Role>('lab_technician');
+  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [saving, setSaving] = useState(false);
@@ -34,6 +36,7 @@ export default function AccountPage() {
     api('/auth/me/').then((u: User) => {
       setUser(u);
       if (u.role) setRole(u.role);
+      setEmail(u.email || '');
     }).catch(e => setError(e instanceof Error ? e.message : 'Failed to load account'));
   }, []);
 
@@ -45,13 +48,14 @@ export default function AccountPage() {
     try {
       const updated: User = await api('/auth/me/', {
         method: 'PATCH',
-        body: JSON.stringify({ role }),
-        successMessage: 'Role updated successfully.',
-        errorMessage: 'Could not update role',
+        body: JSON.stringify({ role, email: email.trim().toLowerCase() }),
+        successMessage: 'Account details updated successfully.',
+        errorMessage: 'Could not update account details',
       });
       setUser(updated);
       setRole(updated.role || 'lab_technician');
-      setSaved('Role updated.');
+      setEmail(updated.email || '');
+      setSaved('Account details updated.');
     } catch(e) {
       setError(e instanceof Error ? e.message : 'Failed to update role');
     } finally {
@@ -104,19 +108,19 @@ export default function AccountPage() {
         <div className="field"><label>Username</label><input className="input" value={user?.username || ''} disabled /></div>
         <div className="field"><label>First Name</label><input className="input" value={user?.first_name || ''} disabled /></div>
         <div className="field"><label>Last Name</label><input className="input" value={user?.last_name || ''} disabled /></div>
-        <div className="field"><label>Email</label><input className="input" value={user?.email || 'Not connected yet'} disabled /></div>
+        <div className="field"><label htmlFor="account-email">ALS Email</label><input id="account-email" className="input" type="email" required placeholder="first.last@alsglobal.com" value={email} onChange={e => setEmail(e.target.value)} /><div className="muted result-meta">Required for staff mentions. Only @alsglobal.com addresses are accepted.</div></div>
         <div className="field"><label>Administrator</label><input className="input" value={user?.is_admin ? 'Yes' : 'No'} disabled /></div>
         <div className="field">
           <label>Workflow Role</label>
           <select className="select" value={role} onChange={e => setRole(e.target.value as Role)}>
-            <option value="lab_technician">Lab Technician</option>
+            <option value="lab_technician">Lab</option>
             <option value="customer_service">Customer Service</option>
           </select>
         </div>
         <div className="muted result-meta">The workflow role controls Group-field membership. Administrator access is a separate security permission.</div>
         {error && <div className="error">{error}</div>}
         {saved && <div className="success">{saved}</div>}
-        <div><button className="button" disabled={saving}>{saving ? 'Saving…' : 'Save Workflow Role'}</button></div>
+        <div><button className="button" disabled={saving}>{saving ? 'Saving…' : 'Save Account Details'}</button></div>
       </form>
     </section>
 

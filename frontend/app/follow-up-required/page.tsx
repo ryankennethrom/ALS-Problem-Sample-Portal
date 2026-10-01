@@ -34,21 +34,6 @@ type AppliedAdvancedSearch = {
 type QuickFilterValues = Record<string, string>;
 const EMPTY_QUICK_FILTERS: QuickFilterValues = {};
 
-function formatAge(createdAt: string, nowMs: number) {
-  const createdMs = new Date(createdAt).getTime();
-  if (!Number.isFinite(createdMs)) return '—';
-
-  const totalMinutes = Math.max(0, Math.floor((nowMs - createdMs) / 60000));
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-
-  if (days > 0) return `${days} day${days === 1 ? '' : 's'}${hours ? `, ${hours} hr` : ''}`;
-  if (hours > 0) return `${hours} hr${hours === 1 ? '' : 's'}${minutes ? `, ${minutes} min` : ''}`;
-  return `${minutes} min`;
-}
-
-
 function automaticDisposalRowClass(item: FollowUpSample) {
   if (String(item.custom_values?.['dispose-automatically'] || 'No').toLowerCase() !== 'yes') return '';
   const days = item.days_until_automatic_disposal;
@@ -88,7 +73,6 @@ function FollowUpContent() {
   const [loading, setLoading] = useState(true);
   const [tablesLoading, setTablesLoading] = useState(true);
   const [error, setError] = useState('');
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [advanced, setAdvanced] = useState<AppliedAdvancedSearch | null>(null);
   const [quickFiltersByTable, setQuickFiltersByTable] = useState<Record<string, QuickFilterValues>>({});
 
@@ -154,11 +138,6 @@ function FollowUpContent() {
     return () => window.clearTimeout(timer);
   }, [tableId, query, advanced, quickFiltersByTable, trackingNotSent]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 60000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   const selectedTable = useMemo(() => tables.find(table => table.id === tableId), [tables, tableId]);
   const activeAdvancedCount = advanced?.tableId === tableId ? advanced.filters.length : 0;
   const choiceColumns = useMemo(
@@ -168,10 +147,6 @@ function FollowUpContent() {
   const savedQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;
   const currentQuickFilters = savedQuickFilters;
   const activeQuickFilterCount = Object.values(currentQuickFilters).filter(Boolean).length;
-  // The oldest card follows the exact currently displayed result set,
-  // including basic search, Quick Filters, and Advanced Search.
-  const oldest = items[0];
-
   function setQuickFilter(fieldKey: string, value: string) {
     if (!tableId) return;
     setQuickFiltersByTable(previous => ({
@@ -199,7 +174,7 @@ function FollowUpContent() {
         <div className="eyebrow">Tickets</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>CS Follow-Up</h1>
         <div className="muted table-description">
-          {trackingNotSent ? 'Tickets in an open workflow without a tracking link, ordered oldest first.' : 'Tickets in CS Follow-Up or Waiting For Customer, ordered oldest first.'}
+          {trackingNotSent ? 'Tickets in an open workflow without a tracking link, ordered oldest first.' : 'Tickets in CS Follow-Up or Waiting for Customer Response, ordered oldest first.'}
         </div>
       </div>
     </div>
@@ -276,29 +251,6 @@ function FollowUpContent() {
       </div>}
     </section>
 
-    {!loading && oldest && <section
-      className="card"
-      style={{
-        marginBottom: 18,
-        padding: '22px 26px',
-        border: '2px solid var(--border)',
-        textAlign: 'center',
-      }}
-    >
-      <div className="eyebrow" style={{marginBottom: 6}}>{trackingNotSent ? 'Oldest ticket without a tracking link' : 'Oldest ticket requiring follow up'}</div>
-      <div style={{fontSize: 'clamp(2.4rem, 6vw, 4.5rem)', fontWeight: 800, lineHeight: 1}}>
-        {formatAge(oldest.created_at, nowMs)}
-      </div>
-      <div className="muted" style={{marginTop: 9, fontSize: '0.95rem'}}>
-        Ticket #{oldest.problem_number} · {selectedTable?.name || oldest.table_name || 'Ticket table'} · Created {formatCreatedAt(oldest.created_at)}
-      </div>
-    </section>}
-
-    {!tablesLoading && selectedTable && !loading && !oldest && !error && <section className="card" style={{marginBottom: 18, padding: '20px 24px', textAlign: 'center'}}>
-      <div className="eyebrow" style={{marginBottom: 5}}>{trackingNotSent ? 'Oldest ticket without a tracking link' : 'Oldest ticket requiring follow up'}</div>
-      <div style={{fontSize: '1.5rem', fontWeight: 700}}>{trackingNotSent ? 'No tracking links to send' : 'No CS follow-up'}</div>
-    </section>}
-
     {selectedTable && <section className="panel data-grid-panel">
       <div className="panel-header">
         <strong>{selectedTable.name}</strong>
@@ -324,7 +276,7 @@ function FollowUpContent() {
               {selectedTable.columns.map(column => <td key={column.id}>
                 {column.field_key === 'problem-id'
                   ? <Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link>
-                  : ['status', 'current-workflow'].includes(column.field_key)
+                  : column.field_key === 'current-workflow'
                     ? <span className="badge">{displayProblemValue(column, item)}</span>
                     : column.field_key === 'system-tracking-link' && item.tracking_url
                       ? <a className="table-link" href={item.tracking_url} target="_blank" rel="noreferrer">Open tracking link</a>

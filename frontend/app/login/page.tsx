@@ -2,12 +2,14 @@
 
 import { FormEvent, useState } from 'react';
 import { api, setToken } from '@/lib/api';
+import { accountSetupUrl, requestedReturnPath } from '@/lib/authRedirect';
 
 type LoginUser = {
   id: number;
   username: string;
   name: string;
   needs_role: boolean;
+  needs_email: boolean;
 };
 
 type LoginResponse = {
@@ -40,7 +42,12 @@ export default function Login() {
         errorMessage: 'Could not sign in',
       });
       setToken(data.token);
-      window.location.replace(data.user.needs_role ? '/account' : '/dashboard');
+      const destination = requestedReturnPath();
+      window.location.replace(
+        data.user.needs_email || data.user.needs_role
+          ? accountSetupUrl(destination)
+          : (destination || '/dashboard')
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sign in failed');
     } finally {

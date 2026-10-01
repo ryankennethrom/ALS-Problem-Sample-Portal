@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -15,8 +15,11 @@ import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import CameraCapture from '@/components/CameraCapture';
 import StaffImage from '@/components/StaffImage';
+import MentionTextarea from '@/components/MentionTextarea';
+import MentionText from '@/components/MentionText';
+import MentionEmailModal, { MentionEmailDraft } from '@/components/MentionEmailModal';
 
-type Comment = { id: number; body: string; author_email: string; legacy_author: string; created_at: string };
+type Comment = { id: number; body: string; author_email: string; author_username: string; author_name: string; legacy_author: string; mentions?: { id:number; username:string; name:string }[]; created_at: string };
 type ProblemImage = { id:number; has_image?:boolean; original_name:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
 type ProblemAttachment = { id:number; file:string; original_name:string; content_type:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
 type HistoryEntry = {
@@ -24,12 +27,18 @@ type HistoryEntry = {
   action: 'created' | 'updated' | 'comment' | 'customer_notification' | 'acknowledged';
   action_label: string;
   summary: string;
-  details: { changes?: { field:string; before:unknown; after:unknown }[]; comment?: string; reason?: string; email_not_sent?: string; customer_signature?: string; customer_requested_information?: string };
+  details: { changes?: { field:string; before:unknown; after:unknown }[]; comment?: string; mentions?: { id:number; username:string; name:string }[]; reason?: string; email_not_sent?: string; customer_signature?: string; customer_requested_information?: string };
   actor_email: string;
   actor_name: string;
   created_at: string;
 };
 type Problem = { id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues };
+
+type MentionEmailPreview = {
+  requires_email: boolean;
+  emails: MentionEmailDraft[];
+  confirmation_token: string;
+};
 
 function displayHistoryValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '—';
@@ -65,6 +74,9 @@ export default function Detail() {
   const [customValues, setCustomValues] = useState<CustomValues>({});
   const [containerCode, setContainerCode] = useState('');
   const [comment, setComment] = useState('');
+  const [preparingMentionEmail, setPreparingMentionEmail] = useState(false);
+  const [savingMentionComment, setSavingMentionComment] = useState(false);
+  const [mentionEmailDraft, setMentionEmailDraft] = useState<{ body: string; emails: MentionEmailDraft[]; confirmationToken: string } | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -86,6 +98,7 @@ export default function Detail() {
   const [testingEmailError, setTestingEmailError] = useState('');
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deletingProblem, setDeletingProblem] = useState(false);
+  const initialHashHandled = useRef(false);
 
   async function load() {
     try {
@@ -95,6 +108,15 @@ export default function Detail() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
   }
   useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    if (!p || initialHashHandled.current || typeof window === 'undefined' || !window.location.hash) return;
+    const targetId = decodeURIComponent(window.location.hash.slice(1));
+    if (!targetId) return;
+    initialHashHandled.current = true;
+    window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ block: 'start' });
+    });
+  }, [p]);
   function updateCustomValue(columnId: string, fieldKey: string, value: unknown) {
     if (!table) return;
     setCustomValues(current => {
@@ -108,7 +130,52 @@ export default function Detail() {
     });
   }
 
-  async function add() { if (!comment.trim()) return; try { await api(`/problem-samples/${id}/comments/`, { method: 'POST', body: JSON.stringify({ body: comment }), successMessage:'Comment added successfully.', errorMessage:'Could not add comment' }); setComment(''); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed to add comment'); } }
+  async function saveComment(body: string, confirmationToken = '') {
+    setSavingMentionComment(true);
+    setError('');
+    try {
+      await api(`/problem-samples/${id}/comments/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          body,
+          ...(confirmationToken ? { mention_email_confirmation_token: confirmationToken } : {}),
+        }),
+        successMessage:'Comment added successfully.',
+        errorMessage:'Could not add comment',
+      });
+      setComment('');
+      setMentionEmailDraft(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add comment');
+      throw e;
+    } finally {
+      setSavingMentionComment(false);
+    }
+  }
+
+  async function add() {
+    const body = comment.trim();
+    if (!body || preparingMentionEmail || savingMentionComment) return;
+    setPreparingMentionEmail(true);
+    setError('');
+    try {
+      const preview: MentionEmailPreview = await api(`/problem-samples/${id}/prepare-comment-mentions/`, {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+        errorMessage: 'Could not prepare mention email',
+      });
+      if (preview.requires_email && preview.emails.length) {
+        setMentionEmailDraft({ body, emails: preview.emails, confirmationToken: preview.confirmation_token });
+      } else {
+        await saveComment(body);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to prepare comment');
+    } finally {
+      setPreparingMentionEmail(false);
+    }
+  }
   async function saveCustom() {
     setSaved(''); setError('');
     const requestedContainer = containerCode.trim();
@@ -430,7 +497,7 @@ export default function Detail() {
               {entry.details?.reason && <div className="history-reason"><strong>Reason:</strong> {entry.details.reason}</div>}
               {entry.details?.customer_signature && <div className="history-signature"><strong>Customer signature:</strong> {entry.details.customer_signature}</div>}
               {entry.details?.customer_requested_information && <div className="history-customer-information"><strong>Information provided by customer:</strong><div>{entry.details.customer_requested_information}</div></div>}
-              {entry.action === 'comment' && entry.details?.comment && <div className="history-comment">{entry.details.comment}</div>}
+              {entry.action === 'comment' && entry.details?.comment && <div className="history-comment"><MentionText text={entry.details.comment} /></div>}
               {(entry.action === 'updated' || entry.action === 'customer_notification' || entry.action === 'acknowledged') && changes.length > 0 && <div className="history-changes">
                 {changes.map((change, index) => <div className="history-change" key={`${entry.id}-${index}`}>
                   <span className="history-field">{change.field}</span>
@@ -449,7 +516,7 @@ export default function Detail() {
     <div className="two-col">
       <div className="stack">
         <section className="panel panel-blue"><div className="panel-header">Ticket</div><div className="panel-body stack">
-          {table ? <><div className="grid"><div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value={p.problem_number} disabled readOnly aria-disabled="true" /></div><div className="field readonly-field"><label>Date Created</label><input className="input readonly-input" value={p.created_at ? new Date(p.created_at).toLocaleString() : '—'} disabled readOnly aria-disabled="true" /></div><div className="field"><label htmlFor="edit-container-id">Container ID</label><input id="edit-container-id" className="input" value={containerCode} onChange={event=>setContainerCode(event.target.value)} placeholder="e.g. PC-000123" /><div className="muted result-meta">Enter an active Container ID to assign this ticket, or clear the field to remove it from its container.</div></div>{table.columns.filter(c => !c.is_system || ['status', 'current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
+          {table ? <><div className="grid"><div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value={p.problem_number} disabled readOnly aria-disabled="true" /></div><div className="field readonly-field"><label>Date Created</label><input className="input readonly-input" value={p.created_at ? new Date(p.created_at).toLocaleString() : '—'} disabled readOnly aria-disabled="true" /></div><div className="field"><label htmlFor="edit-container-id">Container ID</label><input id="edit-container-id" className="input" value={containerCode} onChange={event=>setContainerCode(event.target.value)} placeholder="e.g. PC-000123" /><div className="muted result-meta">Enter an active Container ID to assign this ticket, or clear the field to remove it from its container.</div></div>{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
             ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({...p, custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
             : column.field_key === 'system-tracking-link'
               ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{p.tracking_url ? <a className="table-link tracking-link-value" href={p.tracking_url} target="_blank" rel="noreferrer">{p.tracking_url}</a> : <input className="input readonly-input" value="—" disabled readOnly aria-disabled="true" />}</div>
@@ -499,10 +566,10 @@ export default function Detail() {
           </div>
         </section>
 
-        <section className="panel"><div className="panel-header">Comments / Follow Up</div><div className="panel-body">
+        <section id="follow-ups" className="panel" style={{scrollMarginTop: 24}}><div className="panel-header">Comments / Follow Up</div><div className="panel-body">
           {p.comments.length === 0 && <div className="muted" style={{marginBottom:12}}>No follow-up comments yet.</div>}
-          {p.comments.map(c => <div className="comment-item" key={c.id}><div>{c.body}</div><div className="muted" style={{fontSize:12, marginTop:4}}>{c.author_email || c.legacy_author || 'Unknown'} · {new Date(c.created_at).toLocaleString()}</div></div>)}
-          <div className="field" style={{marginTop:14}}><label>Add Follow Up</label><textarea className="textarea" placeholder="Add follow-up…" value={comment} onChange={e => setComment(e.target.value)}/></div><div style={{marginTop:10}}><button className="button" onClick={add}>Add Comment</button></div>
+          {p.comments.map(c => <div className="comment-item" key={c.id}><div><MentionText text={c.body} /></div><div className="muted" style={{fontSize:12, marginTop:4}}>{c.author_name || (c.author_username ? `@${c.author_username}` : '') || c.author_email || c.legacy_author || 'Unknown'} · {new Date(c.created_at).toLocaleString()}</div></div>)}
+          <div className="field" style={{marginTop:14}}><label>Add Follow Up</label><MentionTextarea value={comment} onChange={setComment} placeholder="Add follow-up…" /></div><div style={{marginTop:10}}><button className="button" onClick={add} disabled={preparingMentionEmail || savingMentionComment}>{preparingMentionEmail ? 'Preparing mention email…' : savingMentionComment ? 'Saving…' : 'Add Comment'}</button></div>
         </div></section>
       </div>
 
@@ -529,5 +596,6 @@ export default function Detail() {
     {pendingEmailLaunch && <CustomerEmailModal content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
     {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
     {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
+    {mentionEmailDraft && <MentionEmailModal emails={mentionEmailDraft.emails} onComplete={() => saveComment(mentionEmailDraft.body, mentionEmailDraft.confirmationToken).catch(() => {})} onCancel={() => setMentionEmailDraft(null)} busy={savingMentionComment} error={error} />}
   </div>;
 }

@@ -252,7 +252,7 @@ The `customer-notification-sent` action stores visible row changes in `ProblemHi
 
 Temporary staff authentication uses administrator-created username/password accounts. Django's built-in `User` stores the derived username, First Name, Last Name, and password hash; staff email is intentionally blank until Microsoft Entra integration is available. `AppSession` remains the bearer-session model used by the frontend after a successful `POST /api/auth/login/`.
 
-`UserProfile.is_admin` is a dedicated security permission and is deliberately separate from `UserProfile.role`, whose values remain Lab Technician and Customer Service for Group-column/workflow behavior. `GET/POST /api/auth/accounts/` is administrator-only. POST accepts First Name and Last Name, derives a unique username such as `jane.smith`, creates a cryptographically random password, and returns that generated password only in the creation response. An initial administrator can be bootstrapped with the `create_tracker_admin` management command.
+`UserProfile.is_admin` is a dedicated security permission and is deliberately separate from `UserProfile.role`, whose values remain Lab and Customer Service for Group-column/workflow behavior. `GET/POST /api/auth/accounts/` is administrator-only. POST accepts First Name and Last Name, derives a unique username such as `jane.smith`, creates a cryptographically random password, and returns that generated password only in the creation response. An initial administrator can be bootstrapped with the `create_tracker_admin` management command.
 
 Regular new accounts with no workflow role still receive the required first-login role gate. Administrator accounts bypass that gate unless they voluntarily set a workflow role from My Account. Microsoft Entra can later replace the temporary login endpoint and populate email identities while leaving the tracker/domain APIs unchanged.
 
@@ -266,7 +266,7 @@ Regular new accounts with no workflow role still receive the required first-logi
 - Returning a problem sample's **Current Workflow** to CS Follow-Up clears the active tracking-link expiry and makes the same persistent tracking link accessible again.
 
 ### Required first-login role gate
-`AppShell` renders `RequiredRoleModal` whenever `/api/auth/me/` reports `needs_role=true`. The modal blocks the protected portal with no dismiss action until the user explicitly selects Lab Technician or Customer Service and the PATCH to `/api/auth/me/` succeeds. Existing role-bearing accounts bypass the gate.
+`AppShell` renders `RequiredRoleModal` whenever `/api/auth/me/` reports `needs_role=true`. The modal blocks the protected portal with no dismiss action until the user explicitly selects Lab or Customer Service and the PATCH to `/api/auth/me/` succeeds. Existing role-bearing accounts bypass the gate.
 
 ### Migration graph compatibility
 
@@ -333,8 +333,30 @@ Staff ticket images are no longer rendered from raw Django `/media/` URLs. Ticke
 
 Uploads still require durable file storage. `MEDIA_ROOT` now uses, in order: an explicit `MEDIA_ROOT` environment variable, Railway's automatically provided `RAILWAY_VOLUME_MOUNT_PATH`, or the local `backend/media` directory. In Railway, attach a persistent Volume to the Django backend (for example at `/app/media`) before relying on uploaded ticket images across deployments. Database rows only store file paths; they do not preserve the image bytes if ephemeral storage is replaced.
 
+### Ticket image compression
+
+All newly uploaded ticket images are normalized by the Django backend before storage. JPEG, PNG, GIF, and WebP inputs are auto-oriented from EXIF, camera/EXIF/ICC/XMP metadata is discarded, animated inputs are reduced to their first frame, and the stored file is WebP. Oversized images are reduced from a maximum 1600-pixel long edge only as needed, with adaptive WebP quality/resolution steps targeting **450 KiB or less per stored image**. The original upload name remains metadata for staff display, while the stored object uses a `.webp` filename. Existing images are not recompressed retroactively.
+
 ## Staff image delivery
 Problem image metadata excludes the storage/media URL. Staff image previews are fetched with the existing bearer session through the authenticated image-content endpoint, then displayed using a browser blob URL. This avoids exposing `/media/` URLs and prevents HTTPS pages from issuing mixed-content image requests.
 
 ## Date-based container disposal
 `ProblemContainerViewSet.dispose_by_date` accepts `cutoff_date` (`YYYY-MM-DD`) and locks the container transactionally. Every attached ticket must have a local `created_at` date strictly earlier than the cutoff. Eligible non-disposed tickets are transitioned to `Disposed` using the same snapshot/history mechanism as normal container disposal, allowing Undo Disposal to restore prior workflow state. `ProblemContainerSerializer.samples` exposes `created_at` and `created_date` for the Dispose by Date UI.
+
+## Dashboard storage telemetry
+
+The staff Dashboard has a Storage subsection backed by `GET /api/dashboard/storage/`.
+The endpoint inspects the actual `MEDIA_ROOT/problem-images/` files rather than
+estimating image usage from database rows. It reports actual image bytes/file
+count, average size, filesystem total/free/used space, estimated remaining image
+capacity, and discrepancies between `ProblemImage` database records and stored
+files. In Railway, `persistent_volume_configured` is true when
+`RAILWAY_VOLUME_MOUNT_PATH` is present. The remaining-image estimate uses the
+current stored-image average and falls back to the 450 KiB compression target
+when the tracker has no images yet.
+
+### Staff email / mention notification gate
+
+Staff ALS addresses live in `auth_user.email` and are required to match `@alsglobal.com`. Bearer-session authentication allows an email-less user to call only the self-account endpoint (to set the address) and logout; other authenticated endpoints are denied until setup is complete. The Next.js shell mirrors that rule with a non-dismissible required-email modal.
+
+The mention comment write path is deliberately staged. `POST /api/problem-samples/<id>/prepare-comment-mentions/` resolves only active users with valid ALS email (including `@Lab` and `@CustomerService` group expansion), generates one combined mention email for the follow-up, and returns a signed 15-minute confirmation. No comment/history/mention row is created in this step. `POST /api/problem-samples/<id>/comments/` re-resolves the current mention set and rejects the write unless the signed confirmation matches the ticket, author, body hash, user IDs and current email addresses. This prevents a changed comment or changed recipient address from being committed using a stale preview. The direct email link targets the ticket's `#follow-ups` section.
