@@ -13,30 +13,11 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 
 
-# Status is a descriptive, required built-in field with one fixed set of values
-# shared by every problem-sample table. Workflow routing is controlled separately
-# by Current Workflow.
-PROBLEM_STATUS_NEW = 'NEW'
-PROBLEM_STATUS_IN_PROGRESS = 'IN PROGRESS'
-PROBLEM_STATUS_ON_HOLD = 'ON HOLD'
-PROBLEM_STATUS_SHIPPED_BACK_TO_CLIENT = 'SHIPPED BACK TO CLIENT'
-PROBLEM_STATUS_DISPOSED_VALUE = 'DISPOSED'
-PROBLEM_STATUS_COMPLETED = 'COMPLETED'
-PROBLEM_STATUS_CHOICES = [
-    PROBLEM_STATUS_NEW,
-    PROBLEM_STATUS_IN_PROGRESS,
-    PROBLEM_STATUS_ON_HOLD,
-    PROBLEM_STATUS_SHIPPED_BACK_TO_CLIENT,
-    PROBLEM_STATUS_DISPOSED_VALUE,
-    PROBLEM_STATUS_COMPLETED,
-]
-PROBLEM_STATUS_DEFAULT = PROBLEM_STATUS_NEW
-
 # Current Workflow is the authoritative system routing field. Its values are
 # immutable because disposal, shipping, back-to-testing, tracking-link, and
 # CS follow-up queues depend on them.
 CURRENT_WORKFLOW_DEFAULT = 'CS Follow-Up'
-CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER = 'Waiting For Customer'
+CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER = 'Waiting for Customer Response'
 PROBLEM_STATUS_TO_BE_DISPOSED = 'To be Disposed'
 PROBLEM_STATUS_TO_BE_SHIPPED_BACK = 'To be shipped back to client'
 PROBLEM_STATUS_TO_BE_BACK_TO_TESTING = 'To be back to testing'
@@ -123,9 +104,6 @@ class ProblemTable(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(3650)],
         help_text='How many days an acknowledged customer link continues to show the acknowledgement confirmation.',
     )
-    def status_choices(self):
-        return list(PROBLEM_STATUS_CHOICES)
-
     def workflow_choices(self):
         return list(CURRENT_WORKFLOW_CHOICES)
 
@@ -161,7 +139,7 @@ class ProblemColumn(models.Model):
     GROUP_LAB_TECHNICIAN = 'lab_technician'
     GROUP_CUSTOMER_SERVICE = 'customer_service'
     GROUP_CHOICES = [
-        (GROUP_LAB_TECHNICIAN, 'Lab Technician'),
+        (GROUP_LAB_TECHNICIAN, 'Lab'),
         (GROUP_CUSTOMER_SERVICE, 'Customer Service'),
     ]
 
@@ -390,7 +368,6 @@ class ProblemSample(models.Model):
         ProblemContainer, null=True, blank=True, on_delete=models.SET_NULL, related_name='problem_samples'
     )
     source_id = models.CharField(max_length=100, blank=True, db_index=True, help_text='ID from legacy/exported system')
-    status = models.CharField(max_length=80, blank=True, db_index=True, default=PROBLEM_STATUS_DEFAULT)
     current_workflow = models.CharField(max_length=80, db_index=True, default=CURRENT_WORKFLOW_DEFAULT)
     als_tracking_number = models.CharField(max_length=150, blank=True, db_index=True)
     problem_sample_count = models.PositiveIntegerField(null=True, blank=True)
@@ -572,8 +549,6 @@ class ProblemSample(models.Model):
         if not changed:
             return set()
         self.custom_values = values
-        if 'status' in changed:
-            self.status = str(values.get('status') or self.status or PROBLEM_STATUS_DEFAULT)
         if SYSTEM_CURRENT_WORKFLOW_FIELD_KEY in changed:
             workflow = str(values.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
             if workflow in CURRENT_WORKFLOW_CHOICES:
@@ -592,8 +567,6 @@ class ProblemSample(models.Model):
         controller_update_fields = []
         if controller_changes:
             controller_update_fields.append('custom_values')
-            if 'status' in controller_changes:
-                controller_update_fields.append('status')
             if SYSTEM_CURRENT_WORKFLOW_FIELD_KEY in controller_changes:
                 controller_update_fields.append('current_workflow')
 
@@ -798,6 +771,32 @@ class ProblemComment(models.Model):
 
     class Meta:
         ordering = ['created_at']
+
+
+class ProblemMention(models.Model):
+    """A staff @mention created from a saved ticket follow-up comment."""
+    comment = models.ForeignKey(ProblemComment, on_delete=models.CASCADE, related_name='mentions')
+    problem = models.ForeignKey(ProblemSample, on_delete=models.CASCADE, related_name='mentions')
+    mentioned_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ticket_mentions')
+    mentioned_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL, related_name='ticket_mentions_created'
+    )
+    notified_email = models.EmailField(blank=True)
+    email_confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+        constraints = [
+            models.UniqueConstraint(fields=['comment', 'mentioned_user'], name='unique_ticket_comment_mention_user')
+        ]
+        indexes = [
+            models.Index(fields=['mentioned_user', 'read_at', '-created_at'], name='ticket_mention_inbox_idx')
+        ]
+
+    def __str__(self):
+        return f'@{self.mentioned_user.username} on ticket {self.problem_id}'
 
 
 class ProblemImage(models.Model):

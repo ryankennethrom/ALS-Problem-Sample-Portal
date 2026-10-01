@@ -163,7 +163,7 @@ class DashboardAnalyticsTests(TestCase):
         terminal = self.make_problem(4, timezone.now() - timedelta(days=4))
         never_responded = self.make_problem(5, timezone.now() - timedelta(days=5))
         second.table = other_table
-        second.current_workflow = 'Waiting For Customer'
+        second.current_workflow = 'Waiting for Customer Response'
         second.save(update_fields=['table', 'current_workflow'])
         terminal.current_workflow = 'To be shipped back to client'
         terminal.save(update_fields=['current_workflow'])

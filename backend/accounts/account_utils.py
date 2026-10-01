@@ -4,6 +4,31 @@ import string
 import unicodedata
 
 from django.contrib.auth.models import User
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
+
+ALS_EMAIL_SUFFIX = '@alsglobal.com'
+
+
+def normalize_als_email(value: str) -> str:
+    email = str(value or '').strip().lower()
+    if not email:
+        raise ValueError('ALS email is required.')
+    try:
+        validate_email(email)
+    except ValidationError as exc:
+        raise ValueError('Enter a valid ALS email address.') from exc
+    if not email.endswith(ALS_EMAIL_SUFFIX) or email == ALS_EMAIL_SUFFIX:
+        raise ValueError(f'Email must use the {ALS_EMAIL_SUFFIX} domain.')
+    return email
+
+
+def user_has_als_email(user) -> bool:
+    try:
+        normalize_als_email(getattr(user, 'email', ''))
+        return True
+    except ValueError:
+        return False
 
 
 def _username_component(value: str) -> str:

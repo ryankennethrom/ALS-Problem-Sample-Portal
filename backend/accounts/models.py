@@ -9,7 +9,7 @@ class UserProfile(models.Model):
     ROLE_LAB_TECHNICIAN = 'lab_technician'
     ROLE_CUSTOMER_SERVICE = 'customer_service'
     ROLE_CHOICES = [
-        (ROLE_LAB_TECHNICIAN, 'Lab Technician'),
+        (ROLE_LAB_TECHNICIAN, 'Lab'),
         (ROLE_CUSTOMER_SERVICE, 'Customer Service'),
     ]
 

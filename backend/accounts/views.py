@@ -10,7 +10,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .account_utils import derive_unique_username, generate_temporary_password
+from .account_utils import derive_unique_username, generate_temporary_password, normalize_als_email, user_has_als_email
 from .models import AppSession, UserProfile
 
 
@@ -18,6 +18,7 @@ def normalize_role(value):
     value = (value or '').strip().lower().replace(' ', '_')
     aliases = {
         'lab_technician': UserProfile.ROLE_LAB_TECHNICIAN,
+        'lab': UserProfile.ROLE_LAB_TECHNICIAN,
         'customer_service': UserProfile.ROLE_CUSTOMER_SERVICE,
     }
     return aliases.get(value, '')
@@ -44,6 +45,7 @@ def user_payload(user):
         'role': profile.role,
         'role_label': profile.get_role_display() if profile.role else '',
         'needs_role': not admin and not bool(profile.role),
+        'needs_email': not user_has_als_email(user),
         'is_admin': admin,
     }
 
@@ -92,6 +94,7 @@ def account_list_payload(user):
     return {
         'id': user.id,
         'username': user.username,
+        'email': user.email,
         'first_name': user.first_name,
         'last_name': user.last_name,
         'name': user.get_full_name().strip() or user.username,
@@ -241,24 +244,62 @@ def me(request):
     profile, _ = UserProfile.objects.get_or_create(user=user)
 
     if request.method == 'PATCH':
-        role = normalize_role(request.data.get('role'))
-        if role not in {UserProfile.ROLE_LAB_TECHNICIAN, UserProfile.ROLE_CUSTOMER_SERVICE}:
+        changed = False
+        if 'email' in request.data:
+            try:
+                email = normalize_als_email(request.data.get('email'))
+            except ValueError as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+                return Response(
+                    {'detail': 'That ALS email is already assigned to another staff account.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if user.email != email:
+                old_email = str(user.email or '').strip().lower()
+                user.email = email
+                user.save(update_fields=['email'])
+                changed = True
+                # Keep configured Group defaults pointing at this user if an
+                # administrator had stored the previous email as the default.
+                if old_email:
+                    from problem_samples.models import ProblemColumn
+                    for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP):
+                        if str(column.default_value or '').strip().lower() == old_email:
+                            column.default_value = email
+                            column.save(update_fields=['default_value', 'modified_at'])
+
+        if 'role' in request.data:
+            role = normalize_role(request.data.get('role'))
+            if role not in {UserProfile.ROLE_LAB_TECHNICIAN, UserProfile.ROLE_CUSTOMER_SERVICE}:
+                return Response(
+                    {'detail': 'Role must be Lab or Customer Service.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if profile.role != role:
+                profile.role = role
+                profile.save(update_fields=['role', 'modified_at'])
+                changed = True
+
+            # A Group-column default must always point at a user who still belongs
+            # to that column's configured group. Keep historical row assignments,
+            # but clear stale defaults after a user changes roles.
+            from problem_samples.models import ProblemColumn
+            identifiers = {
+                str(user.email or '').strip().lower(),
+                str(user.username or '').strip().lower(),
+            }
+            identifiers.discard('')
+            for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP).exclude(group_role=role):
+                if str(column.default_value or '').strip().lower() in identifiers:
+                    column.default_value = None
+                    column.save(update_fields=['default_value', 'modified_at'])
+
+        if not changed and not any(key in request.data for key in ('email', 'role')):
             return Response(
-                {'detail': 'Role must be Lab Technician or Customer Service.'},
+                {'detail': 'Provide an ALS email or workflow role to update.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        profile.role = role
-        profile.save(update_fields=['role', 'modified_at'])
-
-        # A Group-column default must always point at a user who still belongs
-        # to that column's configured group. Keep historical row assignments,
-        # but clear stale defaults after a user changes roles.
-        from problem_samples.models import ProblemColumn
-        identifier = (user.email or user.username or '').strip().lower()
-        for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP).exclude(group_role=role):
-            if str(column.default_value or '').strip().lower() == identifier:
-                column.default_value = None
-                column.save(update_fields=['default_value', 'modified_at'])
 
     return Response(user_payload(user))
 
@@ -269,7 +310,7 @@ def users_by_role(request):
     role = normalize_role(request.query_params.get('role'))
     if role not in {UserProfile.ROLE_LAB_TECHNICIAN, UserProfile.ROLE_CUSTOMER_SERVICE}:
         return Response(
-            {'detail': 'Role must be Lab Technician or Customer Service.'},
+            {'detail': 'Role must be Lab or Customer Service.'},
             status=status.HTTP_400_BAD_REQUEST,
         )
     profiles = (
@@ -280,9 +321,7 @@ def users_by_role(request):
     return Response([
         {
             'id': profile.user_id,
-            # Keep this legacy field for existing Group-column clients. Until
-            # Entra adds staff email addresses, the username is the identifier.
-            'email': profile.user.email or profile.user.username,
+            'email': profile.user.email,
             'username': profile.user.username,
             'name': profile.user.get_full_name().strip() or profile.user.username,
             'role': profile.role,

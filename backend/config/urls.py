@@ -2,13 +2,15 @@ from django.contrib import admin
 from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
-from problem_samples.dashboard_views import DashboardView, CustomerRespondedTicketsView
+from problem_samples.dashboard_views import DashboardView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/dashboard/', DashboardView.as_view()),
+    path('api/dashboard/opened-tickets/', DashboardOpenedTicketsView.as_view()),
+    path('api/dashboard/storage/', DashboardStorageView.as_view()),
     path('api/dashboard/customer-responded/', CustomerRespondedTicketsView.as_view()),
     path('api/admin/terminal-ticket-cleanup/', TerminalTicketCleanupView.as_view()),
     path('api/admin/old-ticket-definition/', OldTicketDefinitionView.as_view()),

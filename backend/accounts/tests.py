@@ -13,6 +13,7 @@ class AdminCreatedAccountTests(TestCase):
             password='AdminPassword123!',
             first_name='Admin',
             last_name='User',
+            email='admin.user@alsglobal.com',
         )
         UserProfile.objects.create(user=self.admin, is_admin=True)
 
@@ -55,6 +56,7 @@ class AdminCreatedAccountTests(TestCase):
         self.client.credentials()
         user_login = self._login('jane.smith', generated_password)
         self.assertTrue(user_login['user']['needs_role'])
+        self.assertTrue(user_login['user']['needs_email'])
         self.assertFalse(user_login['user']['is_admin'])
 
     def test_duplicate_name_gets_numeric_suffix(self):
@@ -69,7 +71,7 @@ class AdminCreatedAccountTests(TestCase):
         self.assertEqual(response.data['username'], 'jane.smith2')
 
     def test_regular_user_cannot_create_accounts(self):
-        user = User.objects.create_user(username='regular.user', password='UserPassword123!')
+        user = User.objects.create_user(username='regular.user', password='UserPassword123!', email='regular.user@alsglobal.com')
         UserProfile.objects.create(user=user, role=UserProfile.ROLE_LAB_TECHNICIAN)
         user_login = self._login('regular.user', 'UserPassword123!')
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {user_login['token']}")
@@ -88,6 +90,7 @@ class AdminAccountManagementTests(TestCase):
             password='AdminPassword123!',
             first_name='Admin',
             last_name='User',
+            email='admin.user@alsglobal.com',
         )
         UserProfile.objects.create(user=self.admin, is_admin=True)
         self.user = User.objects.create_user(
@@ -95,6 +98,7 @@ class AdminAccountManagementTests(TestCase):
             password='UserPassword123!',
             first_name='Jane',
             last_name='Smith',
+            email='jane.smith@alsglobal.com',
         )
         UserProfile.objects.create(user=self.user, role=UserProfile.ROLE_LAB_TECHNICIAN)
 
@@ -180,7 +184,7 @@ class AdminAccountManagementTests(TestCase):
         user_login = self._login('jane.smith', 'UserPassword123!')
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {user_login['token']}")
 
-        other = User.objects.create_user(username='other.user', password='OtherPassword123!')
+        other = User.objects.create_user(username='other.user', password='OtherPassword123!', email='other.user@alsglobal.com')
         UserProfile.objects.create(user=other)
 
         promote = self.client.patch(
@@ -204,6 +208,7 @@ class SelfPasswordChangeTests(TestCase):
             password='UserPassword123!',
             first_name='Jane',
             last_name='Smith',
+            email='jane.smith@alsglobal.com',
         )
         UserProfile.objects.create(user=self.user, role=UserProfile.ROLE_LAB_TECHNICIAN)
 
@@ -297,3 +302,42 @@ class SelfPasswordChangeTests(TestCase):
         self.assertEqual(mismatch.status_code, 400)
         self.assertEqual(short.status_code, 400)
         self.assertEqual(reused.status_code, 400)
+
+
+class RequiredAlsEmailTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='missing.email', password='UserPassword123!', first_name='Missing', last_name='Email'
+        )
+        UserProfile.objects.create(user=self.user, role=UserProfile.ROLE_CUSTOMER_SERVICE)
+        login = self.client.post('/api/auth/login/', {
+            'username': 'missing.email', 'password': 'UserPassword123!'
+        }, format='json')
+        self.assertEqual(login.status_code, 200, login.data)
+        self.assertTrue(login.data['user']['needs_email'])
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['token']}")
+
+    def test_email_is_required_before_other_authenticated_apis(self):
+        blocked = self.client.get('/api/problem-tables/')
+        self.assertEqual(blocked.status_code, 403)
+        self.assertIn('Set your ALS email', blocked.data['detail'])
+
+    def test_user_can_set_unique_als_email_then_continue(self):
+        invalid = self.client.patch('/api/auth/me/', {'email': 'person@example.com'}, format='json')
+        self.assertEqual(invalid.status_code, 400)
+
+        saved = self.client.patch('/api/auth/me/', {'email': 'missing.email@alsglobal.com'}, format='json')
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertFalse(saved.data['needs_email'])
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.email, 'missing.email@alsglobal.com')
+
+        allowed = self.client.get('/api/problem-tables/')
+        self.assertEqual(allowed.status_code, 200)
+
+    def test_duplicate_als_email_is_rejected(self):
+        User.objects.create_user(username='existing', email='existing@alsglobal.com')
+        response = self.client.patch('/api/auth/me/', {'email': 'EXISTING@alsglobal.com'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already assigned', response.data['detail'])

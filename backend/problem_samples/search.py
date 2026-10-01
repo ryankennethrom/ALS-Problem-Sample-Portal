@@ -13,7 +13,6 @@ TEXT_FIELDS = {
     'problem_type': 65,
     'issue_description': 55,
     'brand': 45,
-    'status': 30,
 }
 
 

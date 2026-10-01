@@ -4,7 +4,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from problem_samples.models import (
     ProblemSample, ProblemComment, ProblemTable, ProblemColumn,
-    PROBLEM_STATUS_DEFAULT, CURRENT_WORKFLOW_DEFAULT, PROBLEM_STATUS_CHOICES, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
+    CURRENT_WORKFLOW_DEFAULT, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
     PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING,
     PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_SHIPPED_BACK,
     SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO,
@@ -28,7 +28,7 @@ def parse_bool(value): return str(value or '').strip().lower() in {'1','true','y
 
 
 def normalize_status(value, *, email_confirmation=False):
-    """Return (fixed descriptive Status, Current Workflow, Dispose Automatically)."""
+    """Return (Current Workflow, Dispose Automatically) from a legacy Status value."""
     text = str(value or '').strip()
     folded = text.casefold()
     routed = {
@@ -39,32 +39,11 @@ def normalize_status(value, *, email_confirmation=False):
         PROBLEM_STATUS_DISPOSED.casefold(): PROBLEM_STATUS_DISPOSED,
         PROBLEM_STATUS_SHIPPED_BACK.casefold(): PROBLEM_STATUS_SHIPPED_BACK,
     }
-    status_by_fold = {item.casefold(): item for item in PROBLEM_STATUS_CHOICES}
     workflow = routed.get(folded, CURRENT_WORKFLOW_DEFAULT)
-
-    if folded in status_by_fold:
-        descriptive = status_by_fold[folded]
-    elif 'shipped back' in folded:
-        descriptive = 'SHIPPED BACK TO CLIENT'
-    elif folded == 'disposed' or 'disposed' in folded:
-        descriptive = 'DISPOSED'
-    elif folded in {'completed', 'complete', 'resolved', 'closed'}:
-        descriptive = 'COMPLETED'
-    elif 'hold' in folded or folded == 'halted automatic disposal':
-        descriptive = 'ON HOLD'
-    elif folded in {
-        'in progress', 'notified', 'customer emailed by system', 'problem acknowledged by customer',
-        'back to testing', 'to be shipped back to client', 'to be disposed',
-    }:
-        descriptive = 'IN PROGRESS'
-    else:
-        descriptive = PROBLEM_STATUS_DEFAULT
-
-    if folded in {'automatically disposed', 'customer not yet contacted', 'customer emailed by system', 'notified'} or email_confirmation:
-        auto = DISPOSE_AUTOMATICALLY_YES
-    else:
-        auto = DISPOSE_AUTOMATICALLY_NO
-    return descriptive, workflow, auto
+    auto = DISPOSE_AUTOMATICALLY_YES if (folded in {
+        'automatically disposed', 'customer not yet contacted', 'customer emailed by system', 'notified'
+    } or email_confirmation) else DISPOSE_AUTOMATICALLY_NO
+    return workflow, auto
 
 
 
@@ -89,11 +68,11 @@ class Command(BaseCommand):
                 count = parse_int(clean(row,'Number of problem samples in shipment'))
                 notify = parse_bool(clean(row,'Notify'))
                 email_confirmation = parse_bool(clean(row,'Email Confirmation'))
-                normalized_status, current_workflow, dispose_automatically = normalize_status(
+                current_workflow, dispose_automatically = normalize_status(
                     clean(row,'Status'), email_confirmation=email_confirmation
                 )
                 defaults={
-                    'status':normalized_status,'current_workflow':current_workflow,'als_tracking_number':clean(row,'ALS Sample Tracking Number'),
+                    'current_workflow':current_workflow,'als_tracking_number':clean(row,'ALS Sample Tracking Number'),
                     'problem_sample_count':count,
                     'brand':clean(row,'Brand'),'distributor':clean(row,'Distributor '),'end_user':clean(row,'End User'),
                     'date_received':received,'problem_type':clean(row,'Problem Type'),
@@ -127,7 +106,6 @@ class Command(BaseCommand):
                 # Keep the dynamic/default-table view in sync when the legacy columns
                 # were seeded by migration 0003.
                 dynamic = {
-                    'status': defaults['status'],
                     SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: current_workflow,
                     SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY: dispose_automatically,
                     'als-sample-tracking-number': defaults['als_tracking_number'],
@@ -147,7 +125,7 @@ class Command(BaseCommand):
                     'email-confirmation': email_confirmation,
                 }
                 values = dict(obj.custom_values or {})
-                values['status'] = defaults['status']
+                values.pop('status', None)
                 values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = current_workflow
                 values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = dispose_automatically
                 if available_keys:

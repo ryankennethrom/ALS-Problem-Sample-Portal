@@ -1,9 +1,13 @@
 from datetime import timedelta
+import hashlib
 import uuid
 from django.db import transaction
 from django.db.models import Q, F
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core import signing
+from django.core.files.base import ContentFile
 from django.core.validators import validate_email
 from django.http import HttpResponse, FileResponse
 from django.utils import timezone
@@ -12,6 +16,7 @@ from email.message import EmailMessage
 from email import policy
 import mimetypes
 import os
+import re
 from PIL import Image as PillowImage, UnidentifiedImageError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
@@ -21,7 +26,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_CHOICES, PROBLEM_STATUS_DEFAULT, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from accounts.account_utils import normalize_als_email, user_has_als_email
+from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
 from .permissions import IsTrackerAdminOrReadOnly
 from .notification_recipient import get_edmonton_recipient
 from .serializers import (
@@ -29,6 +35,7 @@ from .serializers import (
 )
 from .search import search_problem_samples
 from .advanced_search import advanced_search_problem_samples
+from .image_processing import compress_problem_image
 
 
 MAX_ROW_FILE_BYTES = 25 * 1024 * 1024
@@ -42,7 +49,227 @@ def _confirmed_testing_recipient(request):
         raise DRFValidationError({'email_recipient': 'The NA.EDM address has changed. Reopen the email preview before confirming.'})
     return configured
 ALLOWED_IMAGE_FORMATS = {'JPEG', 'PNG', 'GIF', 'WEBP'}
+MENTION_RE = re.compile(r'(?<![A-Za-z0-9_@])@([A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)', re.IGNORECASE)
+MENTION_EMAIL_SUFFIX = '@alsglobal.com'
+MENTION_GROUP_LAB = 'lab'
+MENTION_GROUP_CUSTOMER_SERVICE = 'customerservice'
+LAB_GROUP_EMAIL = 'NA.EDM@alsglobal.com'
 
+
+def _mention_handle(user_or_username):
+    """Return the short staff handle shown/typed in @mentions."""
+    username = getattr(user_or_username, 'username', user_or_username) or ''
+    username = str(username).strip()
+    if username.lower().endswith(MENTION_EMAIL_SUFFIX):
+        return username[:-len(MENTION_EMAIL_SUFFIX)]
+    return username
+
+
+def _extract_mention_handles(body):
+    handles = []
+    seen = set()
+    for match in MENTION_RE.finditer(body or ''):
+        handle = match.group(1).strip().lower()
+        if handle and handle not in seen:
+            seen.add(handle)
+            handles.append(handle)
+    return handles
+
+
+def _lookup_mention_user(handle):
+    user = User.objects.filter(username__iexact=handle, is_active=True).first()
+    if user is None:
+        user = User.objects.filter(
+            username__iexact=f'{handle}{MENTION_EMAIL_SUFFIX}',
+            is_active=True,
+        ).first()
+    return user
+
+
+def _eligible_role_users(role):
+    profiles = (
+        UserProfile.objects.filter(role=role, user__is_active=True)
+        .select_related('user')
+        .order_by('user__first_name', 'user__last_name', 'user__username')
+    )
+    return [profile.user for profile in profiles if user_has_als_email(profile.user)]
+
+
+def _resolve_mentions(body):
+    """Resolve individual and role-group mentions.
+
+    Returns (users, unavailable_direct_users, groups, direct_user_ids). Group
+    mentions deliberately exclude staff who do not yet have a valid ALS email,
+    because email-less staff cannot be mentioned.
+    """
+    resolved_by_id = {}
+    unavailable = []
+    groups = []
+    direct_user_ids = set()
+
+    for handle in _extract_mention_handles(body):
+        if handle == MENTION_GROUP_LAB:
+            if MENTION_GROUP_LAB not in groups:
+                groups.append(MENTION_GROUP_LAB)
+            for user in _eligible_role_users(UserProfile.ROLE_LAB_TECHNICIAN):
+                resolved_by_id[user.id] = user
+            continue
+        if handle == MENTION_GROUP_CUSTOMER_SERVICE:
+            if MENTION_GROUP_CUSTOMER_SERVICE not in groups:
+                groups.append(MENTION_GROUP_CUSTOMER_SERVICE)
+            for user in _eligible_role_users(UserProfile.ROLE_CUSTOMER_SERVICE):
+                resolved_by_id[user.id] = user
+            continue
+
+        user = _lookup_mention_user(handle)
+        if user is None:
+            continue
+        if not user_has_als_email(user):
+            unavailable.append(user)
+            continue
+        resolved_by_id[user.id] = user
+        direct_user_ids.add(user.id)
+
+    return list(resolved_by_id.values()), unavailable, groups, direct_user_ids
+
+
+def _mentioned_users_from_body(body):
+    return _resolve_mentions(body)[0]
+
+
+def _mention_delivery_addresses(users, groups, direct_user_ids):
+    """Return one deduplicated To list for the single outbound mention email."""
+    addresses = []
+    seen = set()
+
+    def add(address):
+        raw = str(address or '').strip()
+        key = raw.casefold()
+        if raw and key not in seen:
+            seen.add(key)
+            addresses.append(raw)
+
+    # @Lab is intentionally routed through the shared Edmonton mailbox rather
+    # than sending one copy to every Lab staff address.
+    if MENTION_GROUP_LAB in groups:
+        add(LAB_GROUP_EMAIL)
+
+    # @CustomerService is one email addressed to all eligible Customer Service
+    # staff members' stored ALS addresses.
+    if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+        for user in users:
+            profile = getattr(user, 'tracker_profile', None)
+            if profile and profile.role == UserProfile.ROLE_CUSTOMER_SERVICE:
+                add(normalize_als_email(user.email))
+
+    # Explicit individual mentions are also included in that same email.
+    for user in users:
+        if user.id in direct_user_ids:
+            add(normalize_als_email(user.email))
+
+    return addresses
+
+
+def _mention_labels(users, groups, direct_user_ids):
+    labels = []
+    if MENTION_GROUP_LAB in groups:
+        labels.append('@Lab')
+    if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+        labels.append('@CustomerService')
+    labels.extend(f'@{_mention_handle(user)}' for user in users if user.id in direct_user_ids)
+    return labels
+
+
+def _mention_notified_email(user, groups, direct_user_ids):
+    # If the person was explicitly named, record their own address as the
+    # delivery path even when they were also part of a group mention.
+    if user.id in direct_user_ids:
+        return normalize_als_email(user.email)
+    profile = getattr(user, 'tracker_profile', None)
+    if MENTION_GROUP_LAB in groups and profile and profile.role == UserProfile.ROLE_LAB_TECHNICIAN:
+        return LAB_GROUP_EMAIL
+    return normalize_als_email(user.email)
+
+
+def _mention_email(problem, mentioned_by, users, groups, direct_user_ids, body):
+    frontend = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
+    direct_url = f'{frontend}/problems/{problem.id}#follow-ups' if frontend else f'/problems/{problem.id}#follow-ups'
+    author_name = mentioned_by.get_full_name().strip() or _mention_handle(mentioned_by)
+    table_name = problem.table.name if problem.table_id else 'Tickets'
+    recipients = _mention_delivery_addresses(users, groups, direct_user_ids)
+    labels = _mention_labels(users, groups, direct_user_ids)
+    subject = f'Mention on Ticket #{problem.problem_number}'
+    message = (
+        f'Hello,\n\n'
+        f'{author_name} mentioned {", ".join(labels)} on Ticket #{problem.problem_number} in {table_name}.\n\n'
+        f'Message:\n{(body or "").strip()}\n\n'
+        f'Open the ticket directly:\n{direct_url}\n\n'
+        'Regards,\nALS Edmonton Ticket Tracker'
+    )
+    return {
+        # email is retained as a display/backward-compatibility field. New UI
+        # uses recipients so every address is supplied to the mail client.
+        'email': ', '.join(recipients),
+        'recipients': recipients,
+        'mentions': labels,
+        'subject': subject,
+        'body': message,
+        'direct_url': direct_url,
+    }
+
+
+def _mention_confirmation_payload(problem, author, body, users, groups, direct_user_ids):
+    return {
+        'problem_id': str(problem.id),
+        'author_id': author.id,
+        'body_sha256': hashlib.sha256((body or '').encode('utf-8')).hexdigest(),
+        'mentioned_users': [
+            {'user_id': user.id, 'email': normalize_als_email(user.email)}
+            for user in sorted(users, key=lambda item: item.id)
+        ],
+        'groups': sorted(groups),
+        'direct_user_ids': sorted(direct_user_ids),
+        'delivery_emails': [
+            address.casefold()
+            for address in _mention_delivery_addresses(users, groups, direct_user_ids)
+        ],
+    }
+
+
+def _mention_user_payload(user):
+    profile = getattr(user, 'tracker_profile', None)
+    role_label = profile.get_role_display() if profile and profile.role else ''
+    handle = _mention_handle(user)
+    return {
+        'id': user.id,
+        'username': handle,
+        'name': user.get_full_name().strip() or handle,
+        'role_label': role_label,
+        'kind': 'user',
+    }
+
+
+def _mention_group_payloads(query=''):
+    query = str(query or '').strip().lower()
+    groups = [
+        {
+            'id': 'group:lab',
+            'username': 'Lab',
+            'name': 'Lab',
+            'role_label': f'All Lab users · email {LAB_GROUP_EMAIL}',
+            'kind': 'group',
+        },
+        {
+            'id': 'group:customer-service',
+            'username': 'CustomerService',
+            'name': 'Customer Service',
+            'role_label': 'All Customer Service users with ALS email',
+            'kind': 'group',
+        },
+    ]
+    if not query:
+        return groups
+    return [entry for entry in groups if query in entry['username'].lower() or query in entry['name'].lower()]
 
 def _change_reason(request):
     """Return an optional staff-supplied change reason.
@@ -185,51 +412,18 @@ def ensure_problem_id_column(table):
 
 
 
-def _clean_custom_statuses(raw_choices):
-    # Compatibility helper retained for older callers. Status is no longer table-defined.
-    return list(PROBLEM_STATUS_CHOICES)
-
-
-def ensure_status_column(table):
-    column = table.columns.filter(field_key='status').first()
-    desired = {
-        'name': 'Status',
-        'description': 'Required built-in descriptive status. Values are fixed across all ticket tables; workflow routing is controlled separately by Current Workflow.',
-        'column_type': ProblemColumn.TYPE_CHOICE,
-        'required': True,
-        'searchable': True,
-        'include_in_customer_notification': False,
-        'choices': list(PROBLEM_STATUS_CHOICES),
-        'default_value': PROBLEM_STATUS_DEFAULT,
-        'position': 1,
-        'is_system': True,
-    }
-    if column is None:
-        column = ProblemColumn.objects.create(
-            table=table, field_key='status', **desired
-        )
-    else:
-        changed = []
-        for field, value in desired.items():
-            if getattr(column, field) != value:
-                setattr(column, field, value)
-                changed.append(field)
-        if changed:
-            column.save(update_fields=changed + ['modified_at'])
-    return column
-
 def ensure_current_workflow_column(table):
     column = table.columns.filter(field_key=SYSTEM_CURRENT_WORKFLOW_FIELD_KEY).first()
     if column is None:
-        # Insert immediately after Status. All later built-in/custom columns move right.
-        table.columns.filter(position__gte=2).update(position=F('position') + 1)
+        # Insert immediately after Ticket ID. All later columns move right.
+        table.columns.filter(position__gte=1).update(position=F('position') + 1)
         column = ProblemColumn.objects.create(
             table=table, name='Current Workflow',
             description='Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
             field_key=SYSTEM_CURRENT_WORKFLOW_FIELD_KEY,
             column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
             include_in_customer_notification=False, choices=list(CURRENT_WORKFLOW_CHOICES),
-            default_value=CURRENT_WORKFLOW_DEFAULT, position=2, is_system=True,
+            default_value=CURRENT_WORKFLOW_DEFAULT, position=1, is_system=True,
         )
     else:
         desired = {
@@ -237,7 +431,7 @@ def ensure_current_workflow_column(table):
             'description': 'Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
             'column_type': ProblemColumn.TYPE_CHOICE, 'required': True, 'searchable': True,
             'include_in_customer_notification': False, 'choices': list(CURRENT_WORKFLOW_CHOICES),
-            'default_value': CURRENT_WORKFLOW_DEFAULT, 'position': 2, 'is_system': True,
+            'default_value': CURRENT_WORKFLOW_DEFAULT, 'position': 1, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -251,14 +445,14 @@ def ensure_dispose_automatically_column(table):
     column = table.columns.filter(field_key=SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY).first()
     if column is None:
         # Insert immediately after Current Workflow. All later built-in/custom columns move right.
-        table.columns.filter(position__gte=3).update(position=F('position') + 1)
+        table.columns.filter(position__gte=2).update(position=F('position') + 1)
         column = ProblemColumn.objects.create(
             table=table, name='Dispose Automatically',
             description='Required built-in setting that controls whether the automatic-disposal countdown is active for this ticket.',
             field_key=SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY,
             column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
             include_in_customer_notification=False, choices=list(DISPOSE_AUTOMATICALLY_CHOICES),
-            default_value=DISPOSE_AUTOMATICALLY_NO, position=3, is_system=True,
+            default_value=DISPOSE_AUTOMATICALLY_NO, position=2, is_system=True,
         )
     else:
         desired = {
@@ -266,7 +460,7 @@ def ensure_dispose_automatically_column(table):
             'description': 'Required built-in setting that controls whether the automatic-disposal countdown is active for this ticket.',
             'column_type': ProblemColumn.TYPE_CHOICE, 'required': True, 'searchable': True,
             'include_in_customer_notification': False, 'choices': list(DISPOSE_AUTOMATICALLY_CHOICES),
-            'default_value': DISPOSE_AUTOMATICALLY_NO, 'position': 3, 'is_system': True,
+            'default_value': DISPOSE_AUTOMATICALLY_NO, 'position': 2, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -280,7 +474,7 @@ def ensure_dispose_automatically_column(table):
 def ensure_days_until_automatic_disposal_column(table):
     column = table.columns.filter(field_key=SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY).first()
     if column is None:
-        table.columns.filter(position__gte=4).update(position=F('position') + 1)
+        table.columns.filter(position__gte=3).update(position=F('position') + 1)
         column = ProblemColumn.objects.create(
             table=table,
             name='Days until up for disposal',
@@ -289,7 +483,7 @@ def ensure_days_until_automatic_disposal_column(table):
             column_type=ProblemColumn.TYPE_NUMBER,
             required=False, searchable=True,
             include_in_customer_notification=False, choices=[], default_value=None,
-            position=4, is_system=True,
+            position=3, is_system=True,
         )
     else:
         desired = {
@@ -297,7 +491,7 @@ def ensure_days_until_automatic_disposal_column(table):
             'description': 'Read-only countdown until this sample automatically changes Current Workflow to To be Disposed. The countdown restarts whenever Dispose Automatically changes from No to Yes and is inactive while the value is No.',
             'column_type': ProblemColumn.TYPE_NUMBER, 'required': False, 'searchable': True,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 4, 'is_system': True,
+            'position': 3, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -312,14 +506,14 @@ def ensure_tracking_link_columns(table):
     link_column = table.columns.filter(field_key=SYSTEM_TRACKING_LINK_FIELD_KEY).first()
     expiry_column = table.columns.filter(field_key=SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY).first()
 
-    # Positions 0..4 are Ticket ID, Status, Current Workflow, Dispose Automatically, and Days until up for disposal.
+    # Positions 0..3 are Ticket ID, Current Workflow, Dispose Automatically, and Days until up for disposal.
     # Shift ordinary columns only when one or both tracking columns are missing.
     if link_column is None and expiry_column is None:
-        table.columns.filter(position__gte=5).update(position=F('position') + 2)
+        table.columns.filter(position__gte=4).update(position=F('position') + 2)
     elif link_column is None:
-        table.columns.filter(position__gte=5).exclude(pk=expiry_column.pk).update(position=F('position') + 1)
+        table.columns.filter(position__gte=4).exclude(pk=expiry_column.pk).update(position=F('position') + 1)
     elif expiry_column is None:
-        table.columns.filter(position__gte=6).exclude(pk=link_column.pk).update(position=F('position') + 1)
+        table.columns.filter(position__gte=5).exclude(pk=link_column.pk).update(position=F('position') + 1)
 
     if link_column is None:
         link_column = ProblemColumn.objects.create(
@@ -327,7 +521,7 @@ def ensure_tracking_link_columns(table):
             description='Persistent secure Ticket Tracking Link for this row. At most one link exists per ticket.',
             field_key=SYSTEM_TRACKING_LINK_FIELD_KEY, column_type=ProblemColumn.TYPE_URL,
             required=False, searchable=False, include_in_customer_notification=False,
-            choices=[], default_value=None, position=5, is_system=True,
+            choices=[], default_value=None, position=4, is_system=True,
         )
     else:
         desired = {
@@ -335,7 +529,7 @@ def ensure_tracking_link_columns(table):
             'description': 'Persistent secure Ticket Tracking Link for this row. At most one link exists per ticket.',
             'column_type': ProblemColumn.TYPE_URL, 'required': False, 'searchable': False,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 5, 'is_system': True,
+            'position': 4, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -350,7 +544,7 @@ def ensure_tracking_link_columns(table):
             description='When the tracking link becomes inaccessible. It resets to 30 days whenever Current Workflow switches to a disposal, shipping, or back-to-testing state.',
             field_key=SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, column_type=ProblemColumn.TYPE_DATETIME,
             required=False, searchable=False, include_in_customer_notification=False,
-            choices=[], default_value=None, position=6, is_system=True,
+            choices=[], default_value=None, position=5, is_system=True,
         )
     else:
         desired = {
@@ -358,7 +552,7 @@ def ensure_tracking_link_columns(table):
             'description': 'When the tracking link becomes inaccessible. It resets to 30 days whenever Current Workflow switches to a disposal, shipping, or back-to-testing state.',
             'column_type': ProblemColumn.TYPE_DATETIME, 'required': False, 'searchable': False,
             'include_in_customer_notification': False, 'choices': [], 'default_value': None,
-            'position': 6, 'is_system': True,
+            'position': 5, 'is_system': True,
         }
         changed = []
         for field, value in desired.items():
@@ -372,7 +566,6 @@ def ensure_tracking_link_columns(table):
 
 def ensure_builtin_columns(table):
     ensure_problem_id_column(table)
-    ensure_status_column(table)
     ensure_current_workflow_column(table)
     ensure_dispose_automatically_column(table)
     ensure_days_until_automatic_disposal_column(table)
@@ -499,11 +692,30 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
-                    .prefetch_related('comments', 'images__uploaded_by', 'attachments__uploaded_by', 'history__actor', 'table__columns')
+                    .prefetch_related('comments__mentions__mentioned_user', 'images__uploaded_by', 'attachments__uploaded_by', 'history__actor', 'table__columns')
                     .order_by('-problem_number'))
         table_id = self.request.query_params.get('table')
         if table_id:
             queryset = queryset.filter(table_id=table_id)
+
+        # Dashboard "See samples" links carry an opened_range so the user
+        # lands in the selected ticket table with the same date window that
+        # produced the dashboard card count. Keep this filtering at queryset
+        # level so normal search and advanced search continue to respect it.
+        opened_range = str(self.request.query_params.get('opened_range') or '').strip().lower()
+        if opened_range:
+            from .dashboard_views import WINDOWS, _custom_bounds
+            if opened_range in WINDOWS:
+                queryset = queryset.filter(created_at__gte=timezone.now() - WINDOWS[opened_range])
+            elif opened_range == 'custom':
+                try:
+                    _, _, start_at, end_at = _custom_bounds(
+                        self.request.query_params.get('start_date'),
+                        self.request.query_params.get('end_date'),
+                    )
+                except ValueError:
+                    return queryset.none()
+                queryset = queryset.filter(created_at__gte=start_at, created_at__lt=end_at)
         return queryset
 
     def perform_create(self, serializer):
@@ -537,7 +749,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         before_core = {
             field: getattr(instance, field)
             for field in [
-                'source_id', 'status', 'als_tracking_number', 'problem_sample_count', 'brand',
+                'source_id', 'als_tracking_number', 'problem_sample_count', 'brand',
                 'distributor', 'end_user', 'date_received', 'problem_type', 'issue_description',
                 'client_contact_email', 'courier', 'courier_tracking_number', 'notify', 'email_confirmation',
             ]
@@ -588,7 +800,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 })
 
         core_labels = {
-            'source_id': 'Source ID', 'status': 'Status', 'als_tracking_number': 'ALS Tracking Number',
+            'source_id': 'Source ID', 'als_tracking_number': 'ALS Tracking Number',
             'problem_sample_count': 'Problem Sample Count', 'brand': 'Brand', 'distributor': 'Distributor',
             'end_user': 'End User', 'date_received': 'Date Received', 'problem_type': 'Problem Type',
             'issue_description': 'Issue Description', 'client_contact_email': 'Client Contact Email',
@@ -1086,10 +1298,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         error = _validate_uploaded_file(uploaded, image=True)
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+        original_name = (uploaded.name or 'image')[:255]
+        try:
+            compressed_bytes, stored_name = compress_problem_image(uploaded, original_name)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return Response({'detail': 'The selected image could not be processed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not compressed_bytes:
+            return Response({'detail': 'The selected image could not be processed.'}, status=status.HTTP_400_BAD_REQUEST)
+
         image = ProblemImage.objects.create(
             problem=problem,
-            image=uploaded,
-            original_name=(uploaded.name or 'image')[:255],
+            image=ContentFile(compressed_bytes, name=stored_name),
+            original_name=original_name,
             uploaded_by=request.user,
             include_in_customer_notification=_request_bool(request.data.get('include_in_customer_notification'), True),
         )
@@ -1106,8 +1326,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         image = problem.images.filter(pk=image_id).first()
         if not image or not image.image:
             return Response({'detail': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
-        filename = image.original_name or os.path.basename(image.image.name) or f'image-{image.id}'
-        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        stored_filename = os.path.basename(image.image.name) or f'image-{image.id}'
+        filename = stored_filename if stored_filename.lower().endswith('.webp') else (image.original_name or stored_filename)
+        content_type = mimetypes.guess_type(stored_filename)[0] or 'application/octet-stream'
         try:
             image.image.open('rb')
         except (OSError, ValueError):
@@ -1248,8 +1469,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         message.set_content(body)
 
         for image in images:
-            filename = image.original_name or os.path.basename(image.image.name) or 'image'
-            _add_message_file(message, image.image, filename)
+            stored_filename = os.path.basename(image.image.name) or 'image'
+            filename = stored_filename if stored_filename.lower().endswith('.webp') else (image.original_name or stored_filename)
+            _add_message_file(message, image.image, filename, mimetypes.guess_type(stored_filename)[0] or 'application/octet-stream')
         for attachment in attachments:
             filename = attachment.original_name or os.path.basename(attachment.file.name) or 'attachment'
             _add_message_file(message, attachment.file, filename, attachment.content_type)
@@ -1358,7 +1580,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             },
         )
         problem.transition_to_disposal_if_due(now=timezone.now())
-        problem.refresh_from_db(fields=['customer_notified_at', 'status', 'custom_values', 'modified_by'])
+        problem.refresh_from_db(fields=['customer_notified_at', 'custom_values', 'modified_by'])
         serialized = ProblemSampleSerializer(problem, context={'request': request}).data
         return Response({
             'id': history.id,
@@ -1373,18 +1595,203 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'automatic_disposal_activated': bool(first_notification and changes),
         }, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'], url_path='prepare-comment-mentions')
+    def prepare_comment_mentions(self, request, pk=None):
+        """Build mention emails without saving the follow-up entry."""
+        problem = self.get_object()
+        body = (request.data.get('body') or '').strip()
+        if not body:
+            return Response({'detail': 'Comment cannot be blank.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(body) > 10000:
+            return Response({'detail': 'Comment must be 10,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body)
+        if unavailable:
+            handles = ', '.join(f'@{_mention_handle(user)}' for user in unavailable)
+            return Response(
+                {'detail': f'{handles} cannot be mentioned until their ALS email is set.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # @CustomerService only represents staff accounts that can actually be
+        # mentioned. If none have ALS email yet, do not silently save a dead
+        # group mention.
+        if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+            customer_service_users = [
+                user for user in mentioned_users
+                if getattr(getattr(user, 'tracker_profile', None), 'role', '') == UserProfile.ROLE_CUSTOMER_SERVICE
+            ]
+            if not customer_service_users:
+                return Response(
+                    {'detail': 'No Customer Service users with ALS emails are available to mention.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids)
+        if not recipients:
+            return Response({'requires_email': False, 'emails': [], 'confirmation_token': ''})
+
+        payload = _mention_confirmation_payload(
+            problem, request.user, body, mentioned_users, groups, direct_user_ids,
+        )
+        token = signing.dumps(payload, salt='problem-comment-mention-email', compress=True)
+        return Response({
+            'requires_email': True,
+            # One follow-up always produces one email, even when multiple
+            # people/groups were mentioned.
+            'emails': [
+                _mention_email(problem, request.user, mentioned_users, groups, direct_user_ids, body)
+            ],
+            'confirmation_token': token,
+        })
+
     @action(detail=True, methods=['post'])
     def comments(self, request, pk=None):
         problem = self.get_object()
         body = (request.data.get('body') or '').strip()
         if not body:
             return Response({'detail': 'Comment cannot be blank.'}, status=status.HTTP_400_BAD_REQUEST)
-        comment = ProblemComment.objects.create(problem=problem, body=body, author=request.user)
-        ProblemHistory.objects.create(
-            problem=problem, action=ProblemHistory.ACTION_COMMENT, actor=request.user,
-            summary='Added comment', details={'comment': body},
-        )
+        if len(body) > 10000:
+            return Response({'detail': 'Comment must be 10,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body)
+        if unavailable:
+            handles = ', '.join(f'@{_mention_handle(user)}' for user in unavailable)
+            return Response(
+                {'detail': f'{handles} cannot be mentioned until their ALS email is set.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+            customer_service_users = [
+                user for user in mentioned_users
+                if getattr(getattr(user, 'tracker_profile', None), 'role', '') == UserProfile.ROLE_CUSTOMER_SERVICE
+            ]
+            if not customer_service_users:
+                return Response(
+                    {'detail': 'No Customer Service users with ALS emails are available to mention.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids)
+        requires_email = bool(recipients)
+        if requires_email:
+            token = str(request.data.get('mention_email_confirmation_token') or '').strip()
+            if not token:
+                return Response(
+                    {'detail': 'Send the required mention email before saving this comment.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                confirmed = signing.loads(
+                    token, salt='problem-comment-mention-email', max_age=15 * 60,
+                )
+            except signing.SignatureExpired:
+                return Response(
+                    {'detail': 'The mention email confirmation expired. Reopen the email preview and send it again.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            except signing.BadSignature:
+                return Response(
+                    {'detail': 'The mention email confirmation is invalid. Reopen the email preview.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            expected = _mention_confirmation_payload(
+                problem, request.user, body, mentioned_users, groups, direct_user_ids,
+            )
+            if confirmed != expected:
+                return Response(
+                    {'detail': 'The comment or mention recipients changed. Reopen the email preview before saving.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        confirmed_at = timezone.now() if requires_email else None
+        with transaction.atomic():
+            comment = ProblemComment.objects.create(problem=problem, body=body, author=request.user)
+            mention_payload = []
+            for mentioned_user in mentioned_users:
+                ProblemMention.objects.create(
+                    comment=comment,
+                    problem=problem,
+                    mentioned_user=mentioned_user,
+                    mentioned_by=request.user,
+                    notified_email=_mention_notified_email(mentioned_user, groups, direct_user_ids),
+                    email_confirmed_at=confirmed_at,
+                )
+                mention_payload.append(_mention_user_payload(mentioned_user))
+            ProblemHistory.objects.create(
+                problem=problem, action=ProblemHistory.ACTION_COMMENT, actor=request.user,
+                summary='Added comment', details={
+                    'comment': body,
+                    'mentions': mention_payload,
+                    'mention_groups': [
+                        '@Lab' if group == MENTION_GROUP_LAB else '@CustomerService'
+                        for group in groups
+                    ],
+                    'mention_email_recipients': recipients,
+                    'mention_email_confirmed': requires_email,
+                },
+            )
         return Response(CommentSerializer(comment).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='mention-users')
+    def mention_users(self, request):
+        query = str(request.query_params.get('q') or '').strip()[:80]
+        users = (User.objects.filter(is_active=True, email__iendswith=MENTION_EMAIL_SUFFIX)
+                 .exclude(email='')
+                 .select_related('tracker_profile'))
+        if query:
+            users = users.filter(
+                Q(username__icontains=query)
+                | Q(first_name__icontains=query)
+                | Q(last_name__icontains=query)
+            )
+        candidates = users.order_by('first_name', 'last_name', 'username')[:60]
+        valid_users = [user for user in candidates if user_has_als_email(user)][:20]
+        return Response(
+            _mention_group_payloads(query)
+            + [_mention_user_payload(user) for user in valid_users]
+        )
+
+    @action(detail=False, methods=['get'], url_path='mentions')
+    def mention_inbox(self, request):
+        mentions = ProblemMention.objects.filter(mentioned_user=request.user)
+        if str(request.query_params.get('summary') or '').lower() in {'1', 'true', 'yes'}:
+            return Response({'unread_count': mentions.filter(read_at__isnull=True).count()})
+        mentions = (mentions.select_related('problem__table', 'comment', 'mentioned_by')
+                    .order_by('-created_at', '-id')[:200])
+        return Response({
+            'unread_count': ProblemMention.objects.filter(mentioned_user=request.user, read_at__isnull=True).count(),
+            'results': [
+                {
+                    'id': mention.id,
+                    'ticket_id': str(mention.problem_id),
+                    'problem_number': mention.problem.problem_number,
+                    'table_name': mention.problem.table.name if mention.problem.table_id else '',
+                    'comment': mention.comment.body,
+                    'mentioned_by_username': _mention_handle(mention.mentioned_by) if mention.mentioned_by else '',
+                    'mentioned_by_name': (mention.mentioned_by.get_full_name().strip() or mention.mentioned_by.username) if mention.mentioned_by else 'Unknown user',
+                    'created_at': mention.created_at,
+                    'read_at': mention.read_at,
+                }
+                for mention in mentions
+            ],
+        })
+
+    @action(detail=False, methods=['post'], url_path=r'mentions/(?P<mention_id>\d+)/read')
+    def mark_mention_read(self, request, mention_id=None):
+        updated = ProblemMention.objects.filter(
+            pk=mention_id, mentioned_user=request.user, read_at__isnull=True
+        ).update(read_at=timezone.now())
+        if not ProblemMention.objects.filter(pk=mention_id, mentioned_user=request.user).exists():
+            return Response({'detail': 'Mention not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'read': True, 'updated': bool(updated)})
+
+    @action(detail=False, methods=['post'], url_path='mentions/mark-all-read')
+    def mark_all_mentions_read(self, request):
+        updated = ProblemMention.objects.filter(
+            mentioned_user=request.user, read_at__isnull=True
+        ).update(read_at=timezone.now())
+        return Response({'updated': updated})
 
 
 class ProblemContainerViewSet(viewsets.ModelViewSet):
@@ -1423,7 +1830,6 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             before = sample.workflow_status
             before_auto = sample.dispose_automatically
             disposal_snapshot[str(sample.id)] = {
-                'status': sample.status,
                 'current_workflow': sample.current_workflow,
                 'custom_values': dict(sample.custom_values or {}),
                 'modified_by_id': sample.modified_by_id,
@@ -1587,7 +1993,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 before = str(
                     saved_values.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY)
                     or saved.get('current_workflow')
-                    or (saved.get('status') if str(saved.get('status') or '') in CURRENT_WORKFLOW_CHOICES else CURRENT_WORKFLOW_DEFAULT)
+                    or CURRENT_WORKFLOW_DEFAULT
                 )
                 restore_plan.append((sample, before, saved))
                 continue
@@ -1617,7 +2023,6 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         for sample, before, saved in restore_plan:
             if saved is not None:
                 sample.custom_values = dict(saved.get('custom_values') or {})
-                sample.status = str(saved.get('status') or '')
                 sample.current_workflow = before or CURRENT_WORKFLOW_DEFAULT
                 sample.custom_values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = sample.current_workflow
                 sample.modified_by_id = saved.get('modified_by_id')
@@ -1643,7 +2048,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 else:
                     sample.automatic_disposal_started_at = None
                 update_fields = [
-                    'custom_values', 'status', 'current_workflow', 'modified_by', 'modified_at',
+                    'custom_values', 'current_workflow', 'modified_by', 'modified_at',
                     'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action',
                     'automatic_disposal_started_at',
                 ]
@@ -1696,16 +2101,6 @@ class ProblemTableViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'This table contains tickets. Remove or archive them before deleting the table.'}, status=status.HTTP_409_CONFLICT)
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=True, methods=['post'], url_path='status-values')
-    @transaction.atomic
-    def status_values(self, request, pk=None):
-        table = ProblemTable.objects.select_for_update().get(pk=self.get_object().pk)
-        column = ensure_status_column(table)
-        return Response({
-            'detail': 'Status values are fixed built-in values and cannot be added, renamed, or deleted.',
-            'statuses': list(PROBLEM_STATUS_CHOICES),
-            'default_status': column.default_value,
-        }, status=status.HTTP_409_CONFLICT)
 
 
 
@@ -1933,6 +2328,25 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
         table_id = self.request.query_params.get('table')
         if table_id:
             queryset = queryset.filter(table_id=table_id)
+
+        # Dashboard "See samples" links carry an opened_range so the user
+        # lands in the selected ticket table with the same date window that
+        # produced the dashboard card count. Keep this filtering at queryset
+        # level so normal search and advanced search continue to respect it.
+        opened_range = str(self.request.query_params.get('opened_range') or '').strip().lower()
+        if opened_range:
+            from .dashboard_views import WINDOWS, _custom_bounds
+            if opened_range in WINDOWS:
+                queryset = queryset.filter(created_at__gte=timezone.now() - WINDOWS[opened_range])
+            elif opened_range == 'custom':
+                try:
+                    _, _, start_at, end_at = _custom_bounds(
+                        self.request.query_params.get('start_date'),
+                        self.request.query_params.get('end_date'),
+                    )
+                except ValueError:
+                    return queryset.none()
+                queryset = queryset.filter(created_at__gte=start_at, created_at__lt=end_at)
         return queryset
 
     def destroy(self, request, *args, **kwargs):
@@ -2395,8 +2809,9 @@ class ProblemAcknowledgementImageView(APIView):
         image = ProblemImage.objects.filter(pk=image_id, problem=problem).first()
         if not image or not image.image:
             return Response({'detail': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
-        filename = image.original_name or os.path.basename(image.image.name) or f'image-{image.id}'
-        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        stored_filename = os.path.basename(image.image.name) or f'image-{image.id}'
+        filename = stored_filename if stored_filename.lower().endswith('.webp') else (image.original_name or stored_filename)
+        content_type = mimetypes.guess_type(stored_filename)[0] or 'application/octet-stream'
         try:
             image.image.open('rb')
         except (OSError, ValueError):

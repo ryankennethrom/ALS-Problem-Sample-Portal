@@ -9,11 +9,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import (
-    AutomaticDisposalExpiryEvent, ProblemHistory, ProblemSample, ProblemTrackingLink,
-    PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
-    TERMINAL_PROBLEM_STATUSES,
+    AutomaticDisposalExpiryEvent, ProblemContainer, ProblemHistory, ProblemSample, ProblemTable, ProblemTrackingLink,
+    CURRENT_WORKFLOW_DEFAULT, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_TO_BE_DISPOSED,
+    PROBLEM_STATUS_TO_BE_SHIPPED_BACK, TERMINAL_PROBLEM_STATUSES,
 )
 from .old_tickets import old_ticket_age_months, old_ticket_anniversary, old_ticket_before
+from .storage_stats import image_storage_stats
 
 WINDOWS = {
     'day': timedelta(days=1),
@@ -34,11 +35,12 @@ INELIGIBLE_WORKFLOWS = list(TERMINAL_PROBLEM_STATUSES)
 
 
 def tracking_not_sent_tickets(queryset=None):
-    """Open workflow tickets without a persisted customer tracking link."""
+    """CS Follow Up tickets without a persisted customer tracking link."""
     if queryset is None:
         queryset = ProblemSample.objects.all()
-    return queryset.exclude(current_workflow__in=INELIGIBLE_WORKFLOWS).filter(
-        tracking_link_record__isnull=True
+    return queryset.filter(
+        current_workflow=CURRENT_WORKFLOW_DEFAULT,
+        tracking_link_record__isnull=True,
     )
 
 
@@ -157,21 +159,50 @@ class DashboardView(APIView):
             except ValueError as exc:
                 return Response({'detail': str(exc)}, status=400)
 
-        counts = ProblemSample.objects.aggregate(
+        table_id = str(request.query_params.get('table') or '').strip()
+        selected_table = None
+        opened_tickets = ProblemSample.objects.all()
+        if table_id:
+            try:
+                selected_table = ProblemTable.objects.get(pk=table_id)
+            except (ProblemTable.DoesNotExist, ValueError, TypeError):
+                return Response({'detail': 'Ticket table not found.'}, status=404)
+            opened_tickets = opened_tickets.filter(table=selected_table)
+
+        opened_counts = opened_tickets.aggregate(
             day=Count('id', filter=Q(created_at__gte=now - WINDOWS['day'])),
             week=Count('id', filter=Q(created_at__gte=now - WINDOWS['week'])),
             month=Count('id', filter=Q(created_at__gte=now - WINDOWS['month'])),
             six_months=Count('id', filter=Q(created_at__gte=now - WINDOWS['six_months'])),
             year=Count('id', filter=Q(created_at__gte=now - WINDOWS['year'])),
+        )
+        counts = {key: int(value or 0) for key, value in opened_counts.items()}
+        action_counts = ProblemSample.objects.aggregate(
             to_be_shipped=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)),
             to_be_back_to_testing=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)),
         )
-        counts = {key: int(value or 0) for key, value in counts.items()}
+        counts.update({key: int(value or 0) for key, value in action_counts.items()})
         counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
         age_months = old_ticket_age_months()
         counts['old_tickets'] = ProblemSample.objects.filter(
             created_at__lt=old_ticket_before(age_months)
         ).count()
+        # Match Dispose Containers -> Ready to Dispose: the container must be
+        # non-empty, not already disposed, and every attached ticket must be
+        # To be Disposed or Disposed.
+        ready_workflows = [PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED]
+        counts['containers_ready_to_dispose'] = (
+            ProblemContainer.objects.filter(disposed_at__isnull=True)
+            .annotate(
+                dashboard_sample_count=Count('problem_samples'),
+                dashboard_blocking_count=Count(
+                    'problem_samples',
+                    filter=~Q(problem_samples__current_workflow__in=ready_workflows),
+                ),
+            )
+            .filter(dashboard_sample_count__gt=0, dashboard_blocking_count=0)
+            .count()
+        )
 
         # A tracking link is persisted only when the customer tracking email is
         # explicitly confirmed as sent. Count links created during the current
@@ -191,7 +222,7 @@ class DashboardView(APIView):
         custom_payload = None
         if custom:
             start_date, end_date, custom_start, custom_end = custom
-            counts['custom'] = ProblemSample.objects.filter(
+            counts['custom'] = opened_tickets.filter(
                 created_at__gte=custom_start, created_at__lt=custom_end
             ).count()
             custom_payload = {'start_date': start_date.isoformat(), 'end_date': end_date.isoformat()}
@@ -214,7 +245,7 @@ class DashboardView(APIView):
                 'year': 'Last year',
             }[selected]
 
-        points = _series(ProblemSample.objects.all(), 'created_at', chart_start, chart_end, bucket)
+        points = _series(opened_tickets, 'created_at', chart_start, chart_end, bucket)
         automatic_disposal_points = _series(
             AutomaticDisposalExpiryEvent.objects.all(),
             'effective_at',
@@ -224,6 +255,7 @@ class DashboardView(APIView):
         )
         return Response({
             'generated_at': now.isoformat(),
+            'selected_table': ({'id': str(selected_table.id), 'name': selected_table.name} if selected_table else None),
             'counts': counts,
             'old_ticket_definition': {
                 'age_months': age_months,
@@ -246,6 +278,73 @@ class DashboardView(APIView):
             },
         })
 
+
+
+class DashboardStorageView(APIView):
+    """Actual image/media storage telemetry for the staff dashboard."""
+
+    def get(self, request):
+        return Response(image_storage_stats())
+
+
+class DashboardOpenedTicketsView(APIView):
+    """Cross-table ticket list matching one of the dashboard opened-date cards."""
+
+    PAGE_SIZE = 50
+
+    def get(self, request):
+        selected = str(request.query_params.get('range') or '').strip().lower()
+        valid_ranges = set(WINDOWS) | {'custom'}
+        if selected not in valid_ranges:
+            return Response({'detail': 'Invalid opened-ticket range.'}, status=400)
+
+        now = timezone.now()
+        if selected == 'custom':
+            try:
+                start_date, end_date, start_at, end_at = _custom_bounds(
+                    request.query_params.get('start_date'),
+                    request.query_params.get('end_date'),
+                )
+            except ValueError as exc:
+                return Response({'detail': str(exc)}, status=400)
+            tickets = ProblemSample.objects.filter(created_at__gte=start_at, created_at__lt=end_at)
+            range_label = f'{start_date.isoformat()} to {end_date.isoformat()}'
+        else:
+            tickets = ProblemSample.objects.filter(created_at__gte=now - WINDOWS[selected])
+            range_label = {
+                'day': 'Last 24 hours',
+                'week': 'Last 7 days',
+                'month': 'Last 30 days',
+                'six_months': 'Last 6 months',
+                'year': 'Last year',
+            }[selected]
+
+        try:
+            page = int(request.query_params.get('page') or 1)
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid page.'}, status=400)
+        if page < 1:
+            return Response({'detail': 'Invalid page.'}, status=400)
+
+        tickets = tickets.select_related('table').order_by('-created_at', '-pk')
+        count = tickets.count()
+        start = (page - 1) * self.PAGE_SIZE
+        rows = list(tickets[start:start + self.PAGE_SIZE])
+        return Response({
+            'count': count,
+            'page': page,
+            'page_size': self.PAGE_SIZE,
+            'range': selected,
+            'range_label': range_label,
+            'results': [{
+                'id': str(ticket.pk),
+                'problem_number': ticket.problem_number,
+                'table_id': str(ticket.table_id) if ticket.table_id else '',
+                'table_name': ticket.table.name if ticket.table else '—',
+                'current_workflow': ticket.workflow_status,
+                'created_at': ticket.created_at,
+            } for ticket in rows],
+        })
 
 
 class CustomerRespondedTicketsView(APIView):
@@ -272,7 +371,7 @@ class CustomerRespondedTicketsView(APIView):
             tickets = tickets.filter(table_id=table_id)
         query = str(request.query_params.get('q') or '').strip()[:100]
         if query:
-            match = Q(table__name__icontains=query) | Q(status__icontains=query) | Q(current_workflow__icontains=query)
+            match = Q(table__name__icontains=query) | Q(current_workflow__icontains=query)
             if query.lstrip('#').isdigit():
                 match |= Q(problem_number=int(query.lstrip('#')))
             tickets = tickets.filter(match)
@@ -295,7 +394,6 @@ class CustomerRespondedTicketsView(APIView):
                 'id': str(row.pk),
                 'problem_number': row.problem_number,
                 'table_name': row.table.name if row.table else '—',
-                'status': row.status,
                 'current_workflow': row.workflow_status,
                 'created_at': row.created_at,
                 'responded_at': row.last_response_at,

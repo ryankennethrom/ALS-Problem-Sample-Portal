@@ -12,13 +12,13 @@ class TrackingNotSentDashboardTests(TestCase):
         first = ProblemTable.objects.create(name='First table')
         second = ProblemTable.objects.create(name='Second table')
 
-        def ticket(table, number, workflow='CS Follow-Up', status='NEW'):
+        def ticket(table, number, workflow='CS Follow-Up'):
             return ProblemSample.objects.create(
-                table=table, problem_number=number, current_workflow=workflow, status=status,
+                table=table, problem_number=number, current_workflow=workflow,
             )
 
         ticket(first, 1)
-        ticket(second, 1, 'Waiting For Customer', 'IN PROGRESS')
+        waiting = ticket(second, 1, 'Waiting for Customer Response')
         with_link = ticket(first, 2)
         ProblemTrackingLink.objects.create(ticket=with_link, tracking_token='persisted-link')
         for number, workflow in enumerate([
@@ -29,14 +29,19 @@ class TrackingNotSentDashboardTests(TestCase):
 
         dashboard = client.get('/api/dashboard/')
         self.assertEqual(dashboard.status_code, 200)
-        self.assertEqual(dashboard.data['counts']['tracking_not_sent'], 2)
+        self.assertEqual(dashboard.data['counts']['tracking_not_sent'], 1)
 
-        for table in (first, second):
-            response = client.get('/api/problem-samples/follow-up-required/', {
-                'table': str(table.pk), 'tracking_not_sent': '1',
-            })
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(response.data), 1)
+        response = client.get('/api/problem-samples/follow-up-required/', {
+            'table': str(first.pk), 'tracking_not_sent': '1',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+
+        waiting_response = client.get('/api/problem-samples/follow-up-required/', {
+            'table': str(second.pk), 'tracking_not_sent': '1',
+        })
+        self.assertEqual(waiting_response.status_code, 200)
+        self.assertEqual(len(waiting_response.data), 0)
 
         all_rows = client.get('/api/problem-samples/follow-up-required/', {'table': str(first.pk)})
         self.assertEqual(len(all_rows.data), 2)
@@ -48,4 +53,8 @@ class TrackingNotSentDashboardTests(TestCase):
         self.assertEqual(len(filtered.data), 1)
 
         with_link.tracking_link_record.delete()
+        self.assertEqual(client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 2)
+
+        waiting.set_workflow_status('CS Follow-Up')
+        waiting.save(update_fields=['current_workflow', 'custom_values'])
         self.assertEqual(client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 3)

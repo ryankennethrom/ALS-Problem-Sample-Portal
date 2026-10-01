@@ -10,7 +10,16 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemComment, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, PROBLEM_STATUS_DEFAULT, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
+from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
+
+MENTION_EMAIL_SUFFIX = '@alsglobal.com'
+
+def _mention_handle(username):
+    username = str(username or '').strip()
+    if username.lower().endswith(MENTION_EMAIL_SUFFIX):
+        return username[:-len(MENTION_EMAIL_SUFFIX)]
+    return username
+
 
 
 class ProblemColumnSerializer(serializers.ModelSerializer):
@@ -163,7 +172,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                 ProblemColumn.TYPE_TIME, ProblemColumn.TYPE_BOOLEAN, ProblemColumn.TYPE_EMAIL,
                 ProblemColumn.TYPE_URL, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
             }
-            editable_system_keys = {'status', SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+            editable_system_keys = {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
             cleaned_rules = []
             for index, raw_rule in enumerate(rules, start=1):
                 if not isinstance(raw_rule, dict):
@@ -230,7 +239,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
 
         if column_type == ProblemColumn.TYPE_GROUP:
             if group_role not in {ProblemColumn.GROUP_LAB_TECHNICIAN, ProblemColumn.GROUP_CUSTOMER_SERVICE}:
-                raise serializers.ValidationError({'group_role': 'Choose either Lab Technician or Customer Service.'})
+                raise serializers.ValidationError({'group_role': 'Choose either Lab or Customer Service.'})
             attrs['group_role'] = group_role
         else:
             attrs['group_role'] = ''
@@ -340,10 +349,28 @@ class ProblemTableSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     author_email = serializers.EmailField(source='author.email', read_only=True)
+    author_username = serializers.CharField(source='author.username', read_only=True)
+    author_name = serializers.SerializerMethodField()
+    mentions = serializers.SerializerMethodField()
 
     class Meta:
         model = ProblemComment
-        fields = ['id', 'body', 'author_email', 'legacy_author', 'created_at']
+        fields = ['id', 'body', 'author_email', 'author_username', 'author_name', 'legacy_author', 'mentions', 'created_at']
+
+    def get_author_name(self, obj):
+        if not obj.author:
+            return ''
+        return obj.author.get_full_name().strip() or obj.author.username
+
+    def get_mentions(self, obj):
+        return [
+            {
+                'id': mention.mentioned_user_id,
+                'username': _mention_handle(mention.mentioned_user.username),
+                'name': mention.mentioned_user.get_full_name().strip() or _mention_handle(mention.mentioned_user.username),
+            }
+            for mention in obj.mentions.all()
+        ]
 
 
 class ImageSerializer(serializers.ModelSerializer):
@@ -510,7 +537,6 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
                 'created_date': timezone.localdate(sample.created_at).isoformat(),
                 'expires_at': expires_at,
                 'expiration_status': sample.expiration_status,
-                'status': str((sample.custom_values or {}).get('status') or sample.status or ''),
                 'current_workflow': sample.workflow_status,
                 'ready_for_disposal': self._sample_ready_for_disposal(sample),
                 'days_until_expiration': days_remaining,
@@ -828,14 +854,13 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
         columns = {
             c.field_key: c for c in table.columns.all()
-            if not c.is_system or c.field_key in {'status', SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+            if not c.is_system or c.field_key in {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
         }
-        # Ticket ID is always server-generated. Status is descriptive; Current
-        # Workflow and Dispose Automatically are the built-in routing controls.
+        # Ticket ID is always server-generated. Current Workflow and Dispose
+        # Automatically are the built-in routing controls. Ignore the removed
+        # legacy Status key from stale clients or historical rows.
         merged.pop('problem-id', None)
-        status_column = columns.get('status')
-        if _is_empty(merged.get('status')):
-            merged['status'] = (status_column.default_value if status_column else PROBLEM_STATUS_DEFAULT) or PROBLEM_STATUS_DEFAULT
+        merged.pop('status', None)
         if _is_empty(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY)):
             merged[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = (instance.workflow_status if instance else CURRENT_WORKFLOW_DEFAULT)
         if _is_empty(merged.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY)):
@@ -934,11 +959,6 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             except DjangoValidationError as exc:
                 errors['intercolumn_rules'] = '; '.join(exc.messages) if hasattr(exc, 'messages') else str(exc)
 
-        status_value = str(merged.get('status') or '').strip()
-        allowed_statuses = table.status_choices()
-        if status_value not in allowed_statuses:
-            errors['status'] = 'Choose a valid status for this table.'
-
         workflow_value = str(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
         if workflow_value not in CURRENT_WORKFLOW_CHOICES:
             errors[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = 'Choose a valid Current Workflow.'
@@ -961,7 +981,6 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'custom_values': errors})
 
         attrs['custom_values'] = merged
-        attrs['status'] = status_value
         attrs['current_workflow'] = workflow_value
         return attrs
 
@@ -969,9 +988,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         values = dict(data.get('custom_values') or {})
         values['problem-id'] = instance.problem_number
-        status_column = instance.table.columns.filter(field_key='status').first() if instance.table_id else None
-        status_default = (status_column.default_value if status_column else PROBLEM_STATUS_DEFAULT) or PROBLEM_STATUS_DEFAULT
-        values['status'] = str(values.get('status') or instance.status or status_default)
+        values.pop('status', None)
         values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = instance.workflow_status
         values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = str(values.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY) or DISPOSE_AUTOMATICALLY_NO)
         if instance.table_id:
