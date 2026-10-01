@@ -109,10 +109,11 @@ function DefaultValueField({
     : type === 'datetime' ? 'datetime-local'
     : type === 'time' ? 'time'
     : type === 'email' ? 'email'
+    : type === 'phone' ? 'tel'
     : type === 'url' ? 'url'
     : 'text';
 
-  return <div className="field"><label htmlFor={id}>Default value</label><input id={id} className="input" type={inputType} step={type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} placeholder={['text', 'email', 'url'].includes(type) ? 'Optional' : undefined} /></div>;
+  return <div className="field"><label htmlFor={id}>Default value</label><input id={id} className="input" type={inputType} step={type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} placeholder={['text', 'email', 'phone', 'url'].includes(type) ? 'Optional' : undefined} /></div>;
 }
 
 function ClientEmailDependencyPriority({
@@ -170,7 +171,7 @@ function ClientEmailDependencyPriority({
 const INTERCOLUMN_EDITABLE_SYSTEM_KEYS = new Set(['current-workflow', 'dispose-automatically']);
 const INTERCOLUMN_OTHER_TYPES = new Set<ColumnType>([
   'text', 'long_text', 'number', 'choice', 'date', 'date_today', 'datetime', 'time',
-  'boolean', 'email', 'url', 'intercolumn_controller',
+  'boolean', 'email', 'phone', 'url', 'intercolumn_controller',
 ]);
 
 function isIntercolumnCandidate(column: ProblemColumn, excludeId?: string) {
@@ -199,6 +200,7 @@ function RuleValueInput({ column, label, value, onChange, id }: { column: Proble
     : column.column_type === 'datetime' ? 'datetime-local'
     : column.column_type === 'time' ? 'time'
     : column.column_type === 'email' ? 'email'
+    : column.column_type === 'phone' ? 'tel'
     : column.column_type === 'url' ? 'url'
     : 'text';
   return <div className="field"><label htmlFor={id}>{label}</label><input id={id} className="input" type={inputType} step={column.column_type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} /></div>;
@@ -493,7 +495,7 @@ export default function TableSettings() {
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label>
-            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, Date (Today), date & time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
+            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, Date (Today), date & time, time, yes/no, email, Phone Number, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
             <div><button className="button">+ Add Column</button></div>
           </form>
         </div>

@@ -170,7 +170,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                 ProblemColumn.TYPE_TEXT, ProblemColumn.TYPE_LONG_TEXT, ProblemColumn.TYPE_NUMBER,
                 ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY, ProblemColumn.TYPE_DATETIME,
                 ProblemColumn.TYPE_TIME, ProblemColumn.TYPE_BOOLEAN, ProblemColumn.TYPE_EMAIL,
-                ProblemColumn.TYPE_URL, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
+                ProblemColumn.TYPE_PHONE, ProblemColumn.TYPE_URL, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
             }
             editable_system_keys = {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
             cleaned_rules = []
@@ -703,6 +703,20 @@ def _validate_custom_value(column, value):
         except DjangoValidationError:
             raise serializers.ValidationError('Must be a valid email address.')
         return value
+    if kind == ProblemColumn.TYPE_PHONE:
+        if not isinstance(value, str):
+            raise serializers.ValidationError('Must be a phone number.')
+        phone = value.strip()
+        if len(phone) > 50:
+            raise serializers.ValidationError('Phone number must be 50 characters or fewer.')
+        # Preserve staff-entered formatting while accepting common international
+        # and extension forms such as +1 (780) 555-1234 ext 42.
+        if not re.fullmatch(r'\+?[0-9\s().-]+(?:\s*(?:x|ext\.?|extension)\s*[0-9]{1,10})?', phone, flags=re.IGNORECASE):
+            raise serializers.ValidationError('Enter a valid phone number.')
+        digits = re.sub(r'\D', '', phone)
+        if len(digits) < 7 or len(digits) > 25:
+            raise serializers.ValidationError('Enter a phone number with 7 to 25 digits, including any extension.')
+        return phone
     if kind == ProblemColumn.TYPE_URL:
         try:
             URLValidator()(value)

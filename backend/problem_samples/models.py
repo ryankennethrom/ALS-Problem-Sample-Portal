@@ -126,6 +126,7 @@ class ProblemColumn(models.Model):
     TYPE_TIME = 'time'
     TYPE_BOOLEAN = 'boolean'
     TYPE_EMAIL = 'email'
+    TYPE_PHONE = 'phone'
     TYPE_URL = 'url'
     TYPE_FIXED = 'fixed'
     TYPE_GROUP = 'group'
@@ -156,6 +157,7 @@ class ProblemColumn(models.Model):
         (TYPE_TIME, 'Time'),
         (TYPE_BOOLEAN, 'Yes / No'),
         (TYPE_EMAIL, 'Email'),
+        (TYPE_PHONE, 'Phone Number'),
         (TYPE_URL, 'URL'),
         (TYPE_FIXED, 'Fixed Value'),
         (TYPE_GROUP, 'Group'),

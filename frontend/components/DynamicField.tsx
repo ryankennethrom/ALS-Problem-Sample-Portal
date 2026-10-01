@@ -87,8 +87,9 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
     : column.column_type === 'datetime' ? 'datetime-local'
     : column.column_type === 'time' ? 'time'
     : column.column_type === 'email' ? 'email'
+    : column.column_type === 'phone' ? 'tel'
     : column.column_type === 'url' ? 'url'
     : 'text';
   const inputValue = value === null || value === undefined ? '' : String(value);
-  return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><input {...common} className="input" type={type} step={column.column_type === 'number' ? 'any' : undefined} value={inputValue} onChange={e => onChange(e.target.value)}/></div>;
+  return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><input {...common} className="input" type={type} inputMode={column.column_type === 'phone' ? 'tel' : undefined} autoComplete={column.column_type === 'phone' ? 'tel' : undefined} step={column.column_type === 'number' ? 'any' : undefined} value={inputValue} onChange={e => onChange(e.target.value)}/></div>;
 }

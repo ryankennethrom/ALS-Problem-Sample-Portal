@@ -110,6 +110,7 @@ function inputType(column: ProblemColumn) {
     case 'date_today': return 'date';
     case 'datetime': return 'datetime-local';
     case 'time': return 'time';
+    case 'phone': return 'tel';
     case 'email':
     case 'client_email':
     case 'row_creator':

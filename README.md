@@ -593,3 +593,6 @@ The Dashboard's "opened in the last…" analytics use a ticket-table dropdown. T
 
 ## Customer attachments from tracking link
 Customers using “Give us more details about this ticket” can attach images and general files with the signed response. Images use the normal WebP compression pipeline; files are stored on the ticket and cascade-delete from storage with the ticket.
+
+### Phone Number columns
+Ticket tables can use a **Phone Number** custom column. Values retain staff-entered formatting, accept common international/extension formats, use phone-friendly browser inputs, and participate in Advanced Search and fuzzy search.

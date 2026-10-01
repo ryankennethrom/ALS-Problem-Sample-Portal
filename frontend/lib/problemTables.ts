@@ -10,6 +10,7 @@ export type ColumnType =
   | 'time'
   | 'boolean'
   | 'email'
+  | 'phone'
   | 'url'
   | 'fixed'
   | 'group'
@@ -101,6 +102,7 @@ export const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'time', label: 'Time' },
   { value: 'boolean', label: 'Yes / No' },
   { value: 'email', label: 'Email' },
+  { value: 'phone', label: 'Phone Number' },
   { value: 'url', label: 'URL' },
   { value: 'fixed', label: 'Fixed Value' },
   { value: 'group', label: 'Group' },
