@@ -11,11 +11,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.views import is_tracker_admin
-from .models import OldTicketDefinition, ProblemSample, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_SHIPPED_BACK
+from .models import (
+    OldTicketDefinition,
+    ProblemSample,
+    PROBLEM_STATUS_BACK_TO_TESTING,
+    PROBLEM_STATUS_DISPOSED,
+    PROBLEM_STATUS_SHIPPED_BACK,
+)
 from .old_tickets import old_ticket_age_months, old_ticket_end_date
 
 
-FINISHED_WORKFLOWS = (PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_SHIPPED_BACK)
+FINISHED_WORKFLOWS = (
+    PROBLEM_STATUS_DISPOSED,
+    PROBLEM_STATUS_SHIPPED_BACK,
+    PROBLEM_STATUS_BACK_TO_TESTING,
+)
 
 
 def _default_end_date():

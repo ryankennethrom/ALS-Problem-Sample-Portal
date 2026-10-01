@@ -128,7 +128,7 @@ export default function TerminalTicketCleanupPage() {
     <div className="page-heading-row"><div>
       <div className="eyebrow">Admin</div>
       <h1 className="page-heading">Delete Old Tickets</h1>
-      <p className="muted">Delete tickets whose Current Workflow is <strong>Disposed</strong> or <strong>Shipped back to client</strong> and whose creation date falls in the selected range.</p>
+      <p className="muted">Delete tickets whose Current Workflow is <strong>Disposed</strong>, <strong>Shipped back to client</strong>, or <strong>Back to testing</strong> and whose creation date falls in the selected range.</p>
     </div></div>
 
     <section className="panel" style={{maxWidth: 720, marginBottom: 18}}>
@@ -163,7 +163,7 @@ export default function TerminalTicketCleanupPage() {
       <div className="panel-header">Deletion preview</div>
       <div className="panel-body">
         <p><strong>{number(preview.count)} ticket{preview.count === 1 ? '' : 's'}</strong> created {preview.start_date ? `from ${preview.start_date} through` : 'on or before'} {preview.end_date}.</p>
-        <p className="muted">Disposed: {number(preview.by_workflow['Disposed'] || 0)} · Shipped back to client: {number(preview.by_workflow['Shipped back to client'] || 0)}</p>
+        <p className="muted">Disposed: {number(preview.by_workflow['Disposed'] || 0)} · Shipped back to client: {number(preview.by_workflow['Shipped back to client'] || 0)} · Back to testing: {number(preview.by_workflow['Back to testing'] || 0)}</p>
         {preview.count > 0 && <>
           <p>Deleting these tickets also deletes their tracking links and associated ticket records and files. This cannot be undone.</p>
           <div className="field" style={{marginBottom: 14}}>

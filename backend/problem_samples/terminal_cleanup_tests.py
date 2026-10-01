@@ -47,27 +47,32 @@ class TerminalTicketCleanupTests(TestCase):
         cutoff = _default_end_date()
         disposed = self.ticket(1, cutoff, 'Disposed')
         shipped = self.ticket(2, cutoff - timedelta(days=1), 'Shipped back to client')
+        back_to_testing = self.ticket(3, cutoff - timedelta(days=2), 'Back to testing')
         link = ProblemTrackingLink.objects.create(ticket=disposed, tracking_token='delete-link')
         unfinished = [
-            self.ticket(3, cutoff, 'To be Disposed'),
-            self.ticket(4, cutoff, 'To be shipped back to client'),
-            self.ticket(5, cutoff, 'Back to testing'),
-            self.ticket(6, cutoff, 'CS Follow-Up'),
+            self.ticket(4, cutoff, 'To be Disposed'),
+            self.ticket(5, cutoff, 'To be shipped back to client'),
+            self.ticket(6, cutoff, 'To be back to testing'),
+            self.ticket(7, cutoff, 'CS Follow-Up'),
         ]
-        newer = self.ticket(7, cutoff + timedelta(days=1), 'Disposed')
+        newer = self.ticket(8, cutoff + timedelta(days=1), 'Disposed')
 
         preview_response = self.client.get(URL)
         self.assertEqual(preview_response.status_code, 200)
         preview = preview_response.data
         self.assertEqual(preview['end_date'], cutoff.isoformat())
-        self.assertEqual(preview['count'], 2)
-        self.assertEqual(preview['by_workflow'], {'Disposed': 1, 'Shipped back to client': 1})
+        self.assertEqual(preview['count'], 3)
+        self.assertEqual(preview['by_workflow'], {
+            'Disposed': 1,
+            'Shipped back to client': 1,
+            'Back to testing': 1,
+        })
         self.assertTrue(ProblemTrackingLink.objects.filter(pk=link.pk).exists())
 
         deleted = self.delete_preview(preview)
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(deleted.data['deleted_tickets'], 2)
-        self.assertFalse(ProblemSample.objects.filter(pk__in=[disposed.pk, shipped.pk]).exists())
+        self.assertEqual(deleted.data['deleted_tickets'], 3)
+        self.assertFalse(ProblemSample.objects.filter(pk__in=[disposed.pk, shipped.pk, back_to_testing.pk]).exists())
         self.assertFalse(ProblemTrackingLink.objects.filter(pk=link.pk).exists())
         self.assertEqual(ProblemSample.objects.filter(pk__in=[row.pk for row in unfinished] + [newer.pk]).count(), 5)
 

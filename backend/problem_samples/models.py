@@ -121,6 +121,7 @@ class ProblemColumn(models.Model):
     TYPE_CHOICE = 'choice'
     TYPE_MULTI_CHOICE = 'multi_choice'
     TYPE_DATE = 'date'
+    TYPE_DATE_TODAY = 'date_today'
     TYPE_DATETIME = 'datetime'
     TYPE_TIME = 'time'
     TYPE_BOOLEAN = 'boolean'
@@ -150,6 +151,7 @@ class ProblemColumn(models.Model):
         (TYPE_CHOICE, 'Choice'),
         (TYPE_MULTI_CHOICE, 'Multiple choice'),
         (TYPE_DATE, 'Date'),
+        (TYPE_DATE_TODAY, 'Date (Today)'),
         (TYPE_DATETIME, 'Date and time'),
         (TYPE_TIME, 'Time'),
         (TYPE_BOOLEAN, 'Yes / No'),

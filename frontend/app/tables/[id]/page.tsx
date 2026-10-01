@@ -52,7 +52,7 @@ function DefaultValueField({
   dependencyConfigured?: boolean;
 }) {
   const id = `default-${idSuffix}`;
-  if (type === 'row_creator' || type === 'recent_row_modifier') return null;
+  if (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') return null;
   const [groupUsers, setGroupUsers] = useState<GroupUser[]>([]);
 
   useEffect(() => {
@@ -105,7 +105,7 @@ function DefaultValueField({
   }
 
   const inputType = type === 'number' ? 'number'
-    : type === 'date' ? 'date'
+    : (type === 'date' || type === 'date_today') ? 'date'
     : type === 'datetime' ? 'datetime-local'
     : type === 'time' ? 'time'
     : type === 'email' ? 'email'
@@ -169,7 +169,7 @@ function ClientEmailDependencyPriority({
 
 const INTERCOLUMN_EDITABLE_SYSTEM_KEYS = new Set(['current-workflow', 'dispose-automatically']);
 const INTERCOLUMN_OTHER_TYPES = new Set<ColumnType>([
-  'text', 'long_text', 'number', 'choice', 'date', 'datetime', 'time',
+  'text', 'long_text', 'number', 'choice', 'date', 'date_today', 'datetime', 'time',
   'boolean', 'email', 'url', 'intercolumn_controller',
 ]);
 
@@ -195,7 +195,7 @@ function RuleValueInput({ column, label, value, onChange, id }: { column: Proble
     return <div className="field"><label htmlFor={id}>{label}</label><textarea id={id} className="textarea compact-textarea" value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} /></div>;
   }
   const inputType = column.column_type === 'number' ? 'number'
-    : column.column_type === 'date' ? 'date'
+    : (column.column_type === 'date' || column.column_type === 'date_today') ? 'date'
     : column.column_type === 'datetime' ? 'datetime-local'
     : column.column_type === 'time' ? 'time'
     : column.column_type === 'email' ? 'email'
@@ -317,7 +317,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         group_role: type === 'group' ? groupRole : '',
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
         intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
-        default_value: (type === 'row_creator' || type === 'recent_row_modifier') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
+        default_value: (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
       }), successMessage:'Column updated successfully.', errorMessage:'Could not update column'});
       await onChanged();
     } finally { setBusy(false); }
@@ -351,7 +351,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label></div>
     </div>
-    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is Distributor.' : type === 'end_user' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is End User.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
+    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'date_today' ? 'Editable like a normal Date field. New tickets start with the current date automatically; changing this column setting does not overwrite existing valid dates.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is Distributor.' : type === 'end_user' ? 'Each row uses fuzzy autocomplete against companies whose CoyType is End User.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
     <div className="column-actions"><button className="button secondary" onClick={save} disabled={busy}>Save</button><button className="button danger" onClick={remove} disabled={busy}>Delete</button></div>
   </div>;
 }
@@ -405,7 +405,7 @@ export default function TableSettings() {
         group_role: colType === 'group' ? colGroupRole : '',
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
         intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
-        default_value: (colType === 'row_creator' || colType === 'recent_row_modifier') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
+        default_value: (colType === 'row_creator' || colType === 'recent_row_modifier' || colType === 'date_today') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
       setColName('');
       setColDescription('');
@@ -489,11 +489,11 @@ export default function TableSettings() {
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
-            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
+            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label>
-            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, date & time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
+            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, Date (Today), date & time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
             <div><button className="button">+ Add Column</button></div>
           </form>
         </div>

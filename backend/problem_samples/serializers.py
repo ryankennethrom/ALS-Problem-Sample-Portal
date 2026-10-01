@@ -168,7 +168,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'intercolumn_rules': 'Choose a table before configuring rules.'})
             eligible_types = {
                 ProblemColumn.TYPE_TEXT, ProblemColumn.TYPE_LONG_TEXT, ProblemColumn.TYPE_NUMBER,
-                ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATETIME,
+                ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY, ProblemColumn.TYPE_DATETIME,
                 ProblemColumn.TYPE_TIME, ProblemColumn.TYPE_BOOLEAN, ProblemColumn.TYPE_EMAIL,
                 ProblemColumn.TYPE_URL, ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
             }
@@ -267,12 +267,16 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         elif column_type in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER}:
             attrs['required'] = False
             attrs['default_value'] = None
+        elif column_type == ProblemColumn.TYPE_DATE_TODAY:
+            # Date (Today) has a dynamic default evaluated per ticket, so never
+            # persist a static date in the column definition.
+            attrs['default_value'] = None
 
         # Keep the column default compatible with its configured type. The same
         # validator is used for row values so defaults cannot introduce data that
         # the row serializer would later reject.
         default_value = attrs.get('default_value', getattr(self.instance, 'default_value', None))
-        if column_type in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER}:
+        if column_type in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}:
             default_value = None
         if column_type == ProblemColumn.TYPE_CLIENT_EMAIL and dependency_columns and default_value not in (None, '', []):
             raise serializers.ValidationError({
@@ -301,7 +305,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         required = attrs.get('required', getattr(self.instance, 'required', False))
         if (self.instance is None and table and required and table.problem_samples.exists()
                 and attrs.get('default_value') is None
-                and column_type not in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER}):
+                and column_type not in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}):
             if column_type == ProblemColumn.TYPE_CLIENT_EMAIL and dependency_columns:
                 raise serializers.ValidationError({
                     'required': 'Add a dependent Client Email column as optional first, populate existing rows, then mark it required.'
@@ -677,7 +681,7 @@ def _validate_custom_value(column, value):
         if invalid:
             raise serializers.ValidationError(f'Invalid choice(s): {", ".join(map(str, invalid))}')
         return value
-    if kind == ProblemColumn.TYPE_DATE:
+    if kind in {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY}:
         if not isinstance(value, str) or parse_date(value) is None:
             raise serializers.ValidationError('Must be a valid date (YYYY-MM-DD).')
         return value
@@ -917,8 +921,11 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         # prefills these values, but enforcing them here keeps API-created rows
         # consistent too.
         if instance is None:
+            today_value = timezone.localdate().isoformat()
             for key, column in columns.items():
-                if column.column_type not in {ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER} and _is_empty(merged.get(key)) and not _is_empty(column.default_value):
+                if column.column_type == ProblemColumn.TYPE_DATE_TODAY and _is_empty(merged.get(key)):
+                    merged[key] = today_value
+                elif column.column_type not in {ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER} and _is_empty(merged.get(key)) and not _is_empty(column.default_value):
                     merged[key] = copy.deepcopy(column.default_value)
 
         errors = {}

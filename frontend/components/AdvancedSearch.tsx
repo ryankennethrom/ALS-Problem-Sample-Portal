@@ -74,6 +74,7 @@ function operatorsFor(column: ProblemColumn): Operator[] {
     case 'group': return CHOICE_OPERATORS;
     case 'multi_choice': return MULTI_CHOICE_OPERATORS;
     case 'date':
+    case 'date_today':
     case 'datetime':
     case 'time': return TEMPORAL_OPERATORS;
     case 'boolean': return BOOLEAN_OPERATORS;
@@ -105,7 +106,8 @@ function createCondition(column: ProblemColumn): DraftCondition {
 function inputType(column: ProblemColumn) {
   switch (column.column_type) {
     case 'number': return 'number';
-    case 'date': return 'date';
+    case 'date':
+    case 'date_today': return 'date';
     case 'datetime': return 'datetime-local';
     case 'time': return 'time';
     case 'email':

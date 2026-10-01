@@ -21,7 +21,7 @@ from PIL import Image as PillowImage, UnidentifiedImageError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -40,6 +40,8 @@ from .image_processing import compress_problem_image
 
 MAX_ROW_FILE_BYTES = 25 * 1024 * 1024
 MAX_NOTIFICATION_FILES_BYTES = 20 * 1024 * 1024
+MAX_CUSTOMER_RESPONSE_FILES = 12
+MAX_CUSTOMER_RESPONSE_BYTES = 50 * 1024 * 1024
 
 
 def _confirmed_testing_recipient(request):
@@ -2188,6 +2190,14 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                 ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
             return
 
+        if column.column_type == ProblemColumn.TYPE_DATE_TODAY:
+            today_value = timezone.localdate().isoformat()
+            for problem in column.table.problem_samples.only('id', 'custom_values'):
+                values = dict(problem.custom_values or {})
+                values[column.field_key] = today_value
+                ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
+            return
+
         default = column.default_value
         has_default = not (default is None or default == '' or default == [])
         if has_default:
@@ -2243,6 +2253,19 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                 ).strip()
                 values[column.field_key] = modifier
                 ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
+            return
+
+        if column.column_type == ProblemColumn.TYPE_DATE_TODAY and previous_type != ProblemColumn.TYPE_DATE_TODAY:
+            # Preserve valid dates when converting a Date column. Any empty or
+            # incompatible historical cell receives today's date so the new
+            # Date (Today) type is immediately valid.
+            today_value = timezone.localdate().isoformat()
+            for problem in column.table.problem_samples.only('id', 'custom_values'):
+                values = dict(problem.custom_values or {})
+                current = values.get(column.field_key)
+                if not isinstance(current, str) or parse_date(current) is None:
+                    values[column.field_key] = today_value
+                    ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
             return
 
         if column.column_type == ProblemColumn.TYPE_FIXED:
@@ -2408,6 +2431,7 @@ class ProblemAcknowledgementView(APIView):
     """Public, tokenized ticket tracking page API. No ALS account is required."""
     permission_classes = [AllowAny]
     authentication_classes = []
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def _problem(self, token, *, for_update=False):
         if not is_strong_tracking_token(token):
@@ -2691,11 +2715,59 @@ class ProblemAcknowledgementView(APIView):
             return Response({'detail': 'Choose a valid sample action.'}, status=status.HTTP_400_BAD_REQUEST)
 
         requested_information = str(request.data.get('requested_information') or '').strip()
+        customer_image_uploads = list(request.FILES.getlist('images'))
+        customer_attachment_uploads = list(request.FILES.getlist('attachments'))
+        if (customer_image_uploads or customer_attachment_uploads) and customer_action != CUSTOMER_ACTION_REQUESTED_INFORMATION:
+            return Response(
+                {'detail': 'Customer files can only be uploaded with Give us more details about this ticket.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        prepared_customer_images = []
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             if not requested_information:
                 return Response({'detail': 'Enter the requested information before sending this response.'}, status=status.HTTP_400_BAD_REQUEST)
             if len(requested_information) > 4000:
                 return Response({'detail': 'Requested information must be 4000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            all_customer_uploads = customer_image_uploads + customer_attachment_uploads
+            if len(all_customer_uploads) > MAX_CUSTOMER_RESPONSE_FILES:
+                return Response(
+                    {'detail': f'Attach no more than {MAX_CUSTOMER_RESPONSE_FILES} files to one response.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if sum(getattr(uploaded, 'size', 0) or 0 for uploaded in all_customer_uploads) > MAX_CUSTOMER_RESPONSE_BYTES:
+                return Response(
+                    {'detail': 'The combined size of customer attachments must be 50 MB or smaller.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Fully validate/process every file before changing the ticket. Images use
+            # the same WebP compression pipeline as staff uploads, keeping public
+            # uploads small on the Railway media volume.
+            for uploaded in customer_image_uploads:
+                error = _validate_uploaded_file(uploaded, image=True)
+                if error:
+                    return Response({'detail': f'{uploaded.name}: {error}'}, status=status.HTTP_400_BAD_REQUEST)
+                original_name = (uploaded.name or 'customer-image')[:255]
+                try:
+                    compressed_bytes, stored_name = compress_problem_image(uploaded, original_name)
+                except (UnidentifiedImageError, OSError, ValueError):
+                    return Response(
+                        {'detail': f'{original_name}: The selected image could not be processed.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not compressed_bytes:
+                    return Response(
+                        {'detail': f'{original_name}: The selected image could not be processed.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                prepared_customer_images.append((original_name, compressed_bytes, stored_name))
+
+            for uploaded in customer_attachment_uploads:
+                error = _validate_uploaded_file(uploaded)
+                if error:
+                    return Response({'detail': f'{uploaded.name}: {error}'}, status=status.HTTP_400_BAD_REQUEST)
 
         # The first explicit customer disposition choice acknowledges receipt.
         # Acknowledgement does not change descriptive Status; workflow routing happens only
@@ -2762,6 +2834,47 @@ class ProblemAcknowledgementView(APIView):
         update_fields.append('customer_acknowledgement_action')
         problem.save(update_fields=list(dict.fromkeys(update_fields)))
 
+        customer_saved_images = []
+        customer_saved_attachments = []
+        if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
+            for original_name, compressed_bytes, stored_name in prepared_customer_images:
+                image = ProblemImage.objects.create(
+                    problem=problem,
+                    image=ContentFile(compressed_bytes, name=stored_name),
+                    original_name=original_name,
+                    uploaded_by=None,
+                    include_in_customer_notification=True,
+                )
+                customer_saved_images.append({
+                    'id': image.id,
+                    'name': original_name,
+                    'size_bytes': len(compressed_bytes),
+                })
+
+            for uploaded in customer_attachment_uploads:
+                attachment = ProblemAttachment.objects.create(
+                    problem=problem,
+                    file=uploaded,
+                    original_name=(uploaded.name or 'customer-attachment')[:255],
+                    content_type=(getattr(uploaded, 'content_type', '') or '')[:160],
+                    size_bytes=uploaded.size,
+                    uploaded_by=None,
+                    include_in_customer_notification=True,
+                )
+                customer_saved_attachments.append({
+                    'id': attachment.id,
+                    'name': attachment.original_name,
+                    'size_bytes': attachment.size_bytes,
+                    'content_type': attachment.content_type,
+                })
+
+            # _problem() prefetched these relations before the uploads existed.
+            # Drop those caches so the response immediately includes the newly
+            # uploaded customer files instead of requiring a page refresh.
+            prefetched = getattr(problem, '_prefetched_objects_cache', {})
+            prefetched.pop('images', None)
+            prefetched.pop('attachments', None)
+
         label = {
             CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
             CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
@@ -2775,6 +2888,10 @@ class ProblemAcknowledgementView(APIView):
         }
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             details['customer_requested_information'] = requested_information
+            if customer_saved_images:
+                details['customer_uploaded_images'] = customer_saved_images
+            if customer_saved_attachments:
+                details['customer_uploaded_attachments'] = customer_saved_attachments
         changes = []
         if before_status != after_status:
             changes.append({'field': 'Current Workflow', 'before': before_status, 'after': after_status})

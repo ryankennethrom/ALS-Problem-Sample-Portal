@@ -100,6 +100,9 @@ Problem-row images and attachments remain stored with the sample but are not att
 A `Recent Row Modifier` column is server-controlled and read-only. It contains the email (or username fallback) of the authenticated staff user who most recently saved the problem-sample row, or `Customer` when the most recent row change came from the public tracking link. Customer-originated changes clear the stale `modified_by` staff reference and update the row modification timestamp; the next authenticated staff save replaces `Customer` with that staff user's email/username. Existing rows are backfilled from `modified_by` / legacy modifier metadata, falling back to creator metadata when needed.
 
 
+### Date (Today) column type
+`ProblemColumn.TYPE_DATE_TODAY` (`date_today`) is an editable date-valued custom column with a dynamic create-time default. `ProblemSampleSerializer` fills an empty value with `timezone.localdate().isoformat()` only when a ticket is created; updates do not reapply the default. The frontend independently pre-fills the local browser date so users see the default before submit. Adding the column backfills existing rows with the current date. Advanced Search and intercolumn rules treat the type identically to `Date`.
+
 ### Brand column type
 Brand columns use fuzzy suggestions from distinct Brand values in the latest imported Customer Export. Saved values are validated against that directory, while unchanged historical values remain valid if a later export removes a brand.
 

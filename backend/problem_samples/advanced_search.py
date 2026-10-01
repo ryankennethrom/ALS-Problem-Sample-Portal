@@ -21,7 +21,7 @@ TEXT_TYPES = {
     ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER,
 }
 NUMBER_TYPES = {ProblemColumn.TYPE_NUMBER}
-DATE_TYPES = {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATETIME, ProblemColumn.TYPE_TIME}
+DATE_TYPES = {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY, ProblemColumn.TYPE_DATETIME, ProblemColumn.TYPE_TIME}
 CHOICE_TYPES = {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_GROUP}
 MULTI_CHOICE_TYPES = {ProblemColumn.TYPE_MULTI_CHOICE}
 BOOLEAN_TYPES = {ProblemColumn.TYPE_BOOLEAN}
@@ -34,6 +34,7 @@ ALLOWED_OPERATORS = {
     'choice': {'equals', 'not_equals', *EMPTY_OPERATORS},
     'multi_choice': {'contains', 'not_contains', *EMPTY_OPERATORS},
     'date': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
+    'date_today': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
     'datetime': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
     'time': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
     'boolean': {'equals'},
@@ -105,7 +106,7 @@ def _temporal(value, kind, label='value'):
         raise ValidationError({label: 'A value is required.'})
     raw = value.strip()
     try:
-        if kind == ProblemColumn.TYPE_DATE:
+        if kind in {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY}:
             return date.fromisoformat(raw)
         if kind == ProblemColumn.TYPE_TIME:
             return time.fromisoformat(raw)

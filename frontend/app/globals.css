@@ -911,3 +911,16 @@ a.result:hover{background:#f7f9fb}
 @media(max-width:900px){.side-count-badge{position:absolute;right:3px;top:3px;min-width:16px;height:16px;padding:0 4px;font-size:9px}.mention-page-header{flex-direction:column}.mention-suggestion{grid-template-columns:1fr;grid-template-areas:"name" "username" "role"}}
 
 .side-link{position:relative}
+
+/* Customer uploads in "Give us more details about this ticket" */
+.public-requested-info-uploads{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px}
+.public-requested-info-upload{display:grid;gap:6px;padding:11px 12px;border:1px solid #d7dde2;border-radius:6px;background:#f8fafb}
+.public-requested-info-upload>span{font-weight:700}
+.public-requested-info-upload input[type=file]{width:100%;min-width:0}
+.public-requested-info-upload small{color:#6f777e;line-height:1.35}
+.public-requested-info-file-list{display:grid;gap:7px;padding:9px;border:1px solid #dce1e5;border-radius:6px;background:#fff}
+.public-requested-info-file{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 8px;border-bottom:1px solid #edf0f2;min-width:0}
+.public-requested-info-file:last-child{border-bottom:0}
+.public-requested-info-file>span{min-width:0;overflow-wrap:anywhere}
+.public-requested-info-file .button{flex:0 0 auto;padding:5px 9px;min-height:0}
+@media(max-width:680px){.public-requested-info-uploads{grid-template-columns:1fr}.public-requested-info-file{align-items:flex-start;flex-direction:column}.public-requested-info-file .button{align-self:flex-end}}

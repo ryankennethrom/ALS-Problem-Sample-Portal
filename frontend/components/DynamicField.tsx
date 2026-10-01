@@ -83,7 +83,7 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
   }
 
   const type = column.column_type === 'number' ? 'number'
-    : column.column_type === 'date' ? 'date'
+    : (column.column_type === 'date' || column.column_type === 'date_today') ? 'date'
     : column.column_type === 'datetime' ? 'datetime-local'
     : column.column_type === 'time' ? 'time'
     : column.column_type === 'email' ? 'email'

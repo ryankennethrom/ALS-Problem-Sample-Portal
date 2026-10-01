@@ -28,6 +28,7 @@ Supported custom column types:
 - Choice
 - Multiple choice
 - Date
+- Date (Today) — editable Date field that defaults each new ticket to the current local date
 - Date and time
 - Time
 - Yes / No
@@ -180,7 +181,7 @@ Deploy the backend and frontend as separate Railway services and attach PostgreS
 
 ## Dynamic tables
 
-New Problem Sample Tables start with only the protected auto-incrementing **Problem ID** column. Users add only the other fields that table needs (text, long text, number, choice, multiple choice, date, date/time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Client Email, and Row Creator). Constant values such as a lab or site name should be represented with the general-purpose **Fixed Value** column type.
+New Problem Sample Tables start with only the protected auto-incrementing **Problem ID** column. Users add only the other fields that table needs (text, long text, number, choice, multiple choice, date, Date (Today), date/time, time, yes/no, email, URL, Fixed Value, Group, Distributor, End User, Client Email, and Row Creator). Constant values such as a lab or site name should be represented with the general-purpose **Fixed Value** column type.
 
 ## User roles
 
@@ -230,6 +231,10 @@ The frontend includes DigitalSIF-style toast notifications in the top-right corn
 ## Distributor columns
 
 A table can define a **Distributor** column. Row editors use fuzzy autocomplete against the imported customer directory and only suggest companies whose `CoyType` is `Distributor`. Customer exports may be `.xlsx` or `.csv`; the importer recognizes `CoyId`, `Company`, `CoyType`, `Brand`, `City`, `State`, `LastDateRecd`, `DateCreated`, `PrimaryContact`, and `Email`.
+
+
+### Date (Today) column type
+`Date (Today)` is stored as a normal `YYYY-MM-DD` row value, but its default is dynamic rather than a static column default. New tickets receive `timezone.localdate()` on the backend (and the browser pre-fills the same local-date form value for immediate feedback). Staff can edit or clear the value afterward when the column is optional. Adding the column to a table backfills existing rows with the date on which the column is added. Advanced Search and Intercolumn Value Controller rules treat it as a normal Date field.
 
 ## Company directory column types
 
@@ -585,3 +590,6 @@ Ticket follow-up comments support `@username`, `@Lab`, and `@CustomerService` me
 
 ### Dashboard table-scoped opened-ticket analytics
 The Dashboard's "opened in the last…" analytics use a ticket-table dropdown. The selected table scopes the Last day/Week/Month/6 Months/Year/Custom counts and the opened-over-time chart. Each See all link opens that same table with an `opened_range` date filter, which is also preserved by table search, Advanced Search, and Image Search. Action Required counts remain cross-table operational totals.
+
+## Customer attachments from tracking link
+Customers using “Give us more details about this ticket” can attach images and general files with the signed response. Images use the normal WebP compression pipeline; files are stored on the ticket and cascade-delete from storage with the ticket.

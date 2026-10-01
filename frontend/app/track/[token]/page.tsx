@@ -52,6 +52,8 @@ export default function ProblemSampleTrackingPage() {
   const [signature, setSignature] = useState('');
   const [requestedInfoOpen, setRequestedInfoOpen] = useState(false);
   const [requestedInformation, setRequestedInformation] = useState('');
+  const [requestedImages, setRequestedImages] = useState<File[]>([]);
+  const [requestedAttachments, setRequestedAttachments] = useState<File[]>([]);
 
   async function load() {
     setError('');
@@ -65,22 +67,40 @@ export default function ProblemSampleTrackingPage() {
     load().catch(error => setError(error instanceof Error ? error.message : 'Could not open the ticket tracking link.'));
   }, [token]);
 
-  async function chooseAction(action: Exclude<CustomerAction, ''>, requestedInfo = '') {
+  async function chooseAction(
+    action: Exclude<CustomerAction, ''>,
+    requestedInfo = '',
+    images: File[] = [],
+    attachments: File[] = [],
+  ) {
     const signedName = signature.trim();
     if (busy || !signedName) return;
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(`${TRACKING_API}/${token}/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, signature: signedName, requested_information: requestedInfo.trim() }),
-      });
+      let response: Response;
+      if (action === 'requested_info') {
+        const form = new FormData();
+        form.append('action', action);
+        form.append('signature', signedName);
+        form.append('requested_information', requestedInfo.trim());
+        images.forEach(file => form.append('images', file, file.name));
+        attachments.forEach(file => form.append('attachments', file, file.name));
+        response = await fetch(`${TRACKING_API}/${token}/`, { method: 'POST', body: form });
+      } else {
+        response = await fetch(`${TRACKING_API}/${token}/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, signature: signedName, requested_information: requestedInfo.trim() }),
+        });
+      }
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || 'Your selection could not be recorded.');
       setData(body);
       setSignature('');
       setRequestedInformation('');
+      setRequestedImages([]);
+      setRequestedAttachments([]);
       setRequestedInfoOpen(false);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Your selection could not be recorded.');
@@ -160,7 +180,7 @@ export default function ProblemSampleTrackingPage() {
           </div>}
           <div className="public-ack-action-buttons">
             <button className="button" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
-            <button className="button secondary" disabled={busy || !signature.trim()} onClick={() => { setRequestedInformation(''); setRequestedInfoOpen(true); }}>Give us more details about this ticket</button>
+            <button className="button secondary" disabled={busy || !signature.trim()} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setRequestedInfoOpen(true); }}>Give us more details about this ticket</button>
             <button className="button secondary" disabled={busy || !signature.trim()} onClick={() => chooseAction('ship_back')}>Ship back</button>
           </div>
         </div>}
@@ -179,7 +199,7 @@ export default function ProblemSampleTrackingPage() {
         }}>
           <div className="public-requested-info-dialog" role="dialog" aria-modal="true" aria-labelledby="requested-info-title" aria-describedby="requested-info-description">
             <h2 id="requested-info-title">Give us more details about this ticket</h2>
-            <p id="requested-info-description">Provide the information ALS requested about this ticket. This message will be saved with your signed response.</p>
+            <p id="requested-info-description">Provide the information ALS requested about this ticket. You can also attach images and other files. The message and files will be saved with your signed response.</p>
             <label className="public-requested-info-field">
               <span>Information about the ticket <strong aria-hidden="true">*</strong></span>
               <textarea
@@ -193,10 +213,52 @@ export default function ProblemSampleTrackingPage() {
               />
               <small>{requestedInformation.length}/4000 characters</small>
             </label>
+            <div className="public-requested-info-uploads">
+              <label className="public-requested-info-upload">
+                <span>Attach images</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  multiple
+                  disabled={busy}
+                  onChange={event => {
+                    const files = Array.from(event.target.files || []);
+                    setRequestedImages(current => [...current, ...files]);
+                    event.currentTarget.value = '';
+                  }}
+                />
+                <small>JPEG, PNG, GIF or WebP. Images are compressed before storage.</small>
+              </label>
+              <label className="public-requested-info-upload">
+                <span>Attach other files</span>
+                <input
+                  type="file"
+                  multiple
+                  disabled={busy}
+                  onChange={event => {
+                    const files = Array.from(event.target.files || []);
+                    setRequestedAttachments(current => [...current, ...files]);
+                    event.currentTarget.value = '';
+                  }}
+                />
+                <small>Each file can be up to 25 MB. Up to 12 files total per response.</small>
+              </label>
+            </div>
+            {(requestedImages.length > 0 || requestedAttachments.length > 0) && <div className="public-requested-info-file-list">
+              {requestedImages.map((file, index) => <div className="public-requested-info-file" key={`image-${index}-${file.name}-${file.size}`}>
+                <span><strong>Image:</strong> {file.name} {formatFileSize(file.size) && `· ${formatFileSize(file.size)}`}</span>
+                <button type="button" className="button secondary" disabled={busy} onClick={() => setRequestedImages(files => files.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+              </div>)}
+              {requestedAttachments.map((file, index) => <div className="public-requested-info-file" key={`attachment-${index}-${file.name}-${file.size}`}>
+                <span><strong>File:</strong> {file.name} {formatFileSize(file.size) && `· ${formatFileSize(file.size)}`}</span>
+                <button type="button" className="button secondary" disabled={busy} onClick={() => setRequestedAttachments(files => files.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+              </div>)}
+            </div>}
+            {error && <div className="card error">{error}</div>}
             <div className="public-requested-info-signature">Signed by <strong>{signature.trim()}</strong></div>
             <div className="public-requested-info-actions">
-              <button className="button secondary" type="button" disabled={busy} onClick={() => { setRequestedInfoOpen(false); setRequestedInformation(''); }}>Cancel</button>
-              <button className="button" type="button" disabled={busy || !requestedInformation.trim()} onClick={() => chooseAction('requested_info', requestedInformation)}>{busy ? 'Sending…' : 'Send response'}</button>
+              <button className="button secondary" type="button" disabled={busy} onClick={() => { setRequestedInfoOpen(false); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); }}>Cancel</button>
+              <button className="button" type="button" disabled={busy || !requestedInformation.trim()} onClick={() => chooseAction('requested_info', requestedInformation, requestedImages, requestedAttachments)}>{busy ? 'Sending…' : 'Send response'}</button>
             </div>
           </div>
         </div>}

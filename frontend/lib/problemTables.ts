@@ -5,6 +5,7 @@ export type ColumnType =
   | 'choice'
   | 'multi_choice'
   | 'date'
+  | 'date_today'
   | 'datetime'
   | 'time'
   | 'boolean'
@@ -95,6 +96,7 @@ export const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'choice', label: 'Choice' },
   { value: 'multi_choice', label: 'Multiple choice' },
   { value: 'date', label: 'Date' },
+  { value: 'date_today', label: 'Date (Today)' },
   { value: 'datetime', label: 'Date and time' },
   { value: 'time', label: 'Time' },
   { value: 'boolean', label: 'Yes / No' },
@@ -111,7 +113,16 @@ export const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'intercolumn_controller', label: 'Intercolumn Value Controller' },
 ];
 
+function localTodayValue(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function initialValue(column: ProblemColumn): unknown {
+  if (column.column_type === 'date_today') return localTodayValue();
   if (column.default_value !== null && column.default_value !== undefined) return column.default_value;
   if (column.column_type === 'boolean') return false;
   if (column.column_type === 'multi_choice') return [];
