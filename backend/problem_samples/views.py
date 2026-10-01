@@ -863,12 +863,21 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             request.data.get('tracking_not_sent') if request.method.lower() == 'post'
             else request.query_params.get('tracking_not_sent')
         ) == '1'
+        other = str(
+            request.data.get('other') if request.method.lower() == 'post'
+            else request.query_params.get('other')
+        ) == '1'
+        if tracking_not_sent and other:
+            return Response({'detail': 'Choose only one Customer Service queue.'}, status=status.HTTP_400_BAD_REQUEST)
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('table__columns')
                     .filter(table=table))
         if tracking_not_sent:
             from .dashboard_views import tracking_not_sent_tickets
             queryset = tracking_not_sent_tickets(queryset)
+        elif other:
+            from .dashboard_views import customer_service_other_tickets
+            queryset = customer_service_other_tickets(queryset)
 
         if request.method.lower() == 'post':
             candidates = advanced_search_problem_samples(
@@ -885,7 +894,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
         # Keep active follow-up and waiting-for-customer tickets together,
         # then force oldest-first even when a search ranked by score.
-        samples = [sample for sample in candidates if tracking_not_sent or sample.workflow_status in {CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}]
+        samples = [sample for sample in candidates if tracking_not_sent or other or sample.workflow_status in {CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}]
         samples.sort(key=lambda sample: (sample.created_at, str(sample.id)))
         return Response(ShippingProblemSampleSerializer(samples, many=True, context={'request': request}).data)
 

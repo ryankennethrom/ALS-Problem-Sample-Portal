@@ -118,6 +118,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/follow-up-required/customer-responded" className={`side-link ${pathname === '/follow-up-required/customer-responded' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="mail"/></span><span className="side-label">New Tracking Link Response</span>
         </Link>
+        <Link href="/follow-up-required/other" className={`side-link ${pathname === '/follow-up-required/other' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="samples"/></span><span className="side-label">Other</span>
+        </Link>
 
         <div className="side-section-label">Lab</div>
 

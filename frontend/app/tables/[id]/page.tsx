@@ -105,7 +105,7 @@ function DefaultValueField({
   }
 
   const inputType = type === 'number' ? 'number'
-    : (type === 'date' || type === 'date_today') ? 'date'
+    : type === 'date' ? 'date'
     : type === 'datetime' ? 'datetime-local'
     : type === 'time' ? 'time'
     : type === 'email' ? 'email'
