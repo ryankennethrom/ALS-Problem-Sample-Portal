@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import validate_email
 from django.http import HttpResponse, FileResponse
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from email.message import EmailMessage
 from email import policy
 import mimetypes
@@ -1095,6 +1095,28 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
         return Response(ImageSerializer(image, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['get'], url_path=r'images/(?P<image_id>\d+)/content')
+    def image_content(self, request, pk=None, image_id=None):
+        """Stream a ticket image through the authenticated API.
+
+        Staff frontends use bearer authentication, so production image previews
+        cannot safely depend on Django's development-only /media/ serving.
+        """
+        problem = self.get_object()
+        image = problem.images.filter(pk=image_id).first()
+        if not image or not image.image:
+            return Response({'detail': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
+        filename = image.original_name or os.path.basename(image.image.name) or f'image-{image.id}'
+        content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        try:
+            image.image.open('rb')
+        except (OSError, ValueError):
+            return Response({'detail': 'Image file is unavailable.'}, status=status.HTTP_404_NOT_FOUND)
+        response = FileResponse(image.image, as_attachment=False, filename=filename, content_type=content_type)
+        response['Cache-Control'] = 'private, no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
     @action(detail=True, methods=['delete', 'patch'], url_path=r'images/(?P<image_id>\d+)')
     def delete_image(self, request, pk=None, image_id=None):
         problem = self.get_object()
@@ -1392,28 +1414,10 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Container not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(self.get_serializer(container).data)
 
-    @action(detail=True, methods=['post'], url_path='dispose')
-    @transaction.atomic
-    def dispose(self, request, pk=None):
-        container = ProblemContainer.objects.select_for_update().get(pk=pk)
-        if container.disposed_at:
-            return Response(self.get_serializer(container).data)
-        reason = _change_reason(request)
-        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
-        if not samples:
-            return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
-
-        blocked = [sample for sample in samples if sample.workflow_status not in {PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED}]
-        if blocked:
-            return Response({
-                'detail': 'This container is not ready to be disposed. Every attached ticket must have Current Workflow = To be Disposed or Disposed.',
-                'blocking_problem_ids': [sample.problem_number for sample in blocked],
-            }, status=status.HTTP_409_CONFLICT)
-
-        disposal_samples = [sample for sample in samples if sample.workflow_status == PROBLEM_STATUS_TO_BE_DISPOSED]
-
+    def _apply_container_disposal(self, request, container, samples, disposal_samples, reason, *, history_extra=None):
         now = timezone.now()
         disposal_snapshot = {}
+        history_extra = dict(history_extra or {})
         for sample in disposal_samples:
             values = dict(sample.custom_values or {})
             before = sample.workflow_status
@@ -1444,13 +1448,25 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             sample.custom_values = values
             sample.current_workflow = PROBLEM_STATUS_DISPOSED
             sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(before, previous_dispose_automatically=before_auto, changed_at=now)
-            sample.save(update_fields=list(dict.fromkeys(['custom_values', 'current_workflow', 'modified_by', 'modified_at'] + lifecycle_fields)))
+            lifecycle_fields = sample.apply_acknowledgement_status_transition(
+                before, previous_dispose_automatically=before_auto, changed_at=now,
+            )
+            sample.save(update_fields=list(dict.fromkeys([
+                'custom_values', 'current_workflow', 'modified_by', 'modified_at', *lifecycle_fields,
+            ])))
             if before != PROBLEM_STATUS_DISPOSED:
+                details = {
+                    'changes': [{
+                        'field': 'Current Workflow',
+                        'before': before or '—',
+                        'after': PROBLEM_STATUS_DISPOSED,
+                    }],
+                    **history_extra,
+                }
                 ProblemHistory.objects.create(
                     problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
                     summary=f'Container {container.container_id} disposed',
-                    details=_history_details({'changes': [{'field': 'Current Workflow', 'before': before or '—', 'after': PROBLEM_STATUS_DISPOSED}]}, reason),
+                    details=_history_details(details, reason),
                 )
 
         container.disposed_at = now
@@ -1459,10 +1475,74 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         # no snapshot and still need a history-based rollback.
         container.disposal_snapshot = disposal_snapshot or {'_no_rows_changed': True}
         container.save(update_fields=['disposed_at', 'disposed_by', 'disposal_snapshot'])
-        # Clear serializer cache if the object was reused.
         if hasattr(container, '_container_samples_cache'):
             delattr(container, '_container_samples_cache')
         return Response(self.get_serializer(container).data)
+
+    @action(detail=True, methods=['post'], url_path='dispose')
+    @transaction.atomic
+    def dispose(self, request, pk=None):
+        container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        if container.disposed_at:
+            return Response(self.get_serializer(container).data)
+        reason = _change_reason(request)
+        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
+        if not samples:
+            return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
+
+        blocked = [sample for sample in samples if sample.workflow_status not in {PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED}]
+        if blocked:
+            return Response({
+                'detail': 'This container is not ready to be disposed. Every attached ticket must have Current Workflow = To be Disposed or Disposed.',
+                'blocking_problem_ids': [sample.problem_number for sample in blocked],
+            }, status=status.HTTP_409_CONFLICT)
+
+        disposal_samples = [sample for sample in samples if sample.workflow_status == PROBLEM_STATUS_TO_BE_DISPOSED]
+        return self._apply_container_disposal(request, container, samples, disposal_samples, reason)
+
+    @action(detail=True, methods=['post'], url_path='dispose-by-date')
+    @transaction.atomic
+    def dispose_by_date(self, request, pk=None):
+        raw_cutoff = str(request.data.get('cutoff_date') or '').strip()
+        cutoff = parse_date(raw_cutoff)
+        if not cutoff:
+            return Response(
+                {'detail': 'Provide a valid cutoff_date in YYYY-MM-DD format.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        if container.disposed_at:
+            return Response(self.get_serializer(container).data)
+
+        reason = _change_reason(request)
+        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
+        if not samples:
+            return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
+
+        # "Older than" is intentionally strict: a ticket created on the cutoff
+        # date itself is not old enough. Use the application's local timezone so
+        # the server and the date-only UI agree at midnight boundaries.
+        blocked = [sample for sample in samples if timezone.localdate(sample.created_at) >= cutoff]
+        if blocked:
+            return Response({
+                'detail': f'Every ticket in this container must have been created before {cutoff.isoformat()}.',
+                'blocking_problem_ids': [sample.problem_number for sample in blocked],
+                'cutoff_date': cutoff.isoformat(),
+            }, status=status.HTTP_409_CONFLICT)
+
+        disposal_samples = [sample for sample in samples if sample.workflow_status != PROBLEM_STATUS_DISPOSED]
+        return self._apply_container_disposal(
+            request,
+            container,
+            samples,
+            disposal_samples,
+            reason,
+            history_extra={
+                'disposal_method': 'dispose_by_date',
+                'cutoff_date': cutoff.isoformat(),
+            },
+        )
 
     @action(detail=True, methods=['post'], url_path='undo-disposal')
     @transaction.atomic

@@ -14,9 +14,10 @@ import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import CameraCapture from '@/components/CameraCapture';
+import StaffImage from '@/components/StaffImage';
 
 type Comment = { id: number; body: string; author_email: string; legacy_author: string; created_at: string };
-type ProblemImage = { id:number; image:string; original_name:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
+type ProblemImage = { id:number; has_image?:boolean; original_name:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
 type ProblemAttachment = { id:number; file:string; original_name:string; content_type:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
 type HistoryEntry = {
   id: number;
@@ -465,7 +466,7 @@ export default function Detail() {
               <div className="file-subsection-heading"><strong>Images</strong><span className="muted">{p.images?.length || 0}</span></div>
               {(p.images || []).length > 0 && <div className="image-gallery">
                 {(p.images || []).map(image => <article className="image-card" key={image.id}>
-                  <a className="image-preview-link" href={image.image} target="_blank" rel="noreferrer"><img className="image-preview" src={image.image} alt={image.original_name || 'Ticket image'} /></a>
+                  <div className="image-preview-link"><StaffImage problemId={p.id} imageId={image.id} className="image-preview" alt={image.original_name || 'Ticket image'} openInNewTab /></div>
                   <div className="image-card-copy"><div className="file-name">{image.original_name || 'Image'}</div><div className="file-meta">{formatBytes(image.size_bytes)} · {new Date(image.uploaded_at).toLocaleString()}</div></div>
                   <button type="button" className="file-delete" onClick={() => removeImage(image)}>Delete</button>
                 </article>)}

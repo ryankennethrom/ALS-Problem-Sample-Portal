@@ -326,3 +326,15 @@ Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Wor
 
 ## Direct camera capture
 `frontend/components/CameraCapture.tsx` provides a reusable browser-camera modal using `navigator.mediaDevices.getUserMedia`. It prefers the environment-facing camera and renders a video preview. Captures are drawn to a canvas and encoded as JPEG before being passed back as a `File`, keeping them compatible with the backend image validator (JPEG/PNG/GIF/WebP). New-ticket captures are held in `ProblemForm` until prepared-ticket finalization; existing-ticket captures upload immediately through the standard `/problem-samples/{id}/images/` endpoint.
+
+
+## Production image storage and staff image delivery
+Staff ticket images are no longer rendered from raw Django `/media/` URLs. Ticket Details and Image Search fetch image bytes through the authenticated `GET /api/problem-samples/{ticket_id}/images/{image_id}/content/` endpoint, so production does not depend on Django's development-only media serving. A missing backing file returns a controlled 404 and the frontend displays **Image file unavailable**.
+
+Uploads still require durable file storage. `MEDIA_ROOT` now uses, in order: an explicit `MEDIA_ROOT` environment variable, Railway's automatically provided `RAILWAY_VOLUME_MOUNT_PATH`, or the local `backend/media` directory. In Railway, attach a persistent Volume to the Django backend (for example at `/app/media`) before relying on uploaded ticket images across deployments. Database rows only store file paths; they do not preserve the image bytes if ephemeral storage is replaced.
+
+## Staff image delivery
+Problem image metadata excludes the storage/media URL. Staff image previews are fetched with the existing bearer session through the authenticated image-content endpoint, then displayed using a browser blob URL. This avoids exposing `/media/` URLs and prevents HTTPS pages from issuing mixed-content image requests.
+
+## Date-based container disposal
+`ProblemContainerViewSet.dispose_by_date` accepts `cutoff_date` (`YYYY-MM-DD`) and locks the container transactionally. Every attached ticket must have a local `created_at` date strictly earlier than the cutoff. Eligible non-disposed tickets are transitioned to `Disposed` using the same snapshot/history mechanism as normal container disposal, allowing Undo Disposal to restore prior workflow state. `ProblemContainerSerializer.samples` exposes `created_at` and `created_date` for the Dispose by Date UI.

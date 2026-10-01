@@ -95,58 +95,65 @@ export default function Dashboard() {
       <h1 className="page-heading">Dashboard</h1>
     </div></div>
 
-    <section className={styles.newCard} aria-label="Tracking Not Sent">
-      <div>
-        <div className={styles.label}>Tracking Not Sent</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.tracking_not_sent)}</div>
-        <div className={styles.note}>Open workflows · no tracking link · all tables</div>
-      </div>
-      <Link href="/follow-up-required/tracking-not-sent" className={styles.seeAll}>See all &gt;</Link>
+    <section className={styles.dashboardSection} aria-labelledby="action-required-heading">
+      <h2 id="action-required-heading" className={styles.sectionHeading}>Action Required</h2>
+
+      <section className={styles.newCard} aria-label="Tracking Not Sent">
+        <div>
+          <div className={styles.label}>Tracking Not Sent</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.tracking_not_sent)}</div>
+          <div className={styles.note}>Open workflows · no tracking link · all tables</div>
+        </div>
+        <Link href="/follow-up-required/tracking-not-sent" className={styles.seeAll}>See all &gt;</Link>
+      </section>
+
+      <section className={styles.newCard} aria-label="New Customer Response">
+        <div>
+          <div className={styles.label}>New Customer Response</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.customer_responded)}</div>
+          <div className={styles.note}>Across all tables · current workflow</div>
+        </div>
+        <Link href="/follow-up-required/customer-responded" className={styles.seeAll}>See all &gt;</Link>
+      </section>
+
+      <section className={styles.newCard} aria-label="To be shipped">
+        <div>
+          <div className={styles.label}>To be shipped</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.to_be_shipped)}</div>
+          <div className={styles.note}>Awaiting shipment · all tables</div>
+        </div>
+        <Link href="/shipping/to-be-shipped" className={styles.seeAll}>See all &gt;</Link>
+      </section>
+
+      <section className={styles.newCard} aria-label="To be back to testing">
+        <div>
+          <div className={styles.label}>To be back to testing</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.to_be_back_to_testing)}</div>
+          <div className={styles.note}>Awaiting return to testing · all tables</div>
+        </div>
+        <Link href="/to-be-back-to-testing" className={styles.seeAll}>See all &gt;</Link>
+      </section>
+
+      <section className={styles.newCard} aria-label="Old Tickets">
+        <div>
+          <div className={styles.label}>Old Tickets</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.old_tickets)}</div>
+          <div className={styles.note}>Created before {data?.old_ticket_definition.created_before || 'the configured age'} · all tables and workflows</div>
+        </div>
+        {currentUser?.is_admin && <Link href="/terminal-ticket-cleanup" className={styles.seeAll}>Delete old tickets &gt;</Link>}
+      </section>
     </section>
 
-    <section className={styles.newCard} aria-label="Tracking emails sent today">
-      <div>
-        <div className={styles.label}>Tracking Emails Sent Today</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.tracking_emails_today)}</div>
-        <div className={styles.note}>Tracking links created today · local time</div>
-      </div>
-    </section>
+    <section className={styles.dashboardSection} aria-labelledby="analytics-heading">
+      <h2 id="analytics-heading" className={styles.sectionHeading}>Analytics</h2>
 
-    <section className={styles.newCard} aria-label="New Customer Response">
-      <div>
-        <div className={styles.label}>New Customer Response</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.customer_responded)}</div>
-        <div className={styles.note}>Across all tables · current workflow</div>
-      </div>
-      <Link href="/follow-up-required/customer-responded" className={styles.seeAll}>See all &gt;</Link>
-    </section>
-
-    <section className={styles.newCard} aria-label="To be shipped">
-      <div>
-        <div className={styles.label}>To be shipped</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.to_be_shipped)}</div>
-        <div className={styles.note}>Awaiting shipment · all tables</div>
-      </div>
-      <Link href="/shipping/to-be-shipped" className={styles.seeAll}>See all &gt;</Link>
-    </section>
-
-    <section className={styles.newCard} aria-label="To be back to testing">
-      <div>
-        <div className={styles.label}>To be back to testing</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.to_be_back_to_testing)}</div>
-        <div className={styles.note}>Awaiting return to testing · all tables</div>
-      </div>
-      <Link href="/to-be-back-to-testing" className={styles.seeAll}>See all &gt;</Link>
-    </section>
-
-    <section className={styles.newCard} aria-label="Old Tickets">
-      <div>
-        <div className={styles.label}>Old Tickets</div>
-        <div className={styles.value}>{loading&&!data?'…':format(data?.counts.old_tickets)}</div>
-        <div className={styles.note}>Created before {data?.old_ticket_definition.created_before || 'the configured age'} · all tables and workflows</div>
-      </div>
-      {currentUser?.is_admin && <Link href="/terminal-ticket-cleanup" className={styles.seeAll}>Delete old tickets &gt;</Link>}
-    </section>
+      <section className={styles.newCard} aria-label="Tracking emails sent today">
+        <div>
+          <div className={styles.label}>Tracking Emails Sent Today</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.tracking_emails_today)}</div>
+          <div className={styles.note}>Tracking links created today · local time</div>
+        </div>
+      </section>
 
     <p className={`muted ${styles.sectionIntro}`}>Tickets opened in the last…</p>
     <div className={styles.cards}>{cards.map(([label,value,note])=><div className={styles.card} key={label}>
@@ -193,6 +200,7 @@ export default function Dashboard() {
           <Chart points={data.automatic_disposal_chart.points} ariaLabel="Tickets moved to To be Disposed by automatic disposal expiry over time" tooltipNoun="ticket"/>
         </>:<div className={styles.loading}>Apply a custom range to view the graph.</div>}
       </div>
+    </section>
     </section>
   </div>;
 }

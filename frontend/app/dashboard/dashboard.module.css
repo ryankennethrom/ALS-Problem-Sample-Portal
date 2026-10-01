@@ -8,3 +8,9 @@
 .seeAll:hover,.seeAll:focus-visible{text-decoration:underline}
 
 .sectionIntro{margin:0 0 10px}
+
+/* Dashboard grouping */
+.dashboardSection{margin-top:24px}
+.dashboardSection:first-of-type{margin-top:16px}
+.sectionHeading{margin:0 0 12px;font-size:20px;line-height:1.2;font-weight:750;color:#25323b}
+.dashboardSection>.newCard:first-of-type{margin-top:0}

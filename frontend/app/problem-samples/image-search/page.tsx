@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import StaffImage from '@/components/StaffImage';
 import { AdvancedFilter, MatchMode } from '@/components/AdvancedSearch';
 import { ProblemTable } from '@/lib/problemTables';
 
 type ProblemImage = {
   id: number;
-  image: string;
+  has_image?: boolean;
   original_name?: string;
   size_bytes?: number;
   uploaded_at?: string;
@@ -125,7 +126,7 @@ function ImageSearchContent() {
   }, [fullScreenImage]);
 
   const images = useMemo<GalleryImage[]>(() => items.flatMap(problem =>
-    (problem.images || []).filter(image => Boolean(image.image)).map(image => ({
+    (problem.images || []).filter(image => image.has_image !== false).map(image => ({
       ...image,
       problemId: problem.id,
       problemNumber: problem.problem_number,
@@ -171,7 +172,7 @@ function ImageSearchContent() {
     {!error && images.length > 0 && <section className="image-search-gallery" aria-label="Ticket image search results">
       {images.map(image => <article className="image-search-card" key={`${image.problemId}-${image.id}`}>
         <button className="image-search-preview" type="button" onClick={() => setFullScreenImage(image)} title="View full screen">
-          <img src={image.image} alt={image.original_name || `Ticket ${image.problemNumber} image`} />
+          <StaffImage problemId={image.problemId} imageId={image.id} alt={image.original_name || `Ticket ${image.problemNumber} image`} />
         </button>
         <div className="image-search-card-body">
           <div className="image-search-card-heading">
@@ -205,7 +206,7 @@ function ImageSearchContent() {
           </div>
         </div>
         <div className="image-search-lightbox-image-wrap">
-          <img src={fullScreenImage.image} alt={fullScreenImage.original_name || `Ticket ${fullScreenImage.problemNumber} image`} />
+          <StaffImage problemId={fullScreenImage.problemId} imageId={fullScreenImage.id} alt={fullScreenImage.original_name || `Ticket ${fullScreenImage.problemNumber} image`} />
         </div>
       </div>
     </div>}

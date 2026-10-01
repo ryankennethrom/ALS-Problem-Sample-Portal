@@ -349,16 +349,25 @@ class CommentSerializer(serializers.ModelSerializer):
 class ImageSerializer(serializers.ModelSerializer):
     uploaded_by_email = serializers.EmailField(source='uploaded_by.email', read_only=True)
     size_bytes = serializers.SerializerMethodField()
+    has_image = serializers.SerializerMethodField()
 
     class Meta:
         model = ProblemImage
-        fields = ['id', 'image', 'original_name', 'size_bytes', 'include_in_customer_notification', 'uploaded_by_email', 'uploaded_at']
+        # Deliberately do not expose the ImageField URL here. Behind a reverse
+        # proxy Django/DRF can turn it into an absolute storage URL (and, if
+        # proxy scheme information is not trusted, even an http:// URL). Staff
+        # previews are authenticated and must always stream through the
+        # image-content API instead of /media/.
+        fields = ['id', 'original_name', 'size_bytes', 'has_image', 'include_in_customer_notification', 'uploaded_by_email', 'uploaded_at']
 
     def get_size_bytes(self, obj):
         try:
             return obj.image.size if obj.image else 0
         except (OSError, ValueError):
             return 0
+
+    def get_has_image(self, obj):
+        return bool(obj.image)
 
 
 class AttachmentSerializer(serializers.ModelSerializer):
@@ -497,6 +506,8 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
                 'table_name': sample.table.name if sample.table_id else '',
                 'pt_days': sample.table.pt_days if sample.table_id else None,
                 'customer_notified_at': sample.customer_notified_at,
+                'created_at': sample.created_at,
+                'created_date': timezone.localdate(sample.created_at).isoformat(),
                 'expires_at': expires_at,
                 'expiration_status': sample.expiration_status,
                 'status': str((sample.custom_values or {}).get('status') or sample.status or ''),

@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import (
@@ -108,3 +111,76 @@ class OptionalContainerWorkflowTests(TestCase):
         already_disposed.refresh_from_db()
         self.assertEqual(waiting.workflow_status, PROBLEM_STATUS_TO_BE_DISPOSED)
         self.assertEqual(already_disposed.workflow_status, PROBLEM_STATUS_DISPOSED)
+
+    def set_created_days_ago(self, ticket, days):
+        created_at = timezone.now() - timedelta(days=days)
+        ProblemSample.objects.filter(pk=ticket.pk).update(created_at=created_at)
+        ticket.refresh_from_db()
+        return ticket
+
+    def test_dispose_by_date_allows_non_ready_container_when_every_ticket_is_older(self):
+        first = self.set_created_days_ago(self.sample(10, CURRENT_WORKFLOW_DEFAULT, self.container), 20)
+        second = self.set_created_days_ago(self.sample(11, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, self.container), 15)
+        cutoff = (timezone.localdate() - timedelta(days=10)).isoformat()
+
+        state = self.container_state()
+        self.assertFalse(state['ready_to_dispose'])
+        self.assertEqual(state['samples'][0]['created_date'], timezone.localdate(state['samples'][0]['created_at']).isoformat())
+
+        result = self.client.post(
+            f'/api/problem-containers/{self.container.pk}/dispose-by-date/',
+            {'cutoff_date': cutoff}, format='json',
+            HTTP_X_CHANGE_REASON='Old physical container cleanup',
+        )
+        self.assertEqual(result.status_code, 200, result.data)
+        self.assertEqual(result.data['status'], 'disposed')
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.workflow_status, PROBLEM_STATUS_DISPOSED)
+        self.assertEqual(second.workflow_status, PROBLEM_STATUS_DISPOSED)
+        self.container.refresh_from_db()
+        self.assertEqual(set(self.container.disposal_snapshot), {str(first.pk), str(second.pk)})
+
+        history = ProblemHistory.objects.filter(problem=first, summary=f'Container {self.container.container_id} disposed').latest('created_at')
+        self.assertEqual(history.details['disposal_method'], 'dispose_by_date')
+        self.assertEqual(history.details['cutoff_date'], cutoff)
+        self.assertEqual(history.details['reason'], 'Old physical container cleanup')
+
+        undone = self.client.post(f'/api/problem-containers/{self.container.pk}/undo-disposal/', {}, format='json')
+        self.assertEqual(undone.status_code, 200, undone.data)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.workflow_status, CURRENT_WORKFLOW_DEFAULT)
+        self.assertEqual(second.workflow_status, PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
+
+    def test_dispose_by_date_rejects_container_when_any_ticket_is_not_old_enough(self):
+        old_ticket = self.set_created_days_ago(self.sample(20, CURRENT_WORKFLOW_DEFAULT, self.container), 20)
+        recent_ticket = self.set_created_days_ago(self.sample(21, CURRENT_WORKFLOW_DEFAULT, self.container), 2)
+        cutoff = (timezone.localdate() - timedelta(days=10)).isoformat()
+
+        result = self.client.post(
+            f'/api/problem-containers/{self.container.pk}/dispose-by-date/',
+            {'cutoff_date': cutoff}, format='json',
+        )
+        self.assertEqual(result.status_code, 409, result.data)
+        self.assertIn(recent_ticket.problem_number, result.data['blocking_problem_ids'])
+        self.assertNotIn(old_ticket.problem_number, result.data['blocking_problem_ids'])
+
+        self.container.refresh_from_db()
+        old_ticket.refresh_from_db()
+        recent_ticket.refresh_from_db()
+        self.assertIsNone(self.container.disposed_at)
+        self.assertEqual(old_ticket.workflow_status, CURRENT_WORKFLOW_DEFAULT)
+        self.assertEqual(recent_ticket.workflow_status, CURRENT_WORKFLOW_DEFAULT)
+
+    def test_dispose_by_date_is_strict_for_tickets_created_on_cutoff_date(self):
+        ticket = self.sample(30, CURRENT_WORKFLOW_DEFAULT, self.container)
+        cutoff = timezone.localdate().isoformat()
+        result = self.client.post(
+            f'/api/problem-containers/{self.container.pk}/dispose-by-date/',
+            {'cutoff_date': cutoff}, format='json',
+        )
+        self.assertEqual(result.status_code, 409, result.data)
+        self.assertEqual(result.data['blocking_problem_ids'], [ticket.problem_number])
+

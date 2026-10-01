@@ -522,6 +522,8 @@ Client Email fields include per-address **Copy** buttons and a **Copy All** butt
 Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Workflow from `Follow Up Required` to `CS Follow-Up` and standardizes Status across every table to `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Existing Status values are normalized into that set; unrecognized values become `NEW`.
 
 ## Dashboard
+
+The dashboard is grouped into **Action Required** (Tracking Not Sent, New Customer Response, To be shipped, To be back to testing, and Old Tickets) and **Analytics** (all remaining metrics, date-range cards, and charts).
 The Dashboard is tracker-wide across all problem-sample tables. "Opened" means the problem sample row's `created_at` timestamp. It shows rolling counts for the last 24 hours, 7 days, 30 days, 183 days, and 365 days plus an inclusive custom date range. The graph supports week, month, 6 months, year, and custom ranges and uses daily, weekly, or monthly buckets as appropriate.
 
 **Tracking Not Sent** counts tickets across all tables whose Current Workflow is not a terminating or terminal workflow and which have no persisted `ProblemTrackingLink` row. Pending email tokens do not count as sent links. The Dashboard card links to the CS Follow-Up > Tracking Not Sent subtab; its selected-table list applies the same database filter before search and quick filters. The former NEW shortcut redirects there.
@@ -542,3 +544,15 @@ Ticket tables include an **Image Search (N)** action. The count reflects the ima
 
 ### Direct camera capture
 Staff can use **Take Photo** anywhere ticket images are added. The browser requests camera permission, prefers the rear/environment camera, captures a JPEG in-browser, and uses the existing ticket-image upload API. On the Create Ticket form the photo is queued until the tracking-link email step is finalized; on an existing ticket it uploads immediately after capture. Camera access requires HTTPS or localhost.
+
+
+## Production image storage and staff image delivery
+Staff ticket images are no longer rendered from raw Django `/media/` URLs. Ticket Details and Image Search fetch image bytes through the authenticated `GET /api/problem-samples/{ticket_id}/images/{image_id}/content/` endpoint, so production does not depend on Django's development-only media serving. A missing backing file returns a controlled 404 and the frontend displays **Image file unavailable**.
+
+Uploads still require durable file storage. `MEDIA_ROOT` now uses, in order: an explicit `MEDIA_ROOT` environment variable, Railway's automatically provided `RAILWAY_VOLUME_MOUNT_PATH`, or the local `backend/media` directory. In Railway, attach a persistent Volume to the Django backend (for example at `/app/media`) before relying on uploaded ticket images across deployments. Database rows only store file paths; they do not preserve the image bytes if ephemeral storage is replaced.
+
+### Staff image transport
+Staff ticket API responses intentionally do not expose Django `ImageField` storage URLs. Ticket Details and Image Search load image bytes only through the authenticated `/api/problem-samples/<ticket-id>/images/<image-id>/content/` endpoint (proxied by the frontend as `/backend-api/...`). This prevents mixed-content requests such as `http://.../media/...` when the frontend is served over HTTPS.
+
+### Dispose by Date
+The Dispose Containers area includes a **Dispose by Date** tab. Staff select a cutoff date; a non-empty, non-disposed container is eligible only when every ticket assigned to it was created before that date. Tickets created on the cutoff date itself do not qualify. Disposing by date re-validates eligibility on the backend, changes any remaining ticket workflows in the container to `Disposed`, records the cutoff in ticket history, and supports the existing Undo Disposal workflow.

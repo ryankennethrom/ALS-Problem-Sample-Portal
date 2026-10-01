@@ -11,7 +11,7 @@ import { useCurrentUser } from '@/components/CurrentUserContext';
 
 type ProblemImage = {
   id: number;
-  image: string;
+  has_image?: boolean;
   original_name?: string;
   size_bytes?: number;
   uploaded_at?: string;
@@ -105,7 +105,7 @@ function HomeContent() {
   const currentQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;
   const activeQuickFilterCount = Object.values(currentQuickFilters).filter(Boolean).length;
   const imageCount = useMemo(
-    () => items.reduce((total, problem) => total + (problem.images?.filter(image => Boolean(image.image)).length || 0), 0),
+    () => items.reduce((total, problem) => total + (problem.images?.filter(image => image.has_image !== false).length || 0), 0),
     [items],
   );
   const imageSearchHref = useMemo(() => {
