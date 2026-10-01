@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import PreparedProblemSample, ProblemContainer, ProblemSample, ProblemHistory, ProblemTrackingLink
+from .models import (CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PreparedProblemSample, ProblemContainer, ProblemSample, ProblemHistory, ProblemTrackingLink)
 from .views import get_default_table
 
 
@@ -47,6 +47,7 @@ class PreparedProblemSampleTests(TestCase):
         self.assertIsNotNone(sample.acknowledgement_token)
         self.assertTrue(draft['tracking_url'].endswith(sample.acknowledgement_token))
         self.assertTrue(ProblemTrackingLink.objects.filter(ticket=sample).exists())
+        self.assertEqual(sample.workflow_status, CURRENT_WORKFLOW_DEFAULT)
         history = ProblemHistory.objects.get(problem=sample, summary='Customer tracking email not sent')
         self.assertEqual(history.details['reason'], 'Email unknown')
         again = self.client.post('/api/problem-samples/create-prepared/', {
@@ -89,7 +90,9 @@ class PreparedProblemSampleTests(TestCase):
         sample = ProblemSample.objects.get(pk=response.data['id'])
         self.assertIsNotNone(sample.customer_notified_at)
         self.assertTrue(draft['tracking_url'].endswith(sample.acknowledgement_token))
-        self.assertTrue(sample.history.filter(summary='Sent tracking link to customer by email').exists())
+        self.assertEqual(sample.workflow_status, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER)
+        history = sample.history.get(summary='Sent tracking link to customer by email')
+        self.assertIn({'field': 'Current Workflow', 'before': CURRENT_WORKFLOW_DEFAULT, 'after': CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}, history.details['changes'])
 
     def test_another_user_cannot_create_or_cancel_preparation(self):
         draft = self.prepare()

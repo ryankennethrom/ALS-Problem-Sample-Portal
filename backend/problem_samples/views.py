@@ -1425,13 +1425,33 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'This ticket has no active tracking link to revoke.'}, status=status.HTTP_409_CONFLICT)
         reason = _change_reason(request)
         link.delete()
+        changes = [{'field': 'Tracking Link', 'before': 'Active', 'after': 'Revoked'}]
+        update_fields = []
         if problem.pending_tracking_token:
             problem.pending_tracking_token = None
-            problem.save(update_fields=['pending_tracking_token'])
+            update_fields.append('pending_tracking_token')
+        if problem.workflow_status == CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER:
+            previous_workflow = problem.workflow_status
+            previous_auto = problem.dispose_automatically
+            problem.set_workflow_status(CURRENT_WORKFLOW_DEFAULT)
+            problem.modified_by = request.user
+            update_fields.extend(['custom_values', 'current_workflow', 'modified_by'])
+            update_fields.extend(problem.apply_acknowledgement_status_transition(
+                previous_workflow,
+                previous_dispose_automatically=previous_auto,
+                changed_at=timezone.now(),
+            ))
+            changes.append({
+                'field': 'Current Workflow',
+                'before': previous_workflow,
+                'after': problem.workflow_status,
+            })
+        if update_fields:
+            problem.save(update_fields=list(dict.fromkeys(update_fields)))
         ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
             summary='Revoked tracking link',
-            details=_history_details({'changes': [{'field': 'Tracking Link', 'before': 'Active', 'after': 'Revoked'}]}, reason),
+            details=_history_details({'changes': changes}, reason),
         )
         return Response({'detail': 'Tracking link revoked. The old URL cannot be used again.'})
 
@@ -1534,12 +1554,13 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem.pending_tracking_token = None
             credential_fields.append('pending_tracking_token')
 
-        # Preserve the previous workflow: the first confirmed customer email
-        # activates automatic disposal. The activation now lives in the dedicated
-        # Dispose Automatically field without changing Status or Current Workflow. Resends do not
-        # reset the countdown unless the field is later changed No -> Yes again.
+        # The first confirmed customer email activates automatic disposal. Once a
+        # tracking-link email is actually sent from CS Follow-Up, the ticket is also
+        # routed to Waiting for Customer Response. A resend must not pull a ticket
+        # back out of a terminal/shipping/testing workflow.
         first_notification = problem.customer_notified_at is None
         changes = []
+        automatic_disposal_activated = False
         update_fields = list(credential_fields)
 
         if first_notification:
@@ -1559,6 +1580,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 update_fields.extend(problem.apply_acknowledgement_status_transition(
                     before_status, previous_dispose_automatically=before_auto, changed_at=now
                 ))
+                automatic_disposal_activated = True
                 changes.append({
                     'field': 'Dispose Automatically',
                     'before': DISPOSE_AUTOMATICALLY_NO,
@@ -1572,6 +1594,26 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                         'after': after_disposal_days,
                     })
 
+        workflow_before_waiting = problem.workflow_status
+        if workflow_before_waiting == CURRENT_WORKFLOW_DEFAULT:
+            workflow_changed_at = timezone.now()
+            previous_auto = problem.dispose_automatically
+            problem.set_workflow_status(CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER)
+            problem.modified_by = request.user
+            update_fields.extend(['custom_values', 'current_workflow', 'modified_by'])
+            update_fields.extend(problem.apply_acknowledgement_status_transition(
+                workflow_before_waiting,
+                previous_dispose_automatically=previous_auto,
+                changed_at=workflow_changed_at,
+            ))
+            workflow_after_waiting = problem.workflow_status
+            if workflow_after_waiting != workflow_before_waiting:
+                changes.append({
+                    'field': 'Current Workflow',
+                    'before': workflow_before_waiting,
+                    'after': workflow_after_waiting,
+                })
+
         if update_fields:
             problem.save(update_fields=list(dict.fromkeys(update_fields)))
 
@@ -1584,14 +1626,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'delivery_method': delivery_method,
                 'confirmation': 'User confirmed the customer notification email was sent.',
                 'first_notification': first_notification,
-                'starts_pt_clock': bool(first_notification and changes),
-                'automatic_disposal_activated': bool(first_notification and changes),
+                'starts_pt_clock': automatic_disposal_activated,
+                'automatic_disposal_activated': automatic_disposal_activated,
                 'acknowledgement_credentials_saved': bool(credential_fields),
                 'changes': changes,
             },
         )
         problem.transition_to_disposal_if_due(now=timezone.now())
-        problem.refresh_from_db(fields=['customer_notified_at', 'custom_values', 'modified_by'])
+        problem.refresh_from_db(fields=['customer_notified_at', 'custom_values', 'current_workflow', 'modified_by'])
         serialized = ProblemSampleSerializer(problem, context={'request': request}).data
         return Response({
             'id': history.id,
@@ -1603,7 +1645,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'expiration_status': serialized.get('expiration_status'),
             'pt_days': serialized.get('pt_days'),
             'workflow_status': problem.workflow_status,
-            'automatic_disposal_activated': bool(first_notification and changes),
+            'automatic_disposal_activated': automatic_disposal_activated,
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='prepare-comment-mentions')

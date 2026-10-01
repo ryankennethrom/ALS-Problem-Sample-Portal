@@ -204,6 +204,7 @@ class DashboardView(APIView):
         )
         counts.update({key: int(value or 0) for key, value in action_counts.items()})
         counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
+        counts['customer_service_other'] = customer_service_other_tickets().count()
         age_months = old_ticket_age_months()
         counts['old_tickets'] = ProblemSample.objects.filter(
             created_at__lt=old_ticket_before(age_months)

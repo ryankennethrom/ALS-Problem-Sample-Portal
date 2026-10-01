@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import ProblemHistory, ProblemSample, ProblemTrackingLink
+from .models import (CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_SHIPPED_BACK, ProblemHistory, ProblemSample, ProblemTrackingLink)
 from .views import get_default_table
 
 
@@ -27,6 +27,26 @@ class TrackingLinkControlsTests(TestCase):
             'tracking_token': token, 'delivery_method': 'mailto',
         }, format='json')
         self.assertEqual(result.status_code, 201, result.data)
+
+    def test_sent_tracking_link_moves_cs_follow_up_to_waiting_for_customer_response(self):
+        token = self.prepare()
+        self.send(token)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.workflow_status, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER)
+        history = self.ticket.history.get(summary='Sent tracking link to customer by email')
+        self.assertIn({
+            'field': 'Current Workflow',
+            'before': CURRENT_WORKFLOW_DEFAULT,
+            'after': CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER,
+        }, history.details['changes'])
+
+    def test_sent_tracking_link_does_not_override_terminal_workflow(self):
+        self.ticket.set_workflow_status(PROBLEM_STATUS_SHIPPED_BACK)
+        self.ticket.save(update_fields=['current_workflow', 'custom_values'])
+        token = self.prepare()
+        self.send(token)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.workflow_status, PROBLEM_STATUS_SHIPPED_BACK)
 
     def test_direct_create_requires_tracking_email_preparation(self):
         created = self.client.post('/api/problem-samples/', {
@@ -79,6 +99,8 @@ class TrackingLinkControlsTests(TestCase):
         self.assertEqual(self.public.get(f'/api/public/problem-sample-tracking/{first}/').status_code, 404)
         self.assertEqual(self.public.post(f'/api/public/problem-sample-tracking/{first}/', {'action': 'hold'}, format='json').status_code, 404)
         self.assertIsNone(self.client.get(self.base).data['tracking_url'] or None)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.workflow_status, CURRENT_WORKFLOW_DEFAULT)
         self.assertGreaterEqual(self.client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 1)
         self.assertTrue(ProblemHistory.objects.filter(problem=self.ticket, summary='Revoked tracking link', details__reason='Sent to wrong address').exists())
         self.assertEqual(self.client.post(self.base + 'revoke-tracking-link/', {}).status_code, 409)
