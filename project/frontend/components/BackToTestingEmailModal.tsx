@@ -4,9 +4,17 @@ import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { api } from '@/lib/api';
 
+export type TestingCustomerMessage = {
+  message: string;
+  signature: string;
+  createdAt: string;
+};
+
 export type TestingEmailDetails = {
   problemNumber: number; tableName: string; containerId: string;
-  trackingNumber: string; problemType: string; reasonForHold: string; customerRequest: string;
+  trackingNumber: string; problemType: string; reasonForHold: string;
+  customerMessages: TestingCustomerMessage[];
+  ticketUrl: string;
 };
 
 type Props = {
@@ -61,8 +69,19 @@ export default function BackToTestingEmailModal({ details, problemNumbers, onCon
     `ALS Sample Tracking Number: ${details?.trackingNumber || 'Not provided'}`,
     `Problem Type: ${details?.problemType || 'Not provided'}`,
     `Reason for Hold: ${details?.reasonForHold || 'Not provided'}`,
+    '',
+    `Ticket link: ${details?.ticketUrl || 'Not available'}`,
   ];
-  if (!isBulk && details?.customerRequest) lines.push(`Customer requested information: ${details.customerRequest}`);
+  if (!isBulk && details?.customerMessages?.length) {
+    lines.push('', 'Customer messages:');
+    details.customerMessages.forEach((customerMessage, index) => {
+      const sentAt = customerMessage.createdAt
+        ? new Date(customerMessage.createdAt).toLocaleString()
+        : 'Time unavailable';
+      const sender = customerMessage.signature || 'Customer';
+      lines.push('', `${index + 1}. ${sender} — ${sentAt}`, customerMessage.message);
+    });
+  }
   if (additional.trim()) lines.push('', 'Additional details:', additional.trim());
   lines.push('', 'Regards,', 'ALS');
   const body = lines.join('\n');

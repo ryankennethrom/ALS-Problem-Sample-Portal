@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import ProblemSample, ProblemTable, ProblemTrackingLink
+from .models import ProblemHistory, ProblemSample, ProblemTable, ProblemTrackingLink
 
 
 class TrackingNotSentDashboardTests(TestCase):
@@ -58,3 +58,56 @@ class TrackingNotSentDashboardTests(TestCase):
         waiting.set_workflow_status('CS Follow-Up')
         waiting.save(update_fields=['current_workflow', 'custom_values'])
         self.assertEqual(client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 3)
+
+
+class CustomerServiceOtherQueueTests(TestCase):
+    def test_other_is_cs_follow_up_minus_tracking_not_sent_and_new_response(self):
+        client = APIClient()
+        user = User.objects.create_user(username='customer.service.other')
+        client.force_authenticate(user)
+        table = ProblemTable.objects.create(name='Customer Service queues')
+
+        tracking_not_sent = ProblemSample.objects.create(
+            table=table, problem_number=1, current_workflow='CS Follow-Up',
+        )
+        new_response = ProblemSample.objects.create(
+            table=table, problem_number=2, current_workflow='CS Follow-Up',
+        )
+        other = ProblemSample.objects.create(
+            table=table, problem_number=3, current_workflow='CS Follow-Up',
+        )
+        waiting = ProblemSample.objects.create(
+            table=table, problem_number=4, current_workflow='Waiting for Customer Response',
+        )
+
+        ProblemTrackingLink.objects.create(ticket=new_response, tracking_token='response-link')
+        ProblemTrackingLink.objects.create(ticket=other, tracking_token='other-link')
+        ProblemTrackingLink.objects.create(ticket=waiting, tracking_token='waiting-link')
+        ProblemHistory.objects.create(
+            problem=new_response, action=ProblemHistory.ACTION_UPDATED,
+            summary='Customer selected: Message us about the issue',
+            details={'responded_via': 'public_tracking_link', 'customer_action_label': 'Message us about the issue'},
+        )
+        ProblemHistory.objects.create(
+            problem=other, action=ProblemHistory.ACTION_COMMENT, actor=user,
+            summary='Added comment', details={'comment': 'Staff follow-up'},
+        )
+
+        response = client.get('/api/problem-samples/follow-up-required/', {
+            'table': str(table.pk), 'other': '1',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row['problem_number'] for row in response.data], [3])
+
+        tracking_response = client.get('/api/problem-samples/follow-up-required/', {
+            'table': str(table.pk), 'tracking_not_sent': '1',
+        })
+        self.assertEqual([row['problem_number'] for row in tracking_response.data], [1])
+
+        responded = client.get('/api/dashboard/customer-responded/', {'table': str(table.pk)})
+        self.assertEqual([row['problem_number'] for row in responded.data['results']], [2])
+
+        invalid = client.get('/api/problem-samples/follow-up-required/', {
+            'table': str(table.pk), 'tracking_not_sent': '1', 'other': '1',
+        })
+        self.assertEqual(invalid.status_code, 400)

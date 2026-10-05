@@ -44,7 +44,9 @@ def tracking_not_sent_tickets(queryset=None):
     )
 
 
-def _customer_responded_tickets():
+def _latest_person_annotated_tickets(queryset=None):
+    if queryset is None:
+        queryset = ProblemSample.objects.all()
     latest_person = (
         ProblemHistory.objects.filter(problem_id=OuterRef('pk'))
         .filter(Q(actor_id__isnull=False) | CUSTOMER_HISTORY)
@@ -55,13 +57,32 @@ def _customer_responded_tickets():
         When(CUSTOMER_HISTORY, then=Value(True)),
         default=Value(False), output_field=BooleanField(),
     ))
+    return queryset.annotate(
+        last_response_at=Subquery(latest_person.values('created_at')[:1]),
+        last_person_is_customer=Subquery(latest_person.values('is_customer')[:1]),
+    )
+
+
+def _customer_responded_tickets(queryset=None):
     return (
-        ProblemSample.objects.annotate(
-            last_response_at=Subquery(latest_person.values('created_at')[:1]),
-            last_person_is_customer=Subquery(latest_person.values('is_customer')[:1]),
-        )
+        _latest_person_annotated_tickets(queryset)
         .filter(last_person_is_customer=True)
         .exclude(current_workflow__in=INELIGIBLE_WORKFLOWS)
+    )
+
+
+def customer_service_other_tickets(queryset=None):
+    """CS Follow-Up tickets in neither Tracking Not Sent nor New Tracking Link Response."""
+    if queryset is None:
+        queryset = ProblemSample.objects.all()
+    # Tracking Not Sent is exactly CS Follow-Up + no persisted tracking link.
+    # Once a link exists, the ticket belongs to New Tracking Link Response only
+    # while the latest human history entry is from the customer. Everything
+    # else still in CS Follow-Up belongs to Other.
+    return (
+        _latest_person_annotated_tickets(queryset)
+        .filter(current_workflow=CURRENT_WORKFLOW_DEFAULT, tracking_link_record__isnull=False)
+        .exclude(last_person_is_customer=True)
     )
 
 
@@ -183,6 +204,7 @@ class DashboardView(APIView):
         )
         counts.update({key: int(value or 0) for key, value in action_counts.items()})
         counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
+        counts['customer_service_other'] = customer_service_other_tickets().count()
         age_months = old_ticket_age_months()
         counts['old_tickets'] = ProblemSample.objects.filter(
             created_at__lt=old_ticket_before(age_months)

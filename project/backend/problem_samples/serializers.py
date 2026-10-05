@@ -618,30 +618,13 @@ def _validate_custom_value(column, value):
         if not canonical:
             raise serializers.ValidationError('Select a brand from the current Customer Export.')
         return canonical
-    if kind == ProblemColumn.TYPE_DISTRIBUTOR:
-        if not isinstance(value, str) or not value.strip():
-            raise serializers.ValidationError('Select a distributor company.')
-        from customers.models import Customer
-        from customers.normalization import customer_type_is
-        customer = next((
-            candidate for candidate in Customer.objects.filter(company_name__iexact=value.strip())
-            if customer_type_is(candidate.customer_type, 'Distributor')
-        ), None)
-        if not customer:
-            raise serializers.ValidationError('Select a company whose CoyType is Distributor.')
-        return customer.company_name
-    if kind == ProblemColumn.TYPE_END_USER:
-        if not isinstance(value, str) or not value.strip():
-            raise serializers.ValidationError('Select an end user company.')
-        from customers.models import Customer
-        from customers.normalization import customer_type_is
-        customer = next((
-            candidate for candidate in Customer.objects.filter(company_name__iexact=value.strip())
-            if customer_type_is(candidate.customer_type, 'End User')
-        ), None)
-        if not customer:
-            raise serializers.ValidationError('Select a company whose CoyType is End User.')
-        return customer.company_name
+    if kind in {ProblemColumn.TYPE_DISTRIBUTOR, ProblemColumn.TYPE_END_USER}:
+        # Distributor and End User are free-text fields. Their column type only
+        # determines which Customer Export suggestion source is shown in the UI;
+        # a user is never required to choose one of those suggestions.
+        if not isinstance(value, str):
+            raise serializers.ValidationError('Must be text.')
+        return value
     if kind == ProblemColumn.TYPE_CLIENT_EMAIL:
         # Client Email is a row-local list. Imported customer records provide
         # suggestions, but users can deliberately add an address that is not in
@@ -953,7 +936,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 old_value = old_values.get(key) if instance else None
                 keep_historical = False
                 if instance is not None and merged[key] == old_value:
-                    if column.column_type in {ProblemColumn.TYPE_GROUP, ProblemColumn.TYPE_DISTRIBUTOR, ProblemColumn.TYPE_END_USER, ProblemColumn.TYPE_BRAND}:
+                    if column.column_type in {ProblemColumn.TYPE_GROUP, ProblemColumn.TYPE_BRAND}:
                         # Keep historical assignments stable when external directory data changes.
                         keep_historical = True
                     elif column.column_type == ProblemColumn.TYPE_CLIENT_EMAIL:

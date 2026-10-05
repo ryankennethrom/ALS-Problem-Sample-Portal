@@ -87,6 +87,45 @@ class TrackingLinkControlsTests(TestCase):
                           self.ticket.dispose_automatically), before)
         self.assertEqual(self.ticket.acknowledgement_token, token)
 
+
+    def test_not_sent_discards_temporary_token_without_creating_link(self):
+        token = self.prepare()
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.pending_tracking_token, token)
+        self.assertFalse(ProblemTrackingLink.objects.filter(ticket=self.ticket).exists())
+
+        response = self.client.post(self.base + 'email-not-sent/', {
+            'kind': 'customer', 'reason': 'Customer email unavailable',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.ticket.refresh_from_db()
+        self.assertIsNone(self.ticket.pending_tracking_token)
+        self.assertFalse(ProblemTrackingLink.objects.filter(ticket=self.ticket).exists())
+        self.assertIsNone(self.ticket.tracking_link_expires_at)
+
+    def test_not_sent_does_not_change_existing_tracking_link_or_expiry(self):
+        token = self.prepare()
+        self.send(token)
+        self.ticket.refresh_from_db()
+        link = ProblemTrackingLink.objects.get(ticket=self.ticket)
+        original_token = link.tracking_token
+        original_created_at = link.created_at
+        original_expires_at = link.expires_at
+
+        prepared_again = self.prepare()
+        self.assertEqual(prepared_again, original_token)
+        response = self.client.post(self.base + 'email-not-sent/', {
+            'kind': 'customer', 'reason': 'Email client was closed',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+        self.ticket.refresh_from_db()
+        link.refresh_from_db()
+        self.assertEqual(link.tracking_token, original_token)
+        self.assertEqual(link.created_at, original_created_at)
+        self.assertEqual(link.expires_at, original_expires_at)
+        self.assertIsNone(self.ticket.pending_tracking_token)
+
     def test_revocation_invalidates_old_link_and_new_send_uses_fresh_token(self):
         first = self.prepare()
         self.send(first)

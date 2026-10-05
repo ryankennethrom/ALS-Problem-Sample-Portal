@@ -84,3 +84,48 @@ class StaffImageMetadataTests(TestCase):
         self.assertTrue(image_data['has_image'])
         self.assertNotIn('/media/', str(image_data))
         self.assertNotIn('http://', str(image_data))
+
+from .models import ProblemAttachment
+
+
+class StaffAttachmentContentTests(TestCase):
+    def setUp(self):
+        self.media_dir = tempfile.TemporaryDirectory()
+        self.override = override_settings(MEDIA_ROOT=self.media_dir.name)
+        self.override.enable()
+        self.addCleanup(self.override.disable)
+        self.addCleanup(self.media_dir.cleanup)
+
+        self.user = User.objects.create_user(username='attachment.staff')
+        self.table = ProblemTable.objects.create(name='Attachment API table')
+        self.problem = ProblemSample.objects.create(table=self.table, problem_number=3)
+        self.attachment = ProblemAttachment.objects.create(
+            problem=self.problem,
+            file=SimpleUploadedFile('customer-notes.txt', b'customer notes', content_type='text/plain'),
+            original_name='customer-notes.txt',
+            content_type='text/plain',
+            size_bytes=14,
+            uploaded_by=None,
+        )
+        self.url = f'/api/problem-samples/{self.problem.pk}/attachments/{self.attachment.pk}/content/'
+
+    def test_authenticated_staff_can_download_attachment(self):
+        client = APIClient()
+        client.force_authenticate(self.user)
+        response = client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/plain')
+        self.assertEqual(response['Cache-Control'], 'private, no-store')
+        self.assertEqual(b''.join(response.streaming_content), b'customer notes')
+
+    def test_attachment_content_requires_authentication(self):
+        response = APIClient().get(self.url)
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_missing_attachment_file_returns_404(self):
+        os.remove(self.attachment.file.path)
+        client = APIClient()
+        client.force_authenticate(self.user)
+        response = client.get(self.url)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data['detail'], 'Attachment file is unavailable.')

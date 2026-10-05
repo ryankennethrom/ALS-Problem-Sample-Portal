@@ -120,9 +120,9 @@ export default function DistributorAutocomplete({
             {item.state && <span className="distributor-meta-item"><strong>State</strong> {item.state}</span>}
             {item.brand && <span className="distributor-meta-item distributor-meta-brand"><strong>Brand</strong> {item.brand}</span>}
           </span>
-        </button>) : <div className="distributor-empty">No distributor companies found</div>}
+        </button>) : <div className="distributor-empty">No suggestions found — you can still use the value you typed</div>}
       </div>}
     </div>
-    <div className="muted result-meta">Fuzzy suggestions are limited to customer records where CoyType is Distributor.</div>
+    <div className="muted result-meta">Suggestions come from customer records where CoyType is Distributor. You can also enter any other value.</div>
   </div>;
 }

@@ -497,14 +497,23 @@ export default function Detail() {
       const column = table?.columns.find(item => keys.includes(item.field_key) || keys.includes(item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')));
       return String((column && values[column.field_key]) || '').trim();
     };
-    const customerRequest = (p?.history || []).find(entry => entry.details?.customer_requested_information)?.details.customer_requested_information || '';
+    const customerMessages = (p?.history || [])
+      .filter(entry => typeof entry.details?.customer_requested_information === 'string' && entry.details.customer_requested_information.trim())
+      .slice()
+      .reverse()
+      .map(entry => ({
+        message: entry.details.customer_requested_information!.trim(),
+        signature: String(entry.details.customer_signature || '').trim(),
+        createdAt: entry.created_at,
+      }));
     return {
       problemNumber: p?.problem_number || 0, tableName: p?.table_name || '',
       containerId: testingEmailDraft?.containerCode || p?.container_id || '',
       trackingNumber: valueFor(['als-sample-tracking-number', 'als-tracking-number', 'sample-tracking-number']) || String(values['als-tracking-number'] || ''),
       problemType: valueFor(['problem-type']),
       reasonForHold: valueFor(['reason-for-hold', 'issue-description']),
-      customerRequest,
+      customerMessages,
+      ticketUrl: typeof window !== 'undefined' ? `${window.location.origin}/problems/${p?.id || id}` : `/problems/${p?.id || id}`,
     };
   }
 

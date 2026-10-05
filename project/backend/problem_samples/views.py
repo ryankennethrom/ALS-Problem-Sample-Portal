@@ -354,6 +354,106 @@ def _validated_email_list(value):
     return result
 
 
+def _email_values(value):
+    """Normalize a ticket email field into a validated, deduplicated list."""
+    if value in (None, '', []):
+        return []
+    raw_values = value if isinstance(value, (list, tuple)) else [value]
+    expanded = []
+    for raw in raw_values:
+        # Plain Email columns are strings while Client Email is usually a JSON
+        # list. Accept comma/semicolon-delimited legacy values as well.
+        expanded.extend(re.split(r'[;,]', str(raw or '')))
+    return _validated_email_list(expanded)
+
+
+def _customer_email_recipients(problem):
+    """Mirror the frontend customer-recipient selection on the server."""
+    table = problem.table
+    values = problem.custom_values or {}
+    columns = list(table.columns.all()) if table else []
+    email_columns = [
+        column for column in columns
+        if column.column_type in {ProblemColumn.TYPE_CLIENT_EMAIL, ProblemColumn.TYPE_EMAIL}
+    ]
+    preferred = next((column for column in email_columns if column.column_type == ProblemColumn.TYPE_CLIENT_EMAIL), None)
+    if preferred is None:
+        preferred = next((
+            column for column in email_columns
+            if re.search(r'customer|client|contact', column.name or '', flags=re.IGNORECASE)
+        ), None)
+    column = preferred or (email_columns[0] if email_columns else None)
+    recipients = _email_values(values.get(column.field_key)) if column else []
+    if not recipients:
+        recipients = _email_values(getattr(problem, 'client_contact_email', ''))
+    return recipients
+
+
+def _customer_message_history(problem, history_id):
+    try:
+        history_id = int(history_id)
+    except (TypeError, ValueError):
+        return None
+    entry = problem.history.filter(pk=history_id, actor__isnull=True).first()
+    if not entry:
+        return None
+    details = entry.details if isinstance(entry.details, dict) else {}
+    if details.get('responded_via') not in {'public_tracking_link', 'public_acknowledgement_link'}:
+        return None
+    message = str(details.get('customer_requested_information') or '').strip()
+    if not message:
+        return None
+    return entry
+
+
+def _customer_history_reply_email(problem, customer_history, staff_reply, recipients):
+    tracking_link = problem.tracking_link_record_or_none
+    if not tracking_link or not is_strong_tracking_token(tracking_link.tracking_token):
+        raise DRFValidationError({'detail': 'This ticket does not have an active customer tracking link.'})
+    if problem.workflow_status in {PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_SHIPPED_BACK}:
+        raise DRFValidationError({'detail': 'Customers can no longer reply because this ticket is in a completed workflow.'})
+
+    frontend = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
+    base_url = f'{frontend}/track/{tracking_link.tracking_token}' if frontend else f'/track/{tracking_link.tracking_token}'
+    # The query flag tells the public tracking page to open the message chat panel as
+    # soon as the ticket loads. It remains a normal secure tracking link.
+    direct_url = f'{base_url}?message=1'
+    details = customer_history.details if isinstance(customer_history.details, dict) else {}
+    customer_message = str(details.get('customer_requested_information') or '').strip()
+    subject = f'ALS reply regarding Ticket #{problem.problem_number}'
+    body = (
+        'Hello,\n\n'
+        f'ALS Edmonton has replied to your message regarding Ticket #{problem.problem_number}.\n\n'
+        f'Your message:\n{customer_message}\n\n'
+        f'ALS reply:\n{staff_reply.strip()}\n\n'
+        'Please reply to us using the secure link below to ensure swift correspondence and to make sure your response is attached to the correct ticket:\n'
+        f'{direct_url}\n\n'
+        'Regards,\nALS Edmonton'
+    )
+    return {
+        'to': recipients,
+        'cc': [],
+        'subject': subject,
+        'body': body,
+        'direct_url': direct_url,
+        'customer_message': customer_message,
+    }
+
+
+def _customer_history_reply_confirmation_payload(problem, history_entry, author, reply, recipients, tracking_token):
+    return {
+        'problem_id': str(problem.pk),
+        'history_id': history_entry.pk,
+        'author_id': author.pk,
+        'reply_sha256': hashlib.sha256(reply.strip().encode('utf-8')).hexdigest(),
+        'customer_message_sha256': hashlib.sha256(
+            str((history_entry.details or {}).get('customer_requested_information') or '').strip().encode('utf-8')
+        ).hexdigest(),
+        'recipients': [address.casefold() for address in recipients],
+        'tracking_token': str(tracking_token),
+    }
+
+
 def _add_message_file(message, field, filename, content_type=''):
     try:
         field.open('rb')
@@ -863,12 +963,21 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             request.data.get('tracking_not_sent') if request.method.lower() == 'post'
             else request.query_params.get('tracking_not_sent')
         ) == '1'
+        other = str(
+            request.data.get('other') if request.method.lower() == 'post'
+            else request.query_params.get('other')
+        ) == '1'
+        if tracking_not_sent and other:
+            return Response({'detail': 'Choose only one Customer Service queue.'}, status=status.HTTP_400_BAD_REQUEST)
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('table__columns')
                     .filter(table=table))
         if tracking_not_sent:
             from .dashboard_views import tracking_not_sent_tickets
             queryset = tracking_not_sent_tickets(queryset)
+        elif other:
+            from .dashboard_views import customer_service_other_tickets
+            queryset = customer_service_other_tickets(queryset)
 
         if request.method.lower() == 'post':
             candidates = advanced_search_problem_samples(
@@ -885,7 +994,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
         # Keep active follow-up and waiting-for-customer tickets together,
         # then force oldest-first even when a search ranked by score.
-        samples = [sample for sample in candidates if tracking_not_sent or sample.workflow_status in {CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}]
+        samples = [sample for sample in candidates if tracking_not_sent or other or sample.workflow_status in {CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER}]
         samples.sort(key=lambda sample: (sample.created_at, str(sample.id)))
         return Response(ShippingProblemSampleSerializer(samples, many=True, context={'request': request}).data)
 
@@ -1372,6 +1481,24 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
         return Response(AttachmentSerializer(attachment, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['get'], url_path=r'attachments/(?P<attachment_id>\d+)/content')
+    def attachment_content(self, request, pk=None, attachment_id=None):
+        """Stream a ticket attachment through the authenticated staff API."""
+        problem = self.get_object()
+        attachment = problem.attachments.filter(pk=attachment_id).first()
+        if not attachment or not attachment.file:
+            return Response({'detail': 'Attachment not found.'}, status=status.HTTP_404_NOT_FOUND)
+        filename = attachment.original_name or os.path.basename(attachment.file.name) or f'attachment-{attachment.id}'
+        content_type = attachment.content_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        try:
+            attachment.file.open('rb')
+        except (OSError, ValueError):
+            return Response({'detail': 'Attachment file is unavailable.'}, status=status.HTTP_404_NOT_FOUND)
+        response = FileResponse(attachment.file, as_attachment=True, filename=filename, content_type=content_type)
+        response['Cache-Control'] = 'private, no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
+
     @action(detail=True, methods=['delete', 'patch'], url_path=r'attachments/(?P<attachment_id>\d+)')
     def delete_attachment(self, request, pk=None, attachment_id=None):
         problem = self.get_object()
@@ -1416,13 +1543,33 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'This ticket has no active tracking link to revoke.'}, status=status.HTTP_409_CONFLICT)
         reason = _change_reason(request)
         link.delete()
+        changes = [{'field': 'Tracking Link', 'before': 'Active', 'after': 'Revoked'}]
+        update_fields = []
         if problem.pending_tracking_token:
             problem.pending_tracking_token = None
-            problem.save(update_fields=['pending_tracking_token'])
+            update_fields.append('pending_tracking_token')
+        if problem.workflow_status == CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER:
+            previous_workflow = problem.workflow_status
+            previous_auto = problem.dispose_automatically
+            problem.set_workflow_status(CURRENT_WORKFLOW_DEFAULT)
+            problem.modified_by = request.user
+            update_fields.extend(['custom_values', 'current_workflow', 'modified_by'])
+            update_fields.extend(problem.apply_acknowledgement_status_transition(
+                previous_workflow,
+                previous_dispose_automatically=previous_auto,
+                changed_at=timezone.now(),
+            ))
+            changes.append({
+                'field': 'Current Workflow',
+                'before': previous_workflow,
+                'after': problem.workflow_status,
+            })
+        if update_fields:
+            problem.save(update_fields=list(dict.fromkeys(update_fields)))
         ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
             summary='Revoked tracking link',
-            details=_history_details({'changes': [{'field': 'Tracking Link', 'before': 'Active', 'after': 'Revoked'}]}, reason),
+            details=_history_details({'changes': changes}, reason),
         )
         return Response({'detail': 'Tracking link revoked. The old URL cannot be used again.'})
 
@@ -1525,12 +1672,13 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem.pending_tracking_token = None
             credential_fields.append('pending_tracking_token')
 
-        # Preserve the previous workflow: the first confirmed customer email
-        # activates automatic disposal. The activation now lives in the dedicated
-        # Dispose Automatically field without changing Status or Current Workflow. Resends do not
-        # reset the countdown unless the field is later changed No -> Yes again.
+        # The first confirmed customer email activates automatic disposal. Once a
+        # tracking-link email is actually sent from CS Follow-Up, the ticket is also
+        # routed to Waiting for Customer Response. A resend must not pull a ticket
+        # back out of a terminal/shipping/testing workflow.
         first_notification = problem.customer_notified_at is None
         changes = []
+        automatic_disposal_activated = False
         update_fields = list(credential_fields)
 
         if first_notification:
@@ -1550,6 +1698,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 update_fields.extend(problem.apply_acknowledgement_status_transition(
                     before_status, previous_dispose_automatically=before_auto, changed_at=now
                 ))
+                automatic_disposal_activated = True
                 changes.append({
                     'field': 'Dispose Automatically',
                     'before': DISPOSE_AUTOMATICALLY_NO,
@@ -1563,6 +1712,26 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                         'after': after_disposal_days,
                     })
 
+        workflow_before_waiting = problem.workflow_status
+        if workflow_before_waiting == CURRENT_WORKFLOW_DEFAULT:
+            workflow_changed_at = timezone.now()
+            previous_auto = problem.dispose_automatically
+            problem.set_workflow_status(CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER)
+            problem.modified_by = request.user
+            update_fields.extend(['custom_values', 'current_workflow', 'modified_by'])
+            update_fields.extend(problem.apply_acknowledgement_status_transition(
+                workflow_before_waiting,
+                previous_dispose_automatically=previous_auto,
+                changed_at=workflow_changed_at,
+            ))
+            workflow_after_waiting = problem.workflow_status
+            if workflow_after_waiting != workflow_before_waiting:
+                changes.append({
+                    'field': 'Current Workflow',
+                    'before': workflow_before_waiting,
+                    'after': workflow_after_waiting,
+                })
+
         if update_fields:
             problem.save(update_fields=list(dict.fromkeys(update_fields)))
 
@@ -1575,14 +1744,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'delivery_method': delivery_method,
                 'confirmation': 'User confirmed the customer notification email was sent.',
                 'first_notification': first_notification,
-                'starts_pt_clock': bool(first_notification and changes),
-                'automatic_disposal_activated': bool(first_notification and changes),
+                'starts_pt_clock': automatic_disposal_activated,
+                'automatic_disposal_activated': automatic_disposal_activated,
                 'acknowledgement_credentials_saved': bool(credential_fields),
                 'changes': changes,
             },
         )
         problem.transition_to_disposal_if_due(now=timezone.now())
-        problem.refresh_from_db(fields=['customer_notified_at', 'custom_values', 'modified_by'])
+        problem.refresh_from_db(fields=['customer_notified_at', 'custom_values', 'current_workflow', 'modified_by'])
         serialized = ProblemSampleSerializer(problem, context={'request': request}).data
         return Response({
             'id': history.id,
@@ -1594,7 +1763,133 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'expiration_status': serialized.get('expiration_status'),
             'pt_days': serialized.get('pt_days'),
             'workflow_status': problem.workflow_status,
-            'automatic_disposal_activated': bool(first_notification and changes),
+            'automatic_disposal_activated': automatic_disposal_activated,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='prepare-customer-history-reply')
+    def prepare_customer_history_reply(self, request, pk=None):
+        """Prepare an email reply to a customer's Message us about the issue entry."""
+        problem = self.get_object()
+        reply = str(request.data.get('reply') or '').strip()
+        if not reply:
+            return Response({'detail': 'Reply cannot be blank.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(reply) > 4000:
+            return Response({'detail': 'Reply must be 4,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        customer_history = _customer_message_history(problem, request.data.get('history_id'))
+        if not customer_history:
+            return Response({'detail': 'Choose a valid customer message from History.'}, status=status.HTTP_400_BAD_REQUEST)
+        recipients = _customer_email_recipients(problem)
+        if not recipients:
+            return Response(
+                {'detail': 'No customer email address is available on this ticket.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        tracking_link = problem.tracking_link_record_or_none
+        if not tracking_link:
+            return Response({'detail': 'This ticket does not have a customer tracking link.'}, status=status.HTTP_409_CONFLICT)
+
+        email = _customer_history_reply_email(problem, customer_history, reply, recipients)
+        payload = _customer_history_reply_confirmation_payload(
+            problem, customer_history, request.user, reply, recipients, tracking_link.tracking_token,
+        )
+        token = signing.dumps(payload, salt='problem-customer-history-reply-email', compress=True)
+        return Response({
+            'email': email,
+            'confirmation_token': token,
+        })
+
+    @action(detail=True, methods=['post'], url_path='customer-history-reply-sent')
+    @transaction.atomic
+    def customer_history_reply_sent(self, request, pk=None):
+        """Save a staff reply only after staff confirms the generated email was sent."""
+        problem = (ProblemSample.objects.select_for_update(of=('self',))
+                   .select_related('table', 'tracking_link_record')
+                   .get(pk=self.get_object().pk))
+        reply = str(request.data.get('reply') or '').strip()
+        if not reply:
+            return Response({'detail': 'Reply cannot be blank.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(reply) > 4000:
+            return Response({'detail': 'Reply must be 4,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+        customer_history = _customer_message_history(problem, request.data.get('history_id'))
+        if not customer_history:
+            return Response({'detail': 'Choose a valid customer message from History.'}, status=status.HTTP_400_BAD_REQUEST)
+        recipients = _customer_email_recipients(problem)
+        if not recipients:
+            return Response({'detail': 'No customer email address is available on this ticket.'}, status=status.HTTP_400_BAD_REQUEST)
+        tracking_link = problem.tracking_link_record_or_none
+        if not tracking_link:
+            return Response({'detail': 'This ticket does not have a customer tracking link.'}, status=status.HTTP_409_CONFLICT)
+
+        confirmation_token = str(request.data.get('confirmation_token') or '').strip()
+        if not confirmation_token:
+            return Response({'detail': 'Send the generated customer reply email before saving this reply.'}, status=status.HTTP_409_CONFLICT)
+        try:
+            confirmed = signing.loads(
+                confirmation_token, salt='problem-customer-history-reply-email', max_age=15 * 60,
+            )
+        except signing.SignatureExpired:
+            return Response(
+                {'detail': 'The customer reply email confirmation expired. Prepare the reply email again.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except signing.BadSignature:
+            return Response(
+                {'detail': 'The customer reply email confirmation is invalid. Prepare the reply email again.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        expected = _customer_history_reply_confirmation_payload(
+            problem, customer_history, request.user, reply, recipients, tracking_link.tracking_token,
+        )
+        if confirmed != expected:
+            return Response(
+                {'detail': 'The customer message, reply, recipient, or tracking link changed. Prepare the reply email again.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        email = _customer_history_reply_email(problem, customer_history, reply, recipients)
+        before_status = problem.workflow_status
+        changes = []
+        if before_status == CURRENT_WORKFLOW_DEFAULT:
+            previous_auto = problem.dispose_automatically
+            problem.set_workflow_status(CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER)
+            problem.modified_by = request.user
+            update_fields = ['custom_values', 'current_workflow', 'modified_by']
+            update_fields.extend(problem.apply_acknowledgement_status_transition(
+                before_status, previous_dispose_automatically=previous_auto, changed_at=timezone.now(),
+            ))
+            problem.save(update_fields=list(dict.fromkeys(update_fields)))
+            after_status = problem.workflow_status
+            if after_status != before_status:
+                changes.append({
+                    'field': 'Current Workflow',
+                    'before': before_status,
+                    'after': after_status,
+                })
+
+        history = ProblemHistory.objects.create(
+            problem=problem,
+            action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION,
+            actor=request.user,
+            summary='Replied to customer message',
+            details={
+                'replied_to_history_id': customer_history.pk,
+                'customer_message': email['customer_message'],
+                'staff_reply': reply,
+                'recipients': recipients,
+                'subject': email['subject'],
+                'tracking_url': email['direct_url'],
+                'delivery_method': 'mailto',
+                'confirmation': 'Staff confirmed the reply email was sent.',
+                'changes': changes,
+            },
+        )
+        return Response({
+            'id': history.pk,
+            'summary': history.summary,
+            'created_at': history.created_at,
+            'workflow_status': problem.workflow_status,
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='prepare-comment-mentions')
@@ -2324,40 +2619,6 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                     values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
                     ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
 
-        if column.column_type == ProblemColumn.TYPE_DISTRIBUTOR:
-            # Distributor values must still refer to a current customer record
-            # whose CoyType is Distributor after a column is converted/edited.
-            from customers.models import Customer
-            from customers.normalization import customer_type_is
-            valid_names = {
-                customer.company_name.casefold()
-                for customer in Customer.objects.filter(customer_type__icontains='distributor').only('company_name', 'customer_type')
-                if customer.company_name and customer_type_is(customer.customer_type, 'Distributor')
-            }
-            for problem in column.table.problem_samples.only('id', 'custom_values'):
-                values = dict(problem.custom_values or {})
-                current = values.get(column.field_key)
-                if current and str(current).strip().casefold() not in valid_names:
-                    values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
-                    ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
-
-        if column.column_type == ProblemColumn.TYPE_END_USER:
-            # End User values must still refer to a current customer record
-            # whose CoyType is End User after a column is converted/edited.
-            from customers.models import Customer
-            from customers.normalization import customer_type_is
-            valid_names = {
-                customer.company_name.casefold()
-                for customer in Customer.objects.filter(customer_type__icontains='end').only('company_name', 'customer_type')
-                if customer.company_name and customer_type_is(customer.customer_type, 'End User')
-            }
-            for problem in column.table.problem_samples.only('id', 'custom_values'):
-                values = dict(problem.custom_values or {})
-                current = values.get(column.field_key)
-                if current and str(current).strip().casefold() not in valid_names:
-                    values[column.field_key] = column.default_value if column.default_value not in (None, '', []) else None
-                    ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
-
         current_dependencies = [str(value) for value in (column.client_email_dependencies or []) if value]
         if (column.column_type == ProblemColumn.TYPE_CLIENT_EMAIL
                 and (previous_type != ProblemColumn.TYPE_CLIENT_EMAIL
@@ -2590,11 +2851,103 @@ class ProblemAcknowledgementView(APIView):
         details.sort(key=lambda item: item['position'])
         return [{'label': item['label'], 'value': item['value']} for item in details]
 
+    def _public_conversation(self, problem):
+        """Return only the customer-visible correspondence thread.
+
+        Internal staff comments, workflow/history changes, recipients, and other
+        audit details are intentionally excluded from the public tracking API.
+        """
+        messages = []
+        latest_customer_signature = self._latest_customer_signature(problem)
+        history = problem.history.select_related('actor').order_by('created_at', 'id')
+        for entry in history:
+            details = entry.details if isinstance(entry.details, dict) else {}
+
+            responded_via = details.get('responded_via')
+            customer_message = str(details.get('customer_requested_information') or '').strip()
+            if (
+                entry.actor_id is None
+                and responded_via in {'public_tracking_link', 'public_acknowledgement_link'}
+                and customer_message
+            ):
+                images = []
+                for item in details.get('customer_uploaded_images') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        image_id = int(item.get('id'))
+                    except (TypeError, ValueError):
+                        continue
+                    images.append({
+                        'id': image_id,
+                        'name': str(item.get('name') or f'Image {image_id}')[:255],
+                        'size_bytes': int(item.get('size_bytes') or 0),
+                    })
+
+                attachments = []
+                for item in details.get('customer_uploaded_attachments') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        attachment_id = int(item.get('id'))
+                    except (TypeError, ValueError):
+                        continue
+                    attachments.append({
+                        'id': attachment_id,
+                        'name': str(item.get('name') or f'File {attachment_id}')[:255],
+                        'size_bytes': int(item.get('size_bytes') or 0),
+                        'content_type': str(item.get('content_type') or '')[:160],
+                    })
+
+                customer_signature = ' '.join(str(details.get('customer_signature') or '').split())[:200]
+                messages.append({
+                    'id': entry.pk,
+                    'sender': 'customer',
+                    'sender_label': customer_signature or latest_customer_signature or 'Customer',
+                    'message': customer_message,
+                    'signature': customer_signature,
+                    'created_at': entry.created_at,
+                    'images': images,
+                    'attachments': attachments,
+                })
+                continue
+
+            staff_reply = str(details.get('staff_reply') or '').strip()
+            if entry.actor_id and staff_reply and details.get('replied_to_history_id'):
+                messages.append({
+                    'id': entry.pk,
+                    'sender': 'staff',
+                    'sender_label': 'ALS Edmonton',
+                    'message': staff_reply,
+                    'created_at': entry.created_at,
+                    'images': [],
+                    'attachments': [],
+                })
+
+        return messages
+
+    def _latest_customer_signature(self, problem):
+        """Return the most recent signature supplied through the public tracking link."""
+        for entry in problem.history.order_by('-created_at', '-id'):
+            details = entry.details if isinstance(entry.details, dict) else {}
+            if details.get('responded_via') not in {'public_tracking_link', 'public_acknowledgement_link'}:
+                continue
+            signature = ' '.join(str(details.get('customer_signature') or '').split())
+            if signature:
+                return signature[:200]
+        return ''
+
     def _customer_action_label(self, problem):
         """Return the customer-facing label that was actually presented/selected."""
         action = problem.customer_acknowledgement_action or ''
         if not action:
             return ''
+
+        # The requested-information action has been renamed for the customer UI.
+        # Always present the current wording even for tickets whose historical
+        # response entry contains the older label.
+        if action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
+            return 'Message us about the issue'
 
         # Preserve the exact wording used when the customer made the choice.
         # This matters because Dispose Automatically = Yes uses a different set of
@@ -2608,14 +2961,57 @@ class ProblemAcknowledgementView(APIView):
             CUSTOMER_ACTION_DISPOSE: 'Dispose Sample(s)',
             CUSTOMER_ACTION_SHIP_BACK: 'Ship back samples',
             CUSTOMER_ACTION_HOLD: 'Hold sample',
-            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Give us more details about this ticket',
+            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }.get(action, '')
+
+    def _ticket_status_label(self, problem):
+        """Translate internal routing workflows into customer-facing ticket statuses.
+
+        Keep the workflow values themselves unchanged because staff queues and
+        automation depend on them. The public tracker deliberately uses shorter,
+        customer-oriented wording instead.
+        """
+        return {
+            CURRENT_WORKFLOW_DEFAULT: 'Waiting for ALS Edmonton',
+            CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER: 'Waiting for your response',
+            PROBLEM_STATUS_TO_BE_DISPOSED: 'To be disposed',
+            PROBLEM_STATUS_TO_BE_SHIPPED_BACK: 'To be shipped back',
+            PROBLEM_STATUS_DISPOSED: 'Disposed',
+            PROBLEM_STATUS_SHIPPED_BACK: 'Shipped back',
+            PROBLEM_STATUS_TO_BE_BACK_TO_TESTING: 'To be back to testing',
+            PROBLEM_STATUS_BACK_TO_TESTING: 'Back to testing',
+        }.get(problem.workflow_status, 'Waiting for ALS Edmonton')
 
     def _payload(self, problem):
         workflow_status = problem.workflow_status
         visible_until = problem.tracking_link_expires_at
         public_files = self._public_files(problem)
-        public_details = {'details': self._public_details(problem)}
+        details = self._public_details(problem)
+
+        def public_detail_value(*labels):
+            wanted = {''.join(ch for ch in label.lower() if ch.isalnum()) for label in labels}
+            for detail in details:
+                normalized = ''.join(ch for ch in str(detail.get('label') or '').lower() if ch.isalnum())
+                if normalized in wanted:
+                    return str(detail.get('value') or '').strip()
+            return ''
+
+        # Expose these fields explicitly for the customer-message chat panel.
+        # The issue may be called Problem Issue, Issue Description, or Reason for Hold
+        # in different table schemas, so normalize those labels here.
+        problem_type = public_detail_value('Problem Type') or str(problem.problem_type or '').strip()
+        problem_issue = (
+            public_detail_value('Problem Issue', 'Issue Description', 'Issue', 'Reason for Hold', 'Hold Reason')
+            or str(problem.issue_description or '').strip()
+        )
+        public_details = {
+            'details': details,
+            'problem_type': problem_type,
+            'problem_issue': problem_issue,
+            'ticket_status': self._ticket_status_label(problem),
+            'conversation': self._public_conversation(problem),
+            'customer_signature': self._latest_customer_signature(problem),
+        }
 
         # Only completed workflows lock the public response. Intermediate queues
         # ("To be ...") remain editable so a customer can revise a prior choice
@@ -2692,7 +3088,7 @@ class ProblemAcknowledgementView(APIView):
 
         return {
             'state': 'acknowledged',
-            'message': 'Your response has been recorded. You can change it until ALS completes the requested workflow.',
+            'message': 'Your response has been recorded. You can change it until ALS completes the requested action.',
             'problem_number': problem.problem_number,
             **public_details,
             **public_files,
@@ -2726,7 +3122,7 @@ class ProblemAcknowledgementView(APIView):
             PROBLEM_STATUS_SHIPPED_BACK,
         }:
             return Response(
-                {'detail': 'This ticket workflow has been completed and the customer response can no longer be changed.'},
+                {'detail': 'This ticket action has been completed and the customer response can no longer be changed.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
@@ -2750,7 +3146,7 @@ class ProblemAcknowledgementView(APIView):
         customer_attachment_uploads = list(request.FILES.getlist('attachments'))
         if (customer_image_uploads or customer_attachment_uploads) and customer_action != CUSTOMER_ACTION_REQUESTED_INFORMATION:
             return Response(
-                {'detail': 'Customer files can only be uploaded with Give us more details about this ticket.'},
+                {'detail': 'Customer files can only be uploaded with Message us about the issue.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -2909,7 +3305,7 @@ class ProblemAcknowledgementView(APIView):
         label = {
             CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
             CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
-            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Give us more details about this ticket',
+            CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }[customer_action]
         details = {
             'customer_action': customer_action,

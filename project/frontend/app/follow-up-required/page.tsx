@@ -66,6 +66,7 @@ function FollowUpContent() {
   const currentUser = useCurrentUser();
   const pathname = usePathname();
   const trackingNotSent = pathname === '/follow-up-required/tracking-not-sent';
+  const other = pathname === '/follow-up-required/other';
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [tableId, setTableId] = useState('');
   const [items, setItems] = useState<FollowUpSample[]>([]);
@@ -117,6 +118,7 @@ function FollowUpContent() {
             body: JSON.stringify({
               table: tableId,
               tracking_not_sent: trackingNotSent ? '1' : '',
+              other: other ? '1' : '',
               q: query.trim(),
               filters: activeAdvanced?.filters || [],
               match: activeAdvanced?.match || 'all',
@@ -125,7 +127,7 @@ function FollowUpContent() {
           });
         } else {
           const suffix = query.trim() ? `&q=${encodeURIComponent(query.trim())}` : '';
-          data = await api(`/problem-samples/follow-up-required/?table=${encodeURIComponent(tableId)}${trackingNotSent ? '&tracking_not_sent=1' : ''}${suffix}`);
+          data = await api(`/problem-samples/follow-up-required/?table=${encodeURIComponent(tableId)}${trackingNotSent ? '&tracking_not_sent=1' : ''}${other ? '&other=1' : ''}${suffix}`);
         }
         setItems(Array.isArray(data) ? data : (data.results || []));
       } catch (error) {
@@ -136,7 +138,7 @@ function FollowUpContent() {
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [tableId, query, advanced, quickFiltersByTable, trackingNotSent]);
+  }, [tableId, query, advanced, quickFiltersByTable, trackingNotSent, other]);
 
   const selectedTable = useMemo(() => tables.find(table => table.id === tableId), [tables, tableId]);
   const activeAdvancedCount = advanced?.tableId === tableId ? advanced.filters.length : 0;
@@ -172,16 +174,21 @@ function FollowUpContent() {
     <div className="page-toolbar">
       <div>
         <div className="eyebrow">Tickets</div>
-        <h1 className="page-heading" style={{marginBottom: 2}}>CS Follow-Up</h1>
+        <h1 className="page-heading" style={{marginBottom: 2}}>{trackingNotSent ? 'Tracking Not Sent' : other ? 'Other' : 'CS Follow-Up'}</h1>
         <div className="muted table-description">
-          {trackingNotSent ? 'Tickets in an open workflow without a tracking link, ordered oldest first.' : 'Tickets in CS Follow-Up or Waiting for Customer Response, ordered oldest first.'}
+          {trackingNotSent
+            ? 'CS Follow-Up tickets without a persisted tracking link, ordered oldest first.'
+            : other
+              ? 'CS Follow-Up tickets that are neither Tracking Not Sent nor New Tracking Link Response, ordered oldest first.'
+              : 'Tickets in CS Follow-Up or Waiting for Customer Response, ordered oldest first.'}
         </div>
       </div>
     </div>
 
     <nav className="container-view-tabs" aria-label="CS Follow-Up views">
       <Link className={`container-view-tab ${trackingNotSent ? 'active' : ''}`} aria-current={trackingNotSent ? 'page' : undefined} href="/follow-up-required/tracking-not-sent">Tracking Not Sent</Link>
-      <Link className="container-view-tab" href="/follow-up-required/customer-responded">New Customer Response</Link>
+      <Link className="container-view-tab" href="/follow-up-required/customer-responded">New Tracking Link Response</Link>
+      <Link className={`container-view-tab ${other ? 'active' : ''}`} aria-current={other ? 'page' : undefined} href="/follow-up-required/other">Other</Link>
     </nav>
 
     {error && <div className="card error" style={{marginBottom: 14}}>{error}</div>}
@@ -268,7 +275,7 @@ function FollowUpContent() {
             </th>)}
           </tr></thead>
           <tbody>
-            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">{trackingNotSent ? 'No tickets without a tracking link in an open workflow in this table.' : 'No tickets currently require follow-up in this table.'}</td></tr>}
+            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">{trackingNotSent ? 'No CS Follow-Up tickets without a tracking link in this table.' : other ? 'No other CS Follow-Up tickets in this table.' : 'No tickets currently require follow-up in this table.'}</td></tr>}
             {loading && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">Loading samples…</td></tr>}
             {!loading && items.map(item => <tr key={item.id} className={automaticDisposalRowClass(item)}>
               <td className="row-action-column"><Link className="row-open-link" href={`/problems/${item.id}`} title="Open ticket">›</Link></td>

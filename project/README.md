@@ -324,7 +324,7 @@ A container is **Ready to Dispose** when it contains at least one ticket and eve
 An existing ticket can be assigned to an active container, moved, or detached by changing or clearing **Container ID** and choosing **Save Changes**. The new-ticket form requires a container; the API still permits unassigned tickets. The API validates a supplied Container ID and records the old and new IDs in row History. Because container readiness is derived from current membership, both the source and destination container readiness states reflect the move immediately. Samples cannot be moved into or out of a disposed container; undo the container disposal first. New samples also cannot be assigned to a disposed container.
 
 ## Customer problem sample tracking links
-Customer notification emails include a public secure Problem Sample Tracking URL. Customers do not need an ALS account and there is no separate access code. The tracking page offers **Permit immediate disposal**, **Give us more details about this ticket**, and **Ship back**. If **Dispose Automatically = Yes**, it also shows the remaining automatic-disposal countdown; submitting any customer response stops that countdown. Customers may revise a response while the ticket is still in an active or intermediate **To be ...** workflow. Responses become read-only only after Current Workflow reaches **Disposed**, **Back to testing**, or **Shipped back to client**. When the automatic-disposal deadline itself is reached, the backend changes **Current Workflow** to **To be Disposed** automatically while preserving Status; the customer can still revise the response until disposal is completed. A GET/page preview never acknowledges the row; the first explicit customer action records acknowledgement and applies the selected action.
+Customer notification emails include a public secure Problem Sample Tracking URL. Customers do not need an ALS account and there is no separate access code. The tracking page offers **Permit immediate disposal**, **Message us about the issue**, and **Ship back**. If **Dispose Automatically = Yes**, it also shows the remaining automatic-disposal countdown; submitting any customer response stops that countdown. Customers may revise a response while the ticket is still in an active or intermediate **To be ...** workflow. Responses become read-only only after Current Workflow reaches **Disposed**, **Back to testing**, or **Shipped back to client**. When the automatic-disposal deadline itself is reached, the backend changes **Current Workflow** to **To be Disposed** automatically while preserving Status; the customer can still revise the response until disposal is completed. A GET/page preview never acknowledges the row; the first explicit customer action records acknowledgement and applies the selected action.
 
 ## Problem Sample Tracking Link lifecycle
 Problem Sample Tracking Links are persistent tokens whose public accessibility is controlled by a fixed 30-day window after the most recent **Current Workflow** transition into **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, or **Shipped back to client**. Returning **Current Workflow** to **CS Follow-Up** clears that expiry clock and makes the same link accessible again. An automatic-disposal deadline counts as a real transition to **To be Disposed**, so its 30-day window begins at the actual deadline.
@@ -353,7 +353,7 @@ The CS Follow-Up queue is ordered by problem sample creation time, oldest first,
 
 Administrators can change the NA.EDM recipient address on **Admin → Email Templates**. The saved address is used for Back to Testing notifications and included on customer emails when creating a ticket. Staff can view the active address but cannot edit it.
 
-Choosing **Back to testing** on an existing ticket opens an internal email preview addressed to the configured NA.EDM recipient. Staff may add details, copy the address and message, and open their email app. The workflow change is saved only after they choose **I sent the email** or **I didn't send the email**; Cancel leaves the ticket unchanged. Confirmed messages are recorded in History. Customer **Give us more details about this ticket** responses enter **To be back to testing**, visible in the sidebar queue, until staff changes the workflow to **Back to testing**. Completing that transition removes the ticket from its container. A pending NA.EDM notification can be recorded from the ticket detail page.
+Choosing **Back to testing** on an existing ticket opens an internal email preview addressed to the configured NA.EDM recipient. Staff may add details, copy the address and message, and open their email app. The workflow change is saved only after they choose **I sent the email** or **I didn't send the email**; Cancel leaves the ticket unchanged. Confirmed messages are recorded in History. Customer **Message us about the issue** responses enter **To be back to testing**, visible in the sidebar queue, until staff changes the workflow to **Back to testing**. Completing that transition removes the ticket from its container. A pending NA.EDM notification can be recorded from the ticket detail page.
 
 ### Public tracking link security
 
@@ -476,16 +476,16 @@ The canonical migration graph includes `0045_alter_problemsample_acknowledgement
 - Staff-facing Tracking Link values wrap within their grid column so long secure URLs do not overflow the problem-sample form.
 
 ### Customer tracking actions
-- Available while the workflow is not complete: Permit immediate disposal, Give us more details about this ticket, or Ship back.
+- Available while the workflow is not complete: Permit immediate disposal, Message us about the issue, or Ship back.
 - Customers may replace an earlier response, including while Current Workflow is **To be Disposed**, **To be shipped back to client**, or **To be back to testing**.
-- **Give us more details about this ticket** returns Current Workflow to **CS Follow-Up**.
+- **Message us about the issue** returns Current Workflow to **CS Follow-Up**.
 - Customer responses are locked once Current Workflow is **Disposed**, **Back to testing**, or **Shipped back to client**.
 
 
 ## Customer tracking signatures
 Customers must type their name as a signature before submitting any tracking-page action. The signature is stored in History with that response.
 
-- Customer **Give us more details about this ticket** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **To be back to testing**.
+- Customer **Message us about the issue** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **To be back to testing**.
 
 ### Next.js production prerendering
 Pages/components that use `useSearchParams()` are rendered below React `Suspense` boundaries. This is required by current Next.js production builds and prevents CSR-bailout prerender errors on `/problem-samples` and `/problems/new`.
@@ -512,9 +512,9 @@ Administrators have an **Admin > Email Templates** page. The **Send Tracking Lin
 
 ## Tracking link and customer email controls
 
-Creating a ticket does not create an active tracking link. On the ticket detail page, **Send Tracking Link** prepares a secure URL, opens the tracking email in the staff member's email app, and activates the URL only after **I sent the email** is confirmed. Resending an existing link reuses its token. The first confirmed tracking-link email in CS Follow-Up may activate Dispose Automatically according to the existing workflow; general **Email Customer** messages do not change that field, the tracking link, or the customer-notified timestamp.
+Creating a ticket does not create an active tracking link. On the ticket detail page, **Send Tracking Link** prepares a secure URL, opens the tracking email in the staff member's email app, and activates the URL only after **I sent the email** is confirmed. Resending an existing link reuses its token. The first confirmed tracking-link email in **CS Follow-Up** moves the ticket to **Waiting for Customer Response** and may activate Dispose Automatically according to the existing workflow. General **Email Customer** messages do not change Current Workflow, the tracking link, or the customer-notified timestamp.
 
-**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. A ticket appears in **Tracking Not Sent** only when its Current Workflow is **CS Follow-Up** and it has no active persisted tracking link. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
+**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. If the ticket is in **Waiting for Customer Response**, revocation returns it to **CS Follow-Up** so it reappears in **Tracking Not Sent**. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. A ticket appears in **Tracking Not Sent** only when its Current Workflow is **CS Follow-Up** and it has no active persisted tracking link. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
 
 
 ### Client Email clipboard controls
@@ -592,7 +592,26 @@ Ticket follow-up comments support `@username`, `@Lab`, and `@CustomerService` me
 The Dashboard's "opened in the last…" analytics use a ticket-table dropdown. The selected table scopes the Last day/Week/Month/6 Months/Year/Custom counts and the opened-over-time chart. Each See all link opens that same table with an `opened_range` date filter, which is also preserved by table search, Advanced Search, and Image Search. Action Required counts remain cross-table operational totals.
 
 ## Customer attachments from tracking link
-Customers using “Give us more details about this ticket” can attach images and general files with the signed response. Images use the normal WebP compression pipeline; files are stored on the ticket and cascade-delete from storage with the ticket.
+Customers using “Message us about the issue” can attach images and general files with the signed response. Images use the normal WebP compression pipeline; files are stored on the ticket and cascade-delete from storage with the ticket.
 
 ### Phone Number columns
 Ticket tables can use a **Phone Number** custom column. Values retain staff-entered formatting, accept common international/extension formats, use phone-friendly browser inputs, and participate in Advanced Search and fuzzy search.
+
+## Manual Backup & Restore
+
+Administrators have an **Admin → Backup & Restore** page. It can download Database, Media, or Full `.tar.gz` backups and restore matching backups manually.
+
+- Database backups use Django's application-level serialization so Railway does not need a particular `pg_dump` client version. Durable users, customer data, tickets, workflow/history data, settings, tracking links, and other tracker records are included. Active app sessions, one-time login links, pending prepared-ticket drafts, and public rate-limit buckets are intentionally excluded.
+- Media backups stream files directly from `MEDIA_ROOT`; no complete backup archive is written to the persistent Railway media volume.
+- Full backups contain both tracker database data and media.
+- Database and Full Restore require an exact migration-schema match and sign everybody out after success.
+- Media-only restore merges/overwrites files from the backup without removing newer unrelated media. Full Restore removes extra media only after the backup media has been written successfully.
+- Backup archives contain sensitive company data and password hashes. Store them only on approved ALS-controlled storage.
+
+### Customer History replies
+
+Staff can reply directly to a customer's “Message us about the issue” History entry. The reply is not saved until staff confirms that the generated customer email was sent. The email contains the original customer message, the staff reply, and a secure tracking link with the customer message modal opened. Confirmed replies move CS Follow-Up tickets to Waiting for Customer Response; the next customer message moves the ticket back into CS Follow-Up through the normal customer-response flow.
+
+### Customer correspondence chat panel
+
+The public tracking action **Message us about the issue** opens a right-side chat panel. The public API exposes only customer-visible correspondence: customer messages and confirmed ALS staff replies. Internal staff comments, workflow changes, recipient lists, and audit metadata remain private. Customer-uploaded images and attachments remain associated with the customer message that sent them. Reply-email links using `?message=1` open the chat panel automatically.

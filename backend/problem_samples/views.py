@@ -774,20 +774,11 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 if recorded.status_code >= 400:
                     raise DRFValidationError(recorded.data)
             else:
-                # The user explicitly chose to create the ticket without sending the
-                # email. Persist the prepared public credential anyway so the finalized
-                # ticket has the same tracking link that was shown during the send step,
-                # but do not mark the customer as notified or start automatic disposal.
-                if not is_strong_tracking_token(prepared.tracking_token):
-                    raise DRFValidationError({'detail': 'Invalid prepared ticket tracking token.'})
-                if ProblemTrackingLink.objects.filter(tracking_token=prepared.tracking_token).exists():
-                    raise DRFValidationError({'detail': 'The prepared ticket tracking link conflicts with another ticket. Prepare the ticket again.'})
-                stored_link = ProblemTrackingLink.objects.create(
-                    ticket=problem,
-                    tracking_token=prepared.tracking_token,
-                    expires_at=problem.expected_tracking_link_expiration(),
-                )
-                problem.tracking_link_record = stored_link
+                # The tracking URL shown during preparation is only a temporary preview.
+                # If staff did not actually send the email, do not persist that token and
+                # do not create or refresh any tracking-link/expiry state. A future send
+                # attempt will prepare a fresh token.
+                pass
             prepared.completed_problem = problem
             prepared.save(update_fields=['completed_problem'])
         return Response({'id': str(problem.pk)}, status=status.HTTP_201_CREATED)
@@ -1252,8 +1243,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         return Response({'notified_at': problem.back_to_testing_notified_at})
 
     @action(detail=True, methods=['post'], url_path='email-not-sent')
+    @transaction.atomic
     def email_not_sent(self, request, pk=None):
-        problem = self.get_object()
+        problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
         kind = request.data.get('kind')
         if kind not in {'customer', 'back_to_testing'}:
             return Response({'detail': 'Choose the email that was not sent.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1263,6 +1255,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             or problem.back_to_testing_notified_at is not None
         ):
             return Response({'detail': 'There is no outstanding Back to Testing email for this ticket.'}, status=status.HTTP_409_CONFLICT)
+        # Preparing a customer tracking email may reserve a temporary token when the
+        # ticket does not yet have a persisted tracking link. Choosing "I didn't send
+        # the email" must not create, replace, refresh, or extend the tracking link.
+        # Discard only that temporary credential; an existing persisted link and its
+        # expiry remain byte-for-byte unchanged.
+        if kind == 'customer' and problem.pending_tracking_token:
+            problem.pending_tracking_token = None
+            problem.save(update_fields=['pending_tracking_token'])
         ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
             summary=('Customer tracking email not sent' if kind == 'customer'

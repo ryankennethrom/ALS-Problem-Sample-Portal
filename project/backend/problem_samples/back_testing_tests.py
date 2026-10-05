@@ -134,7 +134,7 @@ class BackToTestingEmailTests(TestCase):
         self.assertEqual(follow_up.status_code, 200)
         self.assertEqual(follow_up.data[0]['id'], str(self.sample.pk))
         self.assertEqual(self.client.get('/api/dashboard/').data['counts']['customer_responded'], 1)
-        response_history = ProblemHistory.objects.get(problem=self.sample, summary='Customer selected: Give us more details about this ticket')
+        response_history = ProblemHistory.objects.get(problem=self.sample, summary='Customer selected: Message us about the issue')
         self.assertEqual(response_history.details['customer_requested_information'], 'Please check the contamination.')
 
     def test_customer_requested_information_stops_automatic_disposal(self):

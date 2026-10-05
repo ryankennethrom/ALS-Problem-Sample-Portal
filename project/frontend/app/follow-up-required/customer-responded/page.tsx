@@ -46,12 +46,13 @@ export default function CustomerRespondedPage() {
   return <div>
     <div className="page-toolbar"><div>
       <div className="eyebrow">Tickets</div>
-      <h1 className="page-heading" style={{marginBottom: 2}}>New Customer Response</h1>
+      <h1 className="page-heading" style={{marginBottom: 2}}>New Tracking Link Response</h1>
       <div className="muted table-description">Tickets whose latest history entry by a person is from the customer and whose workflow is eligible.</div>
     </div></div>
     <nav className="container-view-tabs" aria-label="CS Follow-Up views">
       <Link className="container-view-tab" href="/follow-up-required/tracking-not-sent">Tracking Not Sent</Link>
-      <Link className="container-view-tab active" aria-current="page" href="/follow-up-required/customer-responded">New Customer Response</Link>
+      <Link className="container-view-tab active" aria-current="page" href="/follow-up-required/customer-responded">New Tracking Link Response</Link>
+      <Link className="container-view-tab" href="/follow-up-required/other">Other</Link>
     </nav>
     <section className="panel panel-blue search-panel" style={{marginBottom: 18}}>
       <form className="search-grid table-search-grid" onSubmit={event => { event.preventDefault(); setPage(1); setQuery(search.trim()); }}>
@@ -69,7 +70,7 @@ export default function CustomerRespondedPage() {
     </section>
     {error && <div className="card error" role="alert" style={{marginBottom: 14}}>{error}</div>}
     <section className="panel data-grid-panel">
-      <div className="panel-header"><strong>New Customer Response</strong>
+      <div className="panel-header"><strong>New Tracking Link Response</strong>
         <span className="muted" style={{marginLeft: 8}}>({loading && !data ? '…' : data?.count ?? 0} ticket{data?.count === 1 ? '' : 's'})</span>
       </div>
       <div className="data-table-wrap"><table className="data-table">
