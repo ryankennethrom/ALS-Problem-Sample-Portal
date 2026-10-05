@@ -82,7 +82,7 @@ class CustomerRequestedInfoFileUploadTests(TestCase):
         self.assertEqual(len(response.data['attachments']), 1)
         history = ProblemHistory.objects.filter(
             problem=self.problem,
-            summary='Customer selected: Give us more details about this ticket',
+            summary='Customer selected: Message us about the issue',
         ).latest('created_at')
         self.assertEqual(history.details['customer_requested_information'], 'Please see the photo and notes attached.')
         self.assertEqual(history.details['customer_uploaded_images'][0]['name'], 'customer-photo.png')

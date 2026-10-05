@@ -280,9 +280,9 @@ Regular new accounts with no workflow role still receive the required first-logi
 
 
 ### Customer tracking actions by follow-up status
-- Available actions are **Permit immediate disposal**, **Give us more details about this ticket**, and **Ship back**.
+- Available actions are **Permit immediate disposal**, **Message us about the issue**, and **Ship back**.
 - An existing customer response remains editable in active and intermediate queue workflows, including **To be Disposed**, **To be shipped back to client**, and **To be back to testing**.
-- **Give us more details about this ticket** returns Current Workflow to **CS Follow-Up**.
+- **Message us about the issue** returns Current Workflow to **CS Follow-Up**.
 - Submitting any customer response turns `Dispose Automatically` off.
 - Once Current Workflow is **Disposed**, **Back to testing**, or **Shipped back to client**, both the UI and public POST endpoint reject further response changes.
 
@@ -290,7 +290,7 @@ Regular new accounts with no workflow role still receive the required first-logi
 ### Customer tracking response signatures
 Public Problem Sample Tracking Link responses require a non-empty typed-name signature (maximum 200 characters). The frontend disables workflow-action buttons until a name is entered, and the backend independently rejects unsigned responses. Each submitted name is stored in the corresponding `ProblemHistory.details.customer_signature` value so it remains tied to the exact customer action. Successful submissions clear the input so a later response must be signed again.
 
-- Customer **Give us more details about this ticket** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **Back to testing**.
+- Customer **Message us about the issue** responses open a required multiline modal (up to 4000 characters); the submitted information and typed-name signature are saved with the History event before the row moves to **Back to testing**.
 
 ## Next.js search-parameter boundaries
 The root problem-sample table page renders its search-param-dependent content through `Suspense`. The New Problem Sample route also wraps `ProblemForm`, which reads the `table` query parameter, in `Suspense`. Keep this boundary when changing either route so Vercel/Next.js production prerendering remains valid.
@@ -366,3 +366,13 @@ The mention comment write path is deliberately staged. `POST /api/problem-sample
 
 ### Phone Number custom columns
 `ProblemColumn` supports `phone`. The backend validates a practical phone-number syntax while preserving display formatting; the frontend renders `tel` inputs. Phone values are searchable text and are eligible for Intercolumn Value Controller rules.
+
+## Manual backup/restore
+
+`problem_samples.backup_restore` implements administrator-triggered application backups. Archives use a versioned `.tar.gz` format with `manifest.json`, optional `database.json`, and optional `media/...` entries. Media is streamed through `StreamingHttpResponse` rather than copied to `/app/media` as a temporary archive. The database fixture may spill to system `/tmp` if it exceeds its in-memory spool threshold; that scratch space is not the persistent media volume.
+
+Restore validates archive paths/metadata before applying data. Database restore is schema-locked to the exact migration set and uses an atomic `flush` + `loaddata`; authentication sessions are deliberately excluded, so database/full restore requires re-login. Media writes use same-filesystem temporary files followed by `os.replace` so each file replacement is atomic. Media-only restore merges. Full restore removes media not present in the restored archive after successful extraction.
+
+## Customer correspondence thread
+
+Customer correspondence is derived from `ProblemHistory` rather than stored in a separate chat table. Public tracking responses expose a sanitized chronological `conversation` containing only customer `requested_info` messages and staff `Replied to customer message` entries. Internal history is never exposed. Customer attachment/image IDs recorded on the original history entry are rendered on the corresponding customer chat message through the existing token-protected file endpoints.

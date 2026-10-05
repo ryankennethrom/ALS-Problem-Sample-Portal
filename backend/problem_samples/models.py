@@ -48,7 +48,7 @@ CUSTOMER_ACTION_CHOICES = [
     (CUSTOMER_ACTION_DISPOSE, 'Dispose Sample(s)'),
     (CUSTOMER_ACTION_SHIP_BACK, 'Ship back samples'),
     (CUSTOMER_ACTION_HOLD, 'Hold sample'),
-    (CUSTOMER_ACTION_REQUESTED_INFORMATION, 'Give us more details about this ticket'),
+    (CUSTOMER_ACTION_REQUESTED_INFORMATION, 'Message us about the issue'),
 ]
 
 TRACKING_LINK_DAYS = 30

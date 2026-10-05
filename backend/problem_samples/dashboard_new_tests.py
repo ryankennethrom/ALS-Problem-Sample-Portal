@@ -85,8 +85,8 @@ class CustomerServiceOtherQueueTests(TestCase):
         ProblemTrackingLink.objects.create(ticket=waiting, tracking_token='waiting-link')
         ProblemHistory.objects.create(
             problem=new_response, action=ProblemHistory.ACTION_UPDATED,
-            summary='Customer selected: Give us more details',
-            details={'responded_via': 'public_tracking_link', 'customer_action_label': 'Give us more details'},
+            summary='Customer selected: Message us about the issue',
+            details={'responded_via': 'public_tracking_link', 'customer_action_label': 'Message us about the issue'},
         )
         ProblemHistory.objects.create(
             problem=other, action=ProblemHistory.ACTION_COMMENT, actor=user,

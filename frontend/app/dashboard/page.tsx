@@ -12,7 +12,7 @@ type Point = { period: string; label: string; count: number };
 type Data = {
   generated_at: string;
   selected_table: {id:string; name:string} | null;
-  counts: { tracking_emails_today:number; customer_responded:number; tracking_not_sent:number; old_tickets:number; to_be_shipped:number; to_be_back_to_testing:number; containers_ready_to_dispose:number; day:number; week:number; month:number; six_months:number; year:number; custom:number|null };
+  counts: { tracking_emails_today:number; customer_responded:number; tracking_not_sent:number; customer_service_other:number; old_tickets:number; to_be_shipped:number; to_be_back_to_testing:number; containers_ready_to_dispose:number; day:number; week:number; month:number; six_months:number; year:number; custom:number|null };
   old_ticket_definition: { age_months:number; created_before:string };
   chart: { range:Range; range_label:string; bucket:string; total:number; points:Point[] };
   automatic_disposal_chart: { range:Range; range_label:string; bucket:string; total:number; points:Point[] };
@@ -192,6 +192,15 @@ export default function Dashboard() {
           <div className={styles.note}>Across all tables · current workflow</div>
         </div>
         <Link href="/follow-up-required/customer-responded" className={styles.seeAll}>See all &gt;</Link>
+      </section>
+
+      <section className={styles.newCard} aria-label="Other customer service tickets">
+        <div>
+          <div className={styles.label}>Other</div>
+          <div className={styles.value}>{loading&&!data?'…':format(data?.counts.customer_service_other)}</div>
+          <div className={styles.note}>CS Follow-Up · not Tracking Not Sent or New Tracking Link Response</div>
+        </div>
+        <Link href="/follow-up-required/other" className={styles.seeAll}>See all &gt;</Link>
       </section>
 
       <section className={styles.newCard} aria-label="To be shipped">

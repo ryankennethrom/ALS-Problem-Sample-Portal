@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
-import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, prepareCustomerEmail } from '@/lib/customerEmail';
+import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, invokeCustomerEmail, mailtoForCustomerEmail, prepareCustomerEmail } from '@/lib/customerEmail';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import GeneralCustomerEmailModal from '@/components/GeneralCustomerEmailModal';
 import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackToTestingEmailModal';
@@ -15,9 +15,11 @@ import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import CameraCapture from '@/components/CameraCapture';
 import StaffImage from '@/components/StaffImage';
+import StaffAttachmentLink from '@/components/StaffAttachmentLink';
 import MentionTextarea from '@/components/MentionTextarea';
 import MentionText from '@/components/MentionText';
 import MentionEmailModal, { MentionEmailDraft } from '@/components/MentionEmailModal';
+import CustomerHistoryReplyEmailModal, { CustomerHistoryReplyEmail } from '@/components/CustomerHistoryReplyEmailModal';
 
 type Comment = { id: number; body: string; author_email: string; author_username: string; author_name: string; legacy_author: string; mentions?: { id:number; username:string; name:string }[]; created_at: string };
 type ProblemImage = { id:number; has_image?:boolean; original_name:string; size_bytes:number; include_in_customer_notification:boolean; uploaded_by_email:string; uploaded_at:string };
@@ -27,7 +29,22 @@ type HistoryEntry = {
   action: 'created' | 'updated' | 'comment' | 'customer_notification' | 'acknowledged';
   action_label: string;
   summary: string;
-  details: { changes?: { field:string; before:unknown; after:unknown }[]; comment?: string; mentions?: { id:number; username:string; name:string }[]; reason?: string; email_not_sent?: string; customer_signature?: string; customer_requested_information?: string };
+  details: {
+    changes?: { field:string; before:unknown; after:unknown }[];
+    comment?: string;
+    mentions?: { id:number; username:string; name:string }[];
+    reason?: string;
+    email_not_sent?: string;
+    customer_signature?: string;
+    customer_requested_information?: string;
+    customer_uploaded_images?: { id:number; name:string; size_bytes:number }[];
+    customer_uploaded_attachments?: { id:number; name:string; size_bytes:number; content_type?:string }[];
+    replied_to_history_id?: number;
+    customer_message?: string;
+    staff_reply?: string;
+    recipients?: string[];
+    tracking_url?: string;
+  };
   actor_email: string;
   actor_name: string;
   created_at: string;
@@ -37,6 +54,11 @@ type Problem = { id: string; problem_number:number; created_at:string; table:str
 type MentionEmailPreview = {
   requires_email: boolean;
   emails: MentionEmailDraft[];
+  confirmation_token: string;
+};
+
+type CustomerHistoryReplyPreview = {
+  email: CustomerHistoryReplyEmail;
   confirmation_token: string;
 };
 
@@ -74,9 +96,15 @@ export default function Detail() {
   const [customValues, setCustomValues] = useState<CustomValues>({});
   const [containerCode, setContainerCode] = useState('');
   const [comment, setComment] = useState('');
+  const [historyEntryOpen, setHistoryEntryOpen] = useState(false);
   const [preparingMentionEmail, setPreparingMentionEmail] = useState(false);
   const [savingMentionComment, setSavingMentionComment] = useState(false);
   const [mentionEmailDraft, setMentionEmailDraft] = useState<{ body: string; emails: MentionEmailDraft[]; confirmationToken: string } | null>(null);
+  const [historyReplyTarget, setHistoryReplyTarget] = useState<HistoryEntry | null>(null);
+  const [historyReplyText, setHistoryReplyText] = useState('');
+  const [preparingHistoryReply, setPreparingHistoryReply] = useState(false);
+  const [savingHistoryReply, setSavingHistoryReply] = useState(false);
+  const [historyReplyEmailDraft, setHistoryReplyEmailDraft] = useState<{ historyId:number; reply:string; email:CustomerHistoryReplyEmail; confirmationToken:string; launchedAt:number } | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -140,14 +168,15 @@ export default function Detail() {
           body,
           ...(confirmationToken ? { mention_email_confirmation_token: confirmationToken } : {}),
         }),
-        successMessage:'Comment added successfully.',
-        errorMessage:'Could not add comment',
+        successMessage:'History entry added successfully.',
+        errorMessage:'Could not add history entry',
       });
       setComment('');
+      setHistoryEntryOpen(false);
       setMentionEmailDraft(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add comment');
+      setError(e instanceof Error ? e.message : 'Failed to add history entry');
       throw e;
     } finally {
       setSavingMentionComment(false);
@@ -176,6 +205,71 @@ export default function Detail() {
       setPreparingMentionEmail(false);
     }
   }
+  function openHistoryReply(entry: HistoryEntry) {
+    setError('');
+    setHistoryReplyTarget(entry);
+    setHistoryReplyText('');
+  }
+
+  async function prepareHistoryReply() {
+    if (!historyReplyTarget || preparingHistoryReply || savingHistoryReply) return;
+    const reply = historyReplyText.trim();
+    if (!reply) return;
+    setPreparingHistoryReply(true);
+    setError('');
+    try {
+      const preview: CustomerHistoryReplyPreview = await api(`/problem-samples/${id}/prepare-customer-history-reply/`, {
+        method: 'POST',
+        body: JSON.stringify({ history_id: historyReplyTarget.id, reply }),
+        errorMessage: 'Could not prepare customer reply email',
+      });
+      const launchedAt = Date.now();
+      // Submit immediately attempts to open the generated message in the staff
+      // member's configured email application. The preview remains available
+      // so they can retry if the browser/OS blocks the first launch.
+      invokeCustomerEmail(mailtoForCustomerEmail({
+        to: preview.email.to, cc: preview.email.cc || [], subject: preview.email.subject, body: preview.email.body,
+      }));
+      setHistoryReplyEmailDraft({
+        historyId: historyReplyTarget.id,
+        reply,
+        email: preview.email,
+        confirmationToken: preview.confirmation_token,
+        launchedAt,
+      });
+      setHistoryReplyTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not prepare customer reply email');
+    } finally {
+      setPreparingHistoryReply(false);
+    }
+  }
+
+  async function confirmHistoryReplySent() {
+    if (!historyReplyEmailDraft || savingHistoryReply) return;
+    setSavingHistoryReply(true);
+    setError('');
+    try {
+      await api(`/problem-samples/${id}/customer-history-reply-sent/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          history_id: historyReplyEmailDraft.historyId,
+          reply: historyReplyEmailDraft.reply,
+          confirmation_token: historyReplyEmailDraft.confirmationToken,
+        }),
+        successMessage: 'Customer reply recorded.',
+        errorMessage: 'Could not save customer reply',
+      });
+      setHistoryReplyEmailDraft(null);
+      setHistoryReplyText('');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save customer reply');
+    } finally {
+      setSavingHistoryReply(false);
+    }
+  }
+
   async function saveCustom() {
     setSaved(''); setError('');
     const requestedContainer = containerCode.trim();
@@ -482,9 +576,23 @@ export default function Detail() {
       <div className="sample-expiration-side">{p.expires_at ? <>Expires<br/><strong>{new Date(p.expires_at).toLocaleString()}</strong></> : 'No expiration date yet'}</div>
     </section>
 
-    <section className="panel history-panel" style={{marginBottom:14}}>
-      <div className="panel-header"><strong>History</strong><span className="history-count">{p.history?.length || 0} activities</span></div>
-      <div className="panel-body history-list">
+    <section id="follow-ups" className="panel history-panel" style={{marginBottom:14, scrollMarginTop:24}}>
+      <div className="panel-header">
+        <strong>History</strong>
+        <div className="row" style={{marginLeft:'auto', gap:8}}>
+          <span className="history-count">{p.history?.length || 0} activities</span>
+          <button type="button" className="button secondary small" onClick={() => { setHistoryEntryOpen(open => !open); setError(''); }} disabled={preparingMentionEmail || savingMentionComment}>{historyEntryOpen ? 'Close' : 'Add History Entry'}</button>
+        </div>
+      </div>
+      <div className="panel-body">
+        {historyEntryOpen && <div className="history-entry-composer">
+          <div className="field"><label>History entry</label><MentionTextarea value={comment} onChange={setComment} placeholder="Add a history entry…" /></div>
+          <div className="row" style={{marginTop:10}}>
+            <button className="button" onClick={add} disabled={!comment.trim() || preparingMentionEmail || savingMentionComment}>{preparingMentionEmail ? 'Preparing mention email…' : savingMentionComment ? 'Saving…' : 'Add History Entry'}</button>
+            <button type="button" className="button secondary" onClick={() => { setHistoryEntryOpen(false); setComment(''); setError(''); }} disabled={preparingMentionEmail || savingMentionComment}>Cancel</button>
+          </div>
+        </div>}
+        <div className="history-list">
         {!p.history?.length && <div className="muted">No activity has been recorded for this row yet.</div>}
         {(p.history || []).map(entry => {
           const changes = entry.details?.changes || [];
@@ -496,7 +604,26 @@ export default function Detail() {
               <div className="history-meta">{actor}</div>
               {entry.details?.reason && <div className="history-reason"><strong>Reason:</strong> {entry.details.reason}</div>}
               {entry.details?.customer_signature && <div className="history-signature"><strong>Customer signature:</strong> {entry.details.customer_signature}</div>}
-              {entry.details?.customer_requested_information && <div className="history-customer-information"><strong>Information provided by customer:</strong><div>{entry.details.customer_requested_information}</div></div>}
+              {entry.details?.customer_requested_information && <div className="history-customer-information">
+                <strong>Information provided by customer:</strong><div>{entry.details.customer_requested_information}</div>
+                <div style={{marginTop:10}}><button type="button" className="button secondary small" onClick={() => openHistoryReply(entry)}>Reply</button></div>
+              </div>}
+              {entry.details?.staff_reply && <div className="history-customer-information"><strong>Staff reply:</strong><div>{entry.details.staff_reply}</div>{entry.details.customer_message && <div className="muted" style={{marginTop:6}}><strong>Replying to:</strong> {entry.details.customer_message}</div>}{entry.details.recipients?.length ? <div className="muted" style={{marginTop:4}}>Emailed to {entry.details.recipients.join('; ')}</div> : null}</div>}
+              {((entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-files">
+                <strong>Files attached by customer</strong>
+                {(entry.details?.customer_uploaded_images?.length || 0) > 0 && <div className="history-customer-image-grid">
+                  {(entry.details.customer_uploaded_images || []).map(image => <div className="history-customer-image" key={`history-image-${entry.id}-${image.id}`}>
+                    <StaffImage problemId={p.id} imageId={image.id} className="history-customer-image-preview" alt={image.name || 'Customer image'} openInNewTab />
+                    <div className="history-customer-file-copy"><span className="history-customer-file-name">{image.name || 'Customer image'}</span><span className="history-customer-file-meta">Image · {formatBytes(image.size_bytes)}</span></div>
+                  </div>)}
+                </div>}
+                {(entry.details?.customer_uploaded_attachments?.length || 0) > 0 && <div className="history-customer-attachment-list">
+                  {(entry.details.customer_uploaded_attachments || []).map(attachment => <div className="history-customer-attachment" key={`history-attachment-${entry.id}-${attachment.id}`}>
+                    <div className="history-customer-file-copy"><span className="history-customer-file-name">{attachment.name || 'Customer attachment'}</span><span className="history-customer-file-meta">{formatBytes(attachment.size_bytes)}{attachment.content_type ? ` · ${attachment.content_type}` : ''}</span></div>
+                    <StaffAttachmentLink problemId={p.id} attachmentId={attachment.id} filename={attachment.name || `attachment-${attachment.id}`} className="button secondary small">Download</StaffAttachmentLink>
+                  </div>)}
+                </div>}
+              </div>}
               {entry.action === 'comment' && entry.details?.comment && <div className="history-comment"><MentionText text={entry.details.comment} /></div>}
               {(entry.action === 'updated' || entry.action === 'customer_notification' || entry.action === 'acknowledged') && changes.length > 0 && <div className="history-changes">
                 {changes.map((change, index) => <div className="history-change" key={`${entry.id}-${index}`}>
@@ -510,6 +637,7 @@ export default function Detail() {
             </div>
           </div>;
         })}
+        </div>
       </div>
     </section>
 
@@ -566,11 +694,6 @@ export default function Detail() {
           </div>
         </section>
 
-        <section id="follow-ups" className="panel" style={{scrollMarginTop: 24}}><div className="panel-header">Comments / Follow Up</div><div className="panel-body">
-          {p.comments.length === 0 && <div className="muted" style={{marginBottom:12}}>No follow-up comments yet.</div>}
-          {p.comments.map(c => <div className="comment-item" key={c.id}><div><MentionText text={c.body} /></div><div className="muted" style={{fontSize:12, marginTop:4}}>{c.author_name || (c.author_username ? `@${c.author_username}` : '') || c.author_email || c.legacy_author || 'Unknown'} · {new Date(c.created_at).toLocaleString()}</div></div>)}
-          <div className="field" style={{marginTop:14}}><label>Add Follow Up</label><MentionTextarea value={comment} onChange={setComment} placeholder="Add follow-up…" /></div><div style={{marginTop:10}}><button className="button" onClick={add} disabled={preparingMentionEmail || savingMentionComment}>{preparingMentionEmail ? 'Preparing mention email…' : savingMentionComment ? 'Saving…' : 'Add Comment'}</button></div>
-        </div></section>
       </div>
 
       <aside className="panel"><div className="panel-header">Ticket Information</div><div className="panel-body"><dl className="detail-list"><dt>Table</dt><dd>{p.table_name || '—'}</dd><dt>Ticket ID</dt><dd>{p.problem_number}</dd><dt>Date Created</dt><dd>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</dd><dt>Container ID</dt><dd>{p.container_id ? <Link className="table-link" href={`/disposal/containers/all#container-${p.container_id}`}>{p.container_id}</Link> : 'Unassigned'}</dd><dt>Ticket expiration period</dt><dd>{(p.pt_days ?? table?.pt_days ?? 30) === 0 ? 'Immediate when Dispose Automatically is changed to Yes' : `${p.pt_days ?? table?.pt_days ?? 30} day${(p.pt_days ?? table?.pt_days ?? 30) === 1 ? '' : 's'} from the most recent change of Dispose Automatically from No to Yes`}</dd><dt>Customer notified</dt><dd>{p.customer_notified_at ? new Date(p.customer_notified_at).toLocaleString() : 'Not yet confirmed'}</dd><dt>Automatic disposal started</dt><dd>{p.automatic_disposal_started_at ? new Date(p.automatic_disposal_started_at).toLocaleString() : 'Not active'}</dd><dt>Expires</dt><dd>{p.expires_at ? new Date(p.expires_at).toLocaleString() : '—'}</dd><dt>Expiration status</dt><dd>{p.expiration_status === 'expired' ? 'Expired' : 'Active'}</dd><dt>Internal Row ID</dt><dd>{p.id}</dd><dt>Columns</dt><dd>{table?.columns.length || 0}</dd><dt>Images</dt><dd>{p.images?.length || 0}</dd><dt>Attachments</dt><dd>{p.attachments?.length || 0}</dd></dl></div></aside>
@@ -590,6 +713,22 @@ export default function Detail() {
         </div>
       </div>
     </div>}
+
+    {historyReplyTarget && <div className="email-confirm-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !preparingHistoryReply) setHistoryReplyTarget(null); }}>
+      <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="history-reply-title">
+        <h2 id="history-reply-title">Reply to customer</h2>
+        <p className="customer-email-company-reminder">Your reply will not be saved until you confirm that the generated customer email was sent.</p>
+        <div className="field"><label>Customer message</label><textarea className="textarea" readOnly value={historyReplyTarget.details.customer_requested_information || ''} /></div>
+        <div className="field"><label>Staff reply <span aria-hidden="true">*</span></label><textarea className="textarea" rows={6} maxLength={4000} autoFocus value={historyReplyText} onChange={event => setHistoryReplyText(event.target.value)} disabled={preparingHistoryReply} placeholder="Type your reply…" /><div className="muted result-meta">{historyReplyText.length}/4000 characters</div></div>
+        {error && <p className="error" role="alert">{error}</p>}
+        <div className="email-confirm-actions">
+          <button type="button" className="button" onClick={prepareHistoryReply} disabled={preparingHistoryReply || !historyReplyText.trim()}>{preparingHistoryReply ? 'Preparing email…' : 'Submit'}</button>
+          <button type="button" className="button secondary" onClick={() => { setHistoryReplyTarget(null); setHistoryReplyText(''); setError(''); }} disabled={preparingHistoryReply}>Cancel</button>
+        </div>
+      </div>
+    </div>}
+
+    {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} launchedAt={historyReplyEmailDraft.launchedAt} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
 
     {changeReasonModal}
 

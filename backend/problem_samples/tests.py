@@ -177,6 +177,32 @@ class CustomerRecentRowModifierTests(TestCase):
         )
         ProblemTrackingLink.objects.create(ticket=self.problem, tracking_token=generate_acknowledgement_token())
 
+    def test_public_tracker_uses_customer_facing_ticket_status_labels(self):
+        tracking_url = f'/api/public/problem-sample-tracking/{self.problem.acknowledgement_token}/'
+        expected = {
+            CURRENT_WORKFLOW_DEFAULT: 'Waiting for ALS Edmonton',
+            CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER: 'Waiting for your response',
+            PROBLEM_STATUS_TO_BE_DISPOSED: 'To be disposed',
+            PROBLEM_STATUS_TO_BE_SHIPPED_BACK: 'To be shipped back',
+            PROBLEM_STATUS_DISPOSED: 'Disposed',
+            PROBLEM_STATUS_SHIPPED_BACK: 'Shipped back',
+            PROBLEM_STATUS_TO_BE_BACK_TO_TESTING: 'To be back to testing',
+            PROBLEM_STATUS_BACK_TO_TESTING: 'Back to testing',
+        }
+
+        for workflow, label in expected.items():
+            with self.subTest(workflow=workflow):
+                values = dict(self.problem.custom_values)
+                values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = workflow
+                ProblemSample.objects.filter(pk=self.problem.pk).update(
+                    current_workflow=workflow,
+                    custom_values=values,
+                    tracking_link_expires_at=None,
+                )
+                response = self.client.get(tracking_url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data['ticket_status'], label)
+
     def test_customer_tracking_action_becomes_recent_row_modifier(self):
         before_modified_at = self.problem.modified_at
         response = self.client.post(

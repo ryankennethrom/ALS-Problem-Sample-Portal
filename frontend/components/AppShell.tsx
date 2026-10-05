@@ -43,7 +43,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [mentionUnread, setMentionUnread] = useState(0);
 
   useEffect(() => {
-    if (pathname.startsWith('/tables') && user && !user.is_admin) router.replace('/dashboard');
+    if ((pathname.startsWith('/tables') || pathname === '/backup-restore') && user && !user.is_admin) router.replace('/dashboard');
   }, [pathname, user, router]);
 
   useEffect(() => {
@@ -203,6 +203,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Link href="/terminal-ticket-cleanup" className={`side-link ${pathname==='/terminal-ticket-cleanup'?'active':''}`}>
             <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Delete Old Tickets</span>
           </Link>
+          <Link href="/backup-restore" className={`side-link ${pathname==='/backup-restore'?'active':''}`}>
+            <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Backup &amp; Restore</span>
+          </Link>
         </>)}
 
         <div className="side-section-label">Settings</div>
@@ -221,7 +224,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           ? <div className="muted">Checking session…</div>
           : user.needs_email
             ? <div className="muted">Set your ALS email to continue.</div>
-            : pathname.startsWith('/tables') && !user.is_admin
+            : (pathname.startsWith('/tables') || pathname === '/backup-restore') && !user.is_admin
               ? <div className="muted">Administrator access is required.</div>
               : children}
       </CurrentUserContext.Provider>

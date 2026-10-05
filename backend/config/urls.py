@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from problem_samples.dashboard_views import DashboardView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
+from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -14,6 +15,10 @@ urlpatterns = [
     path('api/dashboard/customer-responded/', CustomerRespondedTicketsView.as_view()),
     path('api/admin/terminal-ticket-cleanup/', TerminalTicketCleanupView.as_view()),
     path('api/admin/old-ticket-definition/', OldTicketDefinitionView.as_view()),
+    path('api/admin/backup-restore/', BackupRestoreStatusView.as_view()),
+    path('api/admin/backup-restore/prepare-download/', BackupPrepareDownloadView.as_view()),
+    path('api/admin/backup-restore/download/', BackupDownloadView.as_view()),
+    path('api/admin/backup-restore/restore/', BackupRestoreView.as_view()),
     path('api/problem-samples/', include('problem_samples.urls')),
     path('api/public/problem-sample-tracking/', include('problem_samples.public_urls')),
     # Legacy API alias for already-deployed frontend builds.
