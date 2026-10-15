@@ -97,6 +97,5 @@ export default function BrandAutocomplete({
         </button>) : <div className="distributor-empty">No brands found</div>}
       </div>}
     </div>
-    <div className="muted result-meta">Fuzzy suggestions come from Brand values in the current Customer Export.</div>
   </div>;
 }

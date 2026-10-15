@@ -126,7 +126,7 @@ function HomeContent() {
   const selectedTable = useMemo(() => tables.find(t => t.id === tableId), [tables, tableId]);
   const activeAdvancedCount = advanced?.tableId === tableId ? advanced.filters.length : 0;
   const choiceColumns = useMemo(
-    () => selectedTable?.columns.filter(column => column.column_type === 'choice' && column.choices.length > 0) || [],
+    () => selectedTable?.columns.filter(column => (column.column_type === 'choice' || column.column_type === 'problem_type') && column.choices.length > 0) || [],
     [selectedTable],
   );
   const currentQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;

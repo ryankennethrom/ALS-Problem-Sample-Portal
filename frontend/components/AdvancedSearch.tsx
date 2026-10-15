@@ -70,7 +70,8 @@ const VALUELESS_OPERATORS = new Set(['is_empty', 'is_not_empty']);
 function operatorsFor(column: ProblemColumn): Operator[] {
   switch (column.column_type) {
     case 'number': return NUMBER_OPERATORS;
-    case 'choice': return CHOICE_OPERATORS;
+    case 'choice':
+    case 'problem_type': return CHOICE_OPERATORS;
     case 'group': return CHOICE_OPERATORS;
     case 'multi_choice': return MULTI_CHOICE_OPERATORS;
     case 'date':
@@ -313,7 +314,7 @@ function FilterValue({
     </select>;
   }
 
-  if (column.column_type === 'choice' || column.column_type === 'multi_choice') {
+  if (column.column_type === 'choice' || column.column_type === 'problem_type' || column.column_type === 'multi_choice') {
     return <select className="select advanced-value" value={String(value ?? '')} onChange={e => onChange(e.target.value)}>
       <option value="">Select a value…</option>
       {column.choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}

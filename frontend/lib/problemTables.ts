@@ -20,7 +20,8 @@ export type ColumnType =
   | 'row_creator'
   | 'recent_row_modifier'
   | 'brand'
-  | 'intercolumn_controller';
+  | 'intercolumn_controller'
+  | 'problem_type';
 
 export type GroupRole = 'lab_technician' | 'customer_service';
 
@@ -52,6 +53,35 @@ export type ClientEmailDependency = {
   column_type_label: string;
 };
 
+export type MaskFieldState = 'hidden' | 'shown' | 'required';
+export type ProblemTypeRules = Record<string, {
+  columns: Record<string, MaskFieldState>;
+  images?: MaskFieldState;
+  attachments?: MaskFieldState;
+  customer_details?: string;
+}>;
+
+export function resolveProblemTypeMask(table: ProblemTable, values: CustomValues): Record<string, MaskFieldState> {
+  const ranks: Record<MaskFieldState, number> = { hidden: 0, shown: 1, required: 2 };
+  const byId = new Map(table.columns.map(column => [column.id, column]));
+  const decisions: Record<string, MaskFieldState> = {};
+  for (const mask of table.columns.filter(c => c.column_type === 'problem_type')) {
+    const choice = String(values[mask.field_key] || mask.default_value || '');
+    const config = mask.form_mask_rules?.[choice];
+    if (!config) continue;
+    const apply = (key: string, state?: MaskFieldState) => {
+      if (state && ranks[state] > (decisions[key] ? ranks[decisions[key]] : -1)) decisions[key] = state;
+    };
+    Object.entries(config.columns || {}).forEach(([id, state]) => {
+      const target = byId.get(id);
+      if (target && target.column_type !== 'problem_type') apply(target.field_key, state);
+    });
+    apply('images', config.images);
+    apply('attachments', config.attachments);
+  }
+  return decisions;
+}
+
 export type ProblemColumn = {
   id: string;
   table: string;
@@ -73,6 +103,7 @@ export type ProblemColumn = {
   client_email_dependencies: string[];
   client_email_dependency_details: ClientEmailDependency[];
   intercolumn_rules: IntercolumnRule[];
+  form_mask_rules: ProblemTypeRules;
   position: number;
   is_system: boolean;
 };
@@ -113,6 +144,7 @@ export const COLUMN_TYPES: { value: ColumnType; label: string }[] = [
   { value: 'row_creator', label: 'Row Creator' },
   { value: 'recent_row_modifier', label: 'Recent Row Modifier' },
   { value: 'intercolumn_controller', label: 'Intercolumn Value Controller' },
+  { value: 'problem_type', label: 'Problem Type' },
 ];
 
 function localTodayValue(): string {

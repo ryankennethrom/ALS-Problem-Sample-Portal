@@ -32,16 +32,23 @@ type ProblemContainer = {
   unnotified_count: number;
   all_expired: boolean;
   ready_to_dispose: boolean;
-  status: 'empty' | 'active' | 'partially_ready' | 'ready_to_dispose' | 'disposed';
+  status: 'empty' | 'active' | 'partially_ready' | 'ready_to_dispose' | 'disposed' | 'restored';
   samples: ContainerSample[];
   created_by_email: string;
   created_at: string;
   disposed_at: string | null;
   disposed_by_email: string;
+  is_dumping: boolean;
+  source_container_id: string | null;
+  dumped_sample_ids: string[];
+  restored_at: string | null;
+  restored_to_container_id: string | null;
 };
 
 function statusLabel(container: ProblemContainer) {
-  if (container.status === 'disposed') return 'DISPOSED';
+  if (container.status === 'restored') return 'RESTORED';
+  if (container.is_dumping && container.status === 'disposed') return 'DUMPING — DISPOSED';
+  if (container.status === 'disposed') return 'DISPOSED (LEGACY)';
   if (container.status === 'ready_to_dispose') return 'READY TO DISPOSE';
   if (container.status === 'partially_ready') return 'PARTIALLY READY';
   if (container.status === 'empty') return 'EMPTY';
@@ -54,7 +61,7 @@ function sampleStatus(sample: ContainerSample) {
 }
 
 function isReadyToDispose(container: ProblemContainer) {
-  return container.ready_to_dispose && container.status !== 'disposed';
+  return !container.is_dumping && container.ready_to_dispose && container.status !== 'disposed';
 }
 
 type ContainerViewMode = 'ready' | 'by-date' | 'all' | 'recently-disposed';
@@ -69,10 +76,14 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createdId, setCreatedId] = useState('');
+  const [newDumpId, setNewDumpId] = useState('');
   const [query, setQuery] = useState('');
   const [cutoffDate, setCutoffDate] = useState('');
   const [disposingId, setDisposingId] = useState<number | null>(null);
   const [undoingId, setUndoingId] = useState<number | null>(null);
+  const [restoreDump, setRestoreDump] = useState<ProblemContainer | null>(null);
+  const [restoreMode, setRestoreMode] = useState<'existing' | 'new'>('existing');
+  const [restoreTargetId, setRestoreTargetId] = useState('');
 
   async function load() {
     const data = await api('/problem-containers/');
@@ -95,12 +106,13 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
   }
 
   async function disposeContainer(container: ProblemContainer) {
-    if (!confirm(`Dispose ${container.container_id}? Tickets marked To be Disposed will change to Disposed. Tickets already Disposed will stay Disposed.`)) return;
+    if (!confirm(`Transfer the contents of ${container.container_id} into a new dumping container and mark tickets Disposed? The original container will be empty and reusable. Make sure the physical contents are transferred too.`)) return;
     const reason = await requestChangeReason(`Why are you disposing ${container.container_id}?`);
     if (reason === null) return;
     setDisposingId(container.id); setError('');
     try {
-      await api(`/problem-containers/${container.id}/dispose/`, {method:'POST', headers:changeReasonHeaders(reason), body:JSON.stringify({}), successMessage:`${container.container_id} disposed successfully.`, errorMessage:'Could not dispose container'});
+      const dumped = await api(`/problem-containers/${container.id}/dispose/`, {method:'POST', headers:changeReasonHeaders(reason), body:JSON.stringify({}), successMessage:`${container.container_id} transferred successfully.`, errorMessage:'Could not dispose container'});
+      setNewDumpId(String(dumped.container_id || ''));
       await load();
     } catch(e) { setError(e instanceof Error ? e.message : 'Could not dispose container'); }
     finally { setDisposingId(null); }
@@ -108,41 +120,61 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
 
   async function disposeContainerByDate(container: ProblemContainer) {
     if (!cutoffDate) return;
-    if (!confirm(`Dispose ${container.container_id}? Every ticket in this container was created before ${cutoffDate}. Any ticket not already Disposed will change to Disposed.`)) return;
+    if (!confirm(`Transfer the contents of ${container.container_id} into a new dumping container? Every ticket was created before ${cutoffDate}. The original container will be empty and reusable. Make sure the physical contents are transferred too.`)) return;
     const reason = await requestChangeReason(`Why are you disposing ${container.container_id} using the ${cutoffDate} cutoff date?`);
     if (reason === null) return;
     setDisposingId(container.id); setError('');
     try {
-      await api(`/problem-containers/${container.id}/dispose-by-date/`, {
+      const dumped = await api(`/problem-containers/${container.id}/dispose-by-date/`, {
         method:'POST',
         headers:changeReasonHeaders(reason),
         body:JSON.stringify({ cutoff_date: cutoffDate }),
-        successMessage:`${container.container_id} disposed successfully.`,
+        successMessage:`${container.container_id} transferred successfully.`,
         errorMessage:'Could not dispose container by date',
       });
+      setNewDumpId(String(dumped.container_id || ''));
       await load();
     } catch(e) { setError(e instanceof Error ? e.message : 'Could not dispose container by date'); }
     finally { setDisposingId(null); }
   }
 
-  async function undoContainerDisposal(container: ProblemContainer) {
-    if (!confirm(`Undo disposal of ${container.container_id}? The samples will be restored to the Current Workflow values they had immediately before the container was disposed.`)) return;
+  function undoContainerDisposal(container: ProblemContainer) {
+    if (container.is_dumping) {
+      setRestoreDump(container);
+      setRestoreMode('existing');
+      setRestoreTargetId('');
+      return;
+    }
+    // Backward compatibility for disposed physical containers created before
+    // the dumping-container workflow was introduced.
+    void submitUndoDisposal(container, {});
+  }
+
+  async function submitUndoDisposal(container: ProblemContainer, destination: {destination_container_id?: string; create_new_container?: boolean}) {
+    if (!container.is_dumping && !confirm(`Undo legacy disposal of ${container.container_id}?`)) return;
+    setRestoreDump(null);
     const reason = await requestChangeReason(`Why are you undoing disposal of ${container.container_id}?`);
     if (reason === null) return;
     setUndoingId(container.id); setError('');
     try {
-      await api(`/problem-containers/${container.id}/undo-disposal/`, {method:'POST', headers:changeReasonHeaders(reason), body:JSON.stringify({}), successMessage:`${container.container_id} disposal undone successfully.`, errorMessage:'Could not undo container disposal'});
+      const result = await api(`/problem-containers/${container.id}/undo-disposal/`, {
+        method: 'POST', headers: changeReasonHeaders(reason), body: JSON.stringify(destination),
+        successMessage: container.is_dumping ? `${container.container_id} contents restored successfully.` : `${container.container_id} disposal undone successfully.`,
+        errorMessage: 'Could not undo container disposal',
+      });
+      if (destination.create_new_container && result.restored_to_container_id) setCreatedId(result.restored_to_container_id);
       await load();
     } catch(e) { setError(e instanceof Error ? e.message : 'Could not undo container disposal'); }
     finally { setUndoingId(null); }
   }
 
   const readyCount = containers.filter(isReadyToDispose).length;
-  const disposedCount = containers.filter(container => container.status === 'disposed').length;
+  const dumpedCount = containers.filter(container => container.is_dumping && !container.restored_at).length;
+  const availableDestinations = containers.filter(container => !container.is_dumping && container.status !== 'disposed');
   const dateEligibleContainers = useMemo(() => {
     if (!cutoffDate) return [];
     return containers
-      .filter(container => container.status !== 'disposed' && container.samples.length > 0)
+      .filter(container => !container.is_dumping && container.status !== 'disposed' && container.samples.length > 0)
       .filter(container => container.samples.every(sample => sample.created_date < cutoffDate))
       .sort((a, b) => {
         const newestA = a.samples.reduce((latest, sample) => sample.created_date > latest ? sample.created_date : latest, '');
@@ -159,50 +191,52 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
         ? dateEligibleContainers
         : recentlyDisposed
         ? containers
-            .filter(container => container.status === 'disposed')
+            .filter(container => container.is_dumping || container.status === 'disposed')
             .sort((a, b) => {
               const aTime = a.disposed_at ? new Date(a.disposed_at).getTime() : 0;
               const bTime = b.disposed_at ? new Date(b.disposed_at).getTime() : 0;
               return bTime - aTime;
             })
-        : containers;
+        : containers.filter(container => !container.is_dumping);
     if (!q) return visible;
-    return visible.filter(container => container.container_id.toLowerCase().includes(q));
+    return visible.filter(container => container.container_id.toLowerCase().includes(q) || Boolean(container.source_container_id?.toLowerCase().includes(q)));
   }, [containers, query, readyOnly, byDate, recentlyDisposed, dateEligibleContainers]);
 
   return <div>
     <div className="page-toolbar">
-      <div><div className="eyebrow">Disposal</div><h1 className="page-heading" style={{marginBottom:2}}>{readyOnly ? 'Ready to Dispose' : byDate ? 'Dispose by Date' : recentlyDisposed ? 'Recently Disposed' : 'Dispose Containers'}</h1><div className="muted table-description">{readyOnly ? 'Only containers with attached tickets all marked To be Disposed or Disposed appear here. Empty containers are not ready.' : byDate ? 'Choose a cutoff date. A non-empty container is eligible only when every ticket in it was created before that date. Tickets created on the cutoff date are not considered older than it.' : recentlyDisposed ? 'Disposed containers are shown newest first. Use Undo Disposal if a container was disposed by mistake.' : 'A container is ready only when every attached ticket has Current Workflow = To be Disposed or Disposed. Empty containers are not ready. Shipping back or moving a ticket Back to testing removes it from its container; pending shipping or testing tickets still attached block disposal.'}</div></div>
+      <div><div className="eyebrow">Disposal</div><h1 className="page-heading" style={{marginBottom:2}}>{readyOnly ? 'Ready to Dispose' : byDate ? 'Dispose by Date' : recentlyDisposed ? 'Recent Dumping Containers' : 'Dispose Containers'}</h1><div className="muted table-description">{readyOnly ? 'Only containers with attached tickets all marked To be Disposed or Disposed appear here. Empty containers are not ready.' : byDate ? 'Choose a cutoff date. A non-empty container is eligible only when every ticket in it was created before that date. Tickets created on the cutoff date are not considered older than it.' : recentlyDisposed ? 'Dumping containers are listed newest first, with their original container and transferred tickets. To undo a disposal, choose an existing physical container or create a new one.' : 'A physical container is ready only when every attached ticket has Current Workflow = To be Disposed or Disposed. Disposal transfers tickets to a new dumping container and frees this original container. Empty containers are not ready. Shipping back or moving a ticket Back to testing removes it from its container; pending shipping or testing tickets still attached block disposal.'}</div></div>
       {mode === 'all' && <div className="toolbar-actions"><button className="button" type="button" onClick={createContainer} disabled={creating}>{creating ? 'Creating…' : '+ Create Container'}</button></div>}
     </div>
 
     <nav className="container-view-tabs" aria-label="Container views">
       <Link href="/disposal/containers" className={`container-view-tab ${readyOnly ? 'active' : ''}`}>Ready to Dispose <span className="container-view-count">{readyCount}</span></Link>
       <Link href="/disposal/containers/dispose-by-date" className={`container-view-tab ${byDate ? 'active' : ''}`}>Dispose by Date{cutoffDate && <span className="container-view-count">{dateEligibleContainers.length}</span>}</Link>
-      <Link href="/disposal/containers/recently-disposed" className={`container-view-tab ${recentlyDisposed ? 'active' : ''}`}>Recently Disposed <span className="container-view-count">{disposedCount}</span></Link>
+      <Link href="/disposal/containers/recently-disposed" className={`container-view-tab ${recentlyDisposed ? 'active' : ''}`}>Dumping Containers <span className="container-view-count">{dumpedCount}</span></Link>
       <Link href="/disposal/containers/all" className={`container-view-tab ${mode === 'all' ? 'active' : ''}`}>All Containers</Link>
     </nav>
 
-    {createdId && <div className="container-created-banner"><div><strong>New Container ID</strong><div className="container-created-id">{createdId}</div></div><div className="muted">Label the physical container with this ID. It can now be selected when creating a ticket.</div></div>}
+    {newDumpId && <div className="container-created-banner"><div><strong>New Dumping Container</strong><div className="container-created-id">{newDumpId}</div></div><div className="muted">Contents were transferred from the original container in the tracker. <Link className="table-link" href={`/disposal/containers/recently-disposed#container-${newDumpId}`}>View dumping container</Link>. Confirm that the physical contents were moved too.</div></div>}
+    {createdId && <div className="container-created-banner"><div><strong>Container ID</strong><div className="container-created-id">{createdId}</div></div><div className="muted">Label this physical container with its ID before using it.</div></div>}
     {error && <div className="card error" style={{marginBottom:14}}>{error}</div>}
 
     <div className="container-summary-grid">
-      <div className="panel container-summary-card"><div className="container-summary-number">{containers.length}</div><div className="muted">Total containers</div></div>
+      <div className="panel container-summary-card"><div className="container-summary-number">{containers.filter(container => !container.is_dumping).length}</div><div className="muted">Physical containers</div></div>
       <div className={`panel container-summary-card ${(byDate ? dateEligibleContainers.length : readyCount) ? 'container-ready-summary' : ''}`}><div className="container-summary-number">{byDate ? (cutoffDate ? dateEligibleContainers.length : '—') : readyCount}</div><div className="muted">{byDate ? 'Eligible by selected date' : 'Ready to dispose'}</div></div>
     </div>
 
     <section className="panel panel-blue" style={{marginTop:14}}>
-      <div className="panel-header"><strong>{readyOnly ? 'Ready Containers' : byDate ? 'Containers Eligible by Date' : recentlyDisposed ? 'Recently Disposed Containers' : 'Container Status'}</strong>{loading && <span className="muted" style={{marginLeft:'auto'}}>Loading…</span>}</div>
+      <div className="panel-header"><strong>{readyOnly ? 'Ready Containers' : byDate ? 'Containers Eligible by Date' : recentlyDisposed ? 'Dumping Container History' : 'Container Status'}</strong>{loading && <span className="muted" style={{marginLeft:'auto'}}>Loading…</span>}</div>
       <div className="panel-body stack">
         {byDate && <div className="field" style={{maxWidth:320}}><label htmlFor="dispose-cutoff-date">Dispose tickets created before</label><input id="dispose-cutoff-date" className="input" type="date" value={cutoffDate} onChange={e=>setCutoffDate(e.target.value)} /><div className="muted result-meta">All tickets in a container must have a Created date earlier than this date.</div></div>}
         <div className="field" style={{maxWidth:420}}><label htmlFor="container-search">Find Container ID</label><input id="container-search" className="input" value={query} onChange={e=>setQuery(e.target.value)} placeholder="e.g. PC-000123" /></div>
-        {!loading && filtered.length === 0 && <div className="muted">{readyOnly ? 'No containers are ready to dispose.' : byDate ? (cutoffDate ? 'No containers have all tickets older than the selected date.' : 'Choose a cutoff date to find eligible containers.') : recentlyDisposed ? 'No disposed containers found.' : 'No containers found.'}</div>}
+        {!loading && filtered.length === 0 && <div className="muted">{readyOnly ? 'No containers are ready to dispose.' : byDate ? (cutoffDate ? 'No containers have all tickets older than the selected date.' : 'Choose a cutoff date to find eligible containers.') : recentlyDisposed ? 'No dumping containers found.' : 'No containers found.'}</div>}
         <div className="container-list">
           {filtered.map(container => <article id={`container-${container.container_id}`} key={container.id} className={`container-card ${(isReadyToDispose(container) || byDate) ? 'container-card-ready' : ''} ${container.status === 'disposed' ? 'container-card-disposed' : ''}`}>
             <div className="container-card-heading">
-              <div><div className="container-card-id">{container.container_id}</div><div className="muted result-meta">Created {new Date(container.created_at).toLocaleString()}{container.created_by_email ? ` by ${container.created_by_email}` : ''}</div></div>
+              <div><div className="container-card-id">{container.container_id}{container.is_dumping && <span className="muted" style={{fontSize:13,marginLeft:8}}>DUMPING CONTAINER</span>}</div><div className="muted result-meta">Created {new Date(container.created_at).toLocaleString()}{container.created_by_email ? ` by ${container.created_by_email}` : ''}</div></div>
               <div className="container-heading-actions">{byDate && <span className="container-status-badge container-status-ready_to_dispose">ELIGIBLE BY DATE</span>}<span className={`container-status-badge container-status-${container.status}`}>{statusLabel(container)}</span>{byDate ? <button type="button" className="button danger" onClick={()=>disposeContainerByDate(container)} disabled={disposingId===container.id || undoingId===container.id}>{disposingId===container.id ? 'Disposing…' : 'Dispose Container'}</button> : isReadyToDispose(container) && <button type="button" className="button danger" onClick={()=>disposeContainer(container)} disabled={disposingId===container.id || undoingId===container.id}>{disposingId===container.id ? 'Disposing…' : 'Dispose Container'}</button>}{container.status === 'disposed' && <button type="button" className="button secondary" onClick={()=>undoContainerDisposal(container)} disabled={undoingId===container.id || disposingId===container.id}>{undoingId===container.id ? 'Undoing…' : 'Undo Disposal'}</button>}</div>
             </div>
+            {container.is_dumping && <div className="muted result-meta">Original container: <strong>{container.source_container_id || 'Unknown'}</strong> · Transferred {container.dumped_sample_ids.length} ticket(s){container.restored_at && <> · Restored {new Date(container.restored_at).toLocaleString()} into <strong>{container.restored_to_container_id || 'Unknown'}</strong></>}</div>}
             {container.status === 'disposed' && <div className="muted result-meta">Disposed {container.disposed_at ? new Date(container.disposed_at).toLocaleString() : ''}{container.disposed_by_email ? ` by ${container.disposed_by_email}` : ''}</div>}
             <div className="container-counts"><span>{container.sample_count} sample{container.sample_count === 1 ? '' : 's'}</span><span>{container.expired_count} expired</span><span>{container.active_count} active</span><span>{container.unnotified_count} not notified</span></div>
             {container.samples.length > 0 && <div className="container-sample-list">
@@ -211,11 +245,35 @@ export default function ContainersView({ mode = 'ready' }: { mode?: ContainerVie
                 <div className="container-sample-expiration"><div><span className={`badge ${sample.ready_for_disposal ? 'expiration-expired' : 'expiration-active'}`}>{sample.current_workflow || 'CS Follow-Up'}</span></div>{sampleStatus(sample)}{sample.expires_at && <div className="muted result-meta">Expires {new Date(sample.expires_at).toLocaleString()}</div>}</div>
               </div>)}
             </div>}
-            {container.samples.length === 0 && <div className="muted container-empty-copy">No tickets are assigned to this container yet.</div>}
+            {container.samples.length === 0 && <div className="muted container-empty-copy">{container.is_dumping && container.restored_at ? 'Contents restored; this dumping container is retained for audit and cannot be reused.' : 'No tickets are assigned to this container yet.'}</div>}
           </article>)}
         </div>
       </div>
     </section>
+    {restoreDump && <div className="change-reason-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setRestoreDump(null); }}>
+      <div className="change-reason-dialog" role="dialog" aria-modal="true" aria-labelledby="dump-restore-title" style={{maxWidth:540}}>
+        <div className="dump-restore-header"><h2 id="dump-restore-title">Undo Disposal — {restoreDump.container_id}</h2><button type="button" className="button secondary" onClick={() => setRestoreDump(null)}>Close</button></div>
+        <div className="stack">
+          <p>Original: <strong>{restoreDump.source_container_id || 'Unknown'}</strong>. Restore {restoreDump.sample_count} ticket(s), including their previous workflows, into a physical destination container. Confirm that the physical material has been transferred as well.</p>
+          <label className="field"><span>Destination</span>
+            <select className="input" value={restoreMode} onChange={event => setRestoreMode(event.target.value as 'existing' | 'new')}>
+              <option value="existing">Use an existing physical container</option>
+              <option value="new">Create a new physical container</option>
+            </select>
+          </label>
+          {restoreMode === 'existing' ? <label className="field"><span>Existing Container ID (required)</span>
+            <select className="input" value={restoreTargetId} onChange={event => setRestoreTargetId(event.target.value)}>
+              <option value="">Choose a container…</option>
+              {availableDestinations.map(destination => <option key={destination.id} value={destination.container_id}>{destination.container_id} — {destination.sample_count} ticket(s){destination.container_id === restoreDump.source_container_id ? ' (original)' : ''}</option>)}
+            </select>
+          </label> : <p className="muted">A new container ID will be generated and displayed after the undo is completed.</p>}
+          <div className="toolbar-actions" style={{justifyContent:'flex-end'}}>
+            <button type="button" className="button secondary" onClick={() => setRestoreDump(null)}>Cancel</button>
+            <button type="button" className="button" disabled={undoingId !== null || (restoreMode === 'existing' && !restoreTargetId)} onClick={() => void submitUndoDisposal(restoreDump, restoreMode === 'new' ? {create_new_container: true} : {destination_container_id: restoreTargetId})}>Restore Contents</button>
+          </div>
+        </div>
+      </div>
+    </div>}
     {changeReasonModal}
   </div>;
 }

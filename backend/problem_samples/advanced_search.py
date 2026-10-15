@@ -23,7 +23,7 @@ TEXT_TYPES = {
 }
 NUMBER_TYPES = {ProblemColumn.TYPE_NUMBER}
 DATE_TYPES = {ProblemColumn.TYPE_DATE, ProblemColumn.TYPE_DATE_TODAY, ProblemColumn.TYPE_DATETIME, ProblemColumn.TYPE_TIME}
-CHOICE_TYPES = {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_GROUP}
+CHOICE_TYPES = {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_PROBLEM_TYPE, ProblemColumn.TYPE_GROUP}
 MULTI_CHOICE_TYPES = {ProblemColumn.TYPE_MULTI_CHOICE}
 BOOLEAN_TYPES = {ProblemColumn.TYPE_BOOLEAN}
 
@@ -33,6 +33,7 @@ ALLOWED_OPERATORS = {
     'text': {'contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', *EMPTY_OPERATORS},
     'number': {'equals', 'not_equals', 'gt', 'gte', 'lt', 'lte', 'between', *EMPTY_OPERATORS},
     'choice': {'equals', 'not_equals', *EMPTY_OPERATORS},
+    'problem_type': {'equals', 'not_equals', *EMPTY_OPERATORS},
     'multi_choice': {'contains', 'not_contains', *EMPTY_OPERATORS},
     'date': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
     'date_today': {'equals', 'not_equals', 'before', 'after', 'between', *EMPTY_OPERATORS},
@@ -236,7 +237,7 @@ def validate_quick_filters(table, quick_filters):
         if not column:
             errors.append({'index': index, 'field_key': 'Unknown column.'})
             continue
-        if column.column_type != ProblemColumn.TYPE_CHOICE:
+        if column.column_type not in {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_PROBLEM_TYPE}:
             errors.append({'index': index, 'field_key': 'Quick Filters are available only for Choice columns.'})
             continue
         if value in (None, ''):

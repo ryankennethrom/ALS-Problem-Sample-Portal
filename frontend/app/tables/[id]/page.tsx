@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { queueToastForReload } from '@/lib/toast';
-import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable } from '@/lib/problemTables';
+import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable, MaskFieldState, ProblemTypeRules } from '@/lib/problemTables';
 import DistributorAutocomplete from '@/components/DistributorAutocomplete';
 import EndUserAutocomplete from '@/components/EndUserAutocomplete';
 import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
@@ -85,7 +85,7 @@ function DefaultValueField({
     return <div className="field"><label htmlFor={id}>Default value</label><textarea id={id} className="textarea" value={String(value ?? '')} onChange={e => onChange(e.target.value)} placeholder="Optional" /></div>;
   }
 
-  if (type === 'choice') {
+  if (type === 'choice' || type === 'problem_type') {
     return <div className="field"><label htmlFor={id}>Default value</label><select id={id} className="select" value={String(value ?? '')} onChange={e => onChange(e.target.value)}><option value="">-- No default --</option>{choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}</select></div>;
   }
 
@@ -279,6 +279,75 @@ function IntercolumnRulesEditor({
   </div>;
 }
 
+function MaskRulesEditor({
+  choices, rules, onChange, columns, excludeId,
+}: {
+  choices: string[];
+  rules: ProblemTypeRules;
+  onChange: (next: ProblemTypeRules) => void;
+  columns: ProblemColumn[];
+  excludeId?: string;
+}) {
+  const [selectedChoice, setSelectedChoice] = useState('');
+  const active = choices.includes(selectedChoice) ? selectedChoice : choices[0];
+  const config: {columns: Record<string, MaskFieldState>; images?: MaskFieldState; attachments?: MaskFieldState; customer_details?: string} = (active ? rules[active] : undefined) || {columns: {}};
+  const candidates = columns.filter(column =>
+    column.id !== excludeId && column.column_type !== 'problem_type' &&
+    (!column.is_system || ['current-workflow', 'dispose-automatically'].includes(column.field_key))
+  );
+
+  function change(target: string, nextState: string) {
+    if (!active) return;
+    const next = {...rules};
+    const definition: {columns: Record<string, MaskFieldState>; images?: MaskFieldState; attachments?: MaskFieldState; customer_details?: string} = {...config, columns: {...(config.columns || {})}};
+    if (target === 'images' || target === 'attachments') {
+      if (nextState) definition[target] = nextState as MaskFieldState;
+      else delete definition[target];
+    } else {
+      if (nextState) definition.columns[target] = nextState as MaskFieldState;
+      else delete definition.columns[target];
+    }
+    next[active] = definition;
+    onChange(next);
+  }
+
+  function changeCustomerDetails(value: string) {
+    if (!active) return;
+    onChange({...rules, [active]: {...config, customer_details: value}});
+  }
+
+  return <div className="field" style={{gridColumn:'1 / -1'}}>
+    <label>Problem Type rules</label>
+    <div className="muted result-meta" style={{marginBottom:10}}>
+      Each choice configures the Create Ticket form and may ask the customer for additional details. Required overrides Shown, which overrides Hidden when multiple masks disagree. "Use normal behavior" does not override another mask. Mask columns always stay visible. A database-required column needs a default value if any choice makes it hidden or optional.
+    </div>
+    {!choices.length ? <div className="muted">Add at least one choice above to configure its form.</div> : <div className="stack">
+      <div className="field"><label>Configure form for choice</label><select className="select" value={active} onChange={event => setSelectedChoice(event.target.value)}>{choices.map(choice => <option value={choice} key={choice}>{choice}</option>)}</select></div>
+      <div className="field">
+        <label>Questions or instructions for the customer <span className="muted">(optional)</span></label>
+        <textarea className="textarea" rows={5} maxLength={8000} value={config.customer_details || ''}
+          onChange={event => changeCustomerDetails(event.target.value)}
+          placeholder="E.g., Please tell us whether the sample container was damaged, and attach a photo if possible." />
+        <div className="muted result-meta">Sent in the ticket tracking email and shown as ALS Edmonton's first chat message for this problem type. Leave blank if no details are needed.</div>
+      </div>
+      <div className="stack">
+        {candidates.map(column => <div className="field" key={column.id}>
+          <label>{column.name}{column.required && <span className="muted"> (database-required)</span>}</label>
+          <select className="select" value={config.columns?.[column.id] || ''} onChange={event => change(column.id, event.target.value)}>
+            <option value="">Use normal behavior</option><option value="hidden">Hidden</option><option value="shown">Shown (optional)</option><option value="required">Shown and required</option>
+          </select>
+        </div>)}
+        {(['images', 'attachments'] as const).map(target => <div className="field" key={target}>
+          <label>{target === 'images' ? 'Images' : 'Attachments'}</label>
+          <select className="select" value={config[target] || ''} onChange={event => change(target, event.target.value)}>
+            <option value="">Use normal behavior</option><option value="hidden">Hidden</option><option value="shown">Shown (optional)</option><option value="required">Shown and required (at least one file)</option>
+          </select>
+        </div>)}
+      </div>
+    </div>}
+  </div>;
+}
+
 function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn; allColumns: ProblemColumn[]; onChanged: () => Promise<void>}) {
   const [name, setName] = useState(column.name);
   const [columnDescription, setColumnDescription] = useState(column.description || '');
@@ -288,6 +357,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
   const [groupRole, setGroupRole] = useState<GroupRole>((column.group_role || 'lab_technician') as GroupRole);
   const [dependencyIds, setDependencyIds] = useState<string[]>(column.client_email_dependencies || (column.depends_on_column ? [column.depends_on_column] : []));
   const [intercolumnRules, setIntercolumnRules] = useState<IntercolumnRule[]>(column.intercolumn_rules || []);
+  const [maskRules, setMaskRules] = useState<ProblemTypeRules>(column.form_mask_rules || {});
   const [required, setRequired] = useState(column.required);
   const [searchable, setSearchable] = useState(column.searchable);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(column.include_in_customer_notification);
@@ -319,6 +389,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         group_role: type === 'group' ? groupRole : '',
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
         intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
+        form_mask_rules: type === 'problem_type' ? Object.fromEntries(Object.entries(maskRules).filter(([choice]) => choiceList.includes(choice))) : {},
         default_value: (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
       }), successMessage:'Column updated successfully.', errorMessage:'Could not update column'});
       await onChanged();
@@ -339,6 +410,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
     if (next === 'group') setGroupRole('lab_technician');
     setDependencyIds([]);
     if (next !== 'intercolumn_controller') setIntercolumnRules([]);
+    if (next !== 'problem_type') setMaskRules({});
   }
 
   return <div className="column-editor">
@@ -346,10 +418,11 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       <div className="field"><label>Name</label><input className="input" value={name} onChange={e=>setName(e.target.value)}/></div>
       <div className="field"><label>Type</label><select className="select" value={type} onChange={e=>changeType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
       <div className="field column-description-field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={columnDescription} onChange={e=>setColumnDescription(e.target.value)} placeholder="Explain what this column is for or what users should enter. An (i) icon appears anywhere the column is shown." /></div>
-      {(type === 'choice' || type === 'multi_choice') && <div className="field column-choice-options"><label>Choices (one per line)</label><textarea className="textarea compact-textarea" value={choices} onChange={e=>setChoices(e.target.value)}/></div>}
+      {(type === 'choice' || type === 'multi_choice' || type === 'problem_type') && <div className="field column-choice-options"><label>Choices (one per line)</label><textarea className="textarea compact-textarea" value={choices} onChange={e=>setChoices(e.target.value)}/></div>}
       {type === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={groupRole} onChange={e=>{ setGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
+      {type === 'problem_type' && <MaskRulesEditor choices={choiceList} rules={maskRules} onChange={setMaskRules} columns={allColumns} excludeId={column.id} />}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label></div>
     </div>
@@ -374,6 +447,7 @@ export default function TableSettings() {
   const [colGroupRole, setColGroupRole] = useState<GroupRole>('lab_technician');
   const [colDependencyIds, setColDependencyIds] = useState<string[]>([]);
   const [colIntercolumnRules, setColIntercolumnRules] = useState<IntercolumnRule[]>([]);
+  const [colMaskRules, setColMaskRules] = useState<ProblemTypeRules>({});
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
@@ -410,6 +484,7 @@ export default function TableSettings() {
         group_role: colType === 'group' ? colGroupRole : '',
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
         intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
+        form_mask_rules: colType === 'problem_type' ? Object.fromEntries(Object.entries(colMaskRules).filter(([choice]) => choiceList.includes(choice))) : {},
         default_value: (colType === 'row_creator' || colType === 'recent_row_modifier' || colType === 'date_today') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
       setColName('');
@@ -420,6 +495,7 @@ export default function TableSettings() {
       setColGroupRole('lab_technician');
       setColDependencyIds([]);
       setColIntercolumnRules([]);
+      setColMaskRules({});
       setRequired(false);
       setSearchable(true);
       setIncludeInCustomerNotification(false);
@@ -471,6 +547,7 @@ export default function TableSettings() {
     if (next === 'group') setColGroupRole('lab_technician');
     setColDependencyIds([]);
     if (next !== 'intercolumn_controller') setColIntercolumnRules([]);
+    if (next !== 'problem_type') setColMaskRules({});
   }
 
   if (!table) return <div>{error || 'Loading…'}</div>;
@@ -541,16 +618,17 @@ export default function TableSettings() {
             <div className="field"><label>Column name</label><input className="input" value={colName} onChange={e=>setColName(e.target.value)} required placeholder="e.g. Priority"/></div>
             <div className="field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={colDescription} onChange={e=>setColDescription(e.target.value)} placeholder="Explain what this column means. Leave blank to hide the (i) icon." /></div>
             <div className="field"><label>Column type</label><select className="select" value={colType} onChange={e=>changeNewColumnType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
-            {(colType === 'choice' || colType === 'multi_choice') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
+            {(colType === 'choice' || colType === 'multi_choice' || colType === 'problem_type') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
             {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
+            {colType === 'problem_type' && <MaskRulesEditor choices={newChoiceList} rules={colMaskRules} onChange={setColMaskRules} columns={table.columns} />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
             <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label>
-            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, Date (Today), date & time, time, yes/no, email, Phone Number, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, and Intercolumn Value Controller.</div>
+            <div className="muted result-meta">Supported types: text, long text, number, single/multiple choice, date, Date (Today), date & time, time, yes/no, email, Phone Number, URL, Fixed Value, Group, Distributor, End User, Brand, Client Email, Row Creator, Recent Row Modifier, Intercolumn Value Controller, and Problem Type.</div>
             <div><button className="button">+ Add Column</button></div>
           </form>
         </div>

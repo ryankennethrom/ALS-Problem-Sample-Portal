@@ -49,7 +49,7 @@ type HistoryEntry = {
   actor_name: string;
   created_at: string;
 };
-type Problem = { id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues };
+type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues };
 
 type MentionEmailPreview = {
   requires_email: boolean;
@@ -403,6 +403,7 @@ export default function Detail() {
         problemNumber: problem.problem_number,
         tableName: problem.table_name,
         trackingUrl: credentials.tracking_url,
+        problemTypePrompts: problem.problem_type_prompts || [],
       };
       const draft = await prepareCustomerEmail(customerEmails, emailContext);
       setPendingEmailLaunch({ content: draft.content, trackingToken: credentials.tracking_token });
@@ -565,7 +566,7 @@ export default function Detail() {
       </button>
       <button type="button" className="button secondary" onClick={() => setGeneralEmailOpen(true)} disabled={!customerEmails.length} title={!customerEmails.length ? 'No customer email is available for this ticket.' : undefined}>Email Customer</button>
       {p.tracking_url && <button type="button" className="button danger" onClick={revokeTrackingLink} disabled={revokingTrackingLink}>{revokingTrackingLink ? 'Revoking…' : 'Revoke Tracking Link'}</button>}
-      <button type="button" className="button danger" onClick={() => setDeleteConfirmationOpen(true)}>Delete Row</button>
+      {currentUser?.is_admin && <button type="button" className="button danger" onClick={() => setDeleteConfirmationOpen(true)}>Delete Ticket</button>}
     </div>
     {error && <div className="card error" style={{marginBottom:14}}>{error}</div>}
     {saved && <div className="card success" style={{marginBottom:14}}>{saved}</div>}
@@ -705,10 +706,10 @@ export default function Detail() {
 
       </div>
 
-      <aside className="panel"><div className="panel-header">Ticket Information</div><div className="panel-body"><dl className="detail-list"><dt>Table</dt><dd>{p.table_name || '—'}</dd><dt>Ticket ID</dt><dd>{p.problem_number}</dd><dt>Date Created</dt><dd>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</dd><dt>Container ID</dt><dd>{p.container_id ? <Link className="table-link" href={`/disposal/containers/all#container-${p.container_id}`}>{p.container_id}</Link> : 'Unassigned'}</dd><dt>Ticket expiration period</dt><dd>{(p.pt_days ?? table?.pt_days ?? 30) === 0 ? 'Immediate when Dispose Automatically is changed to Yes' : `${p.pt_days ?? table?.pt_days ?? 30} day${(p.pt_days ?? table?.pt_days ?? 30) === 1 ? '' : 's'} from the most recent change of Dispose Automatically from No to Yes`}</dd><dt>Customer notified</dt><dd>{p.customer_notified_at ? new Date(p.customer_notified_at).toLocaleString() : 'Not yet confirmed'}</dd><dt>Automatic disposal started</dt><dd>{p.automatic_disposal_started_at ? new Date(p.automatic_disposal_started_at).toLocaleString() : 'Not active'}</dd><dt>Expires</dt><dd>{p.expires_at ? new Date(p.expires_at).toLocaleString() : '—'}</dd><dt>Expiration status</dt><dd>{p.expiration_status === 'expired' ? 'Expired' : 'Active'}</dd><dt>Internal Row ID</dt><dd>{p.id}</dd><dt>Columns</dt><dd>{table?.columns.length || 0}</dd><dt>Images</dt><dd>{p.images?.length || 0}</dd><dt>Attachments</dt><dd>{p.attachments?.length || 0}</dd></dl></div></aside>
+      <aside className="panel"><div className="panel-header">Ticket Information</div><div className="panel-body"><dl className="detail-list"><dt>Table</dt><dd>{p.table_name || '—'}</dd><dt>Ticket ID</dt><dd>{p.problem_number}</dd><dt>Date Created</dt><dd>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</dd><dt>Container ID</dt><dd>{p.container_id ? <Link className="table-link" href={`/disposal/containers/${p.container_is_dumping ? "recently-disposed" : "all"}#container-${p.container_id}`}>{p.container_id}</Link> : 'Unassigned'}</dd><dt>Ticket expiration period</dt><dd>{(p.pt_days ?? table?.pt_days ?? 30) === 0 ? 'Immediate when Dispose Automatically is changed to Yes' : `${p.pt_days ?? table?.pt_days ?? 30} day${(p.pt_days ?? table?.pt_days ?? 30) === 1 ? '' : 's'} from the most recent change of Dispose Automatically from No to Yes`}</dd><dt>Customer notified</dt><dd>{p.customer_notified_at ? new Date(p.customer_notified_at).toLocaleString() : 'Not yet confirmed'}</dd><dt>Automatic disposal started</dt><dd>{p.automatic_disposal_started_at ? new Date(p.automatic_disposal_started_at).toLocaleString() : 'Not active'}</dd><dt>Expires</dt><dd>{p.expires_at ? new Date(p.expires_at).toLocaleString() : '—'}</dd><dt>Expiration status</dt><dd>{p.expiration_status === 'expired' ? 'Expired' : 'Active'}</dd><dt>Internal Row ID</dt><dd>{p.id}</dd><dt>Columns</dt><dd>{table?.columns.length || 0}</dd><dt>Images</dt><dd>{p.images?.length || 0}</dd><dt>Attachments</dt><dd>{p.attachments?.length || 0}</dd></dl></div></aside>
     </div>
 
-    {deleteConfirmationOpen && <div className="delete-row-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deletingProblem) setDeleteConfirmationOpen(false); }}>
+    {currentUser?.is_admin && deleteConfirmationOpen && <div className="delete-row-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deletingProblem) setDeleteConfirmationOpen(false); }}>
       <div className="delete-row-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-row-title" aria-describedby="delete-row-description">
         <div className="delete-row-icon" aria-hidden="true">!</div>
         <h2 id="delete-row-title">Delete Ticket #{p.problem_number}?</h2>

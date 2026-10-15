@@ -1117,3 +1117,8 @@ a.result:hover{background:#f7f9fb}
   .public-chat-compose-help span:last-child{display:none}
   .public-chat-add-menu{width:205px}
 }
+
+/* Dumping container undo / destination selection */
+.dump-restore-header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:15px}
+.dump-restore-header h2{margin:0;font-size:20px}
+.container-status-restored{background:#e8f4ea;color:#20743a;border-color:#abd5b5}

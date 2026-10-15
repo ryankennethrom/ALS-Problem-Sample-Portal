@@ -1,8 +1,11 @@
 import { CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
 import { api } from '@/lib/api';
 
+export type ProblemTypePrompt = {column: string; choice: string; message: string};
+
 export type CustomerEmailContext = {
   table?: ProblemTable | null;
+  problemTypePrompts?: ProblemTypePrompt[];
   values?: CustomValues;
   problemNumber?: number | string | null;
   tableName?: string;
@@ -106,6 +109,8 @@ Thank you for submitting your samples to ALS for fluid analysis. We are writing 
 Please review the following details regarding the affected sample(s) and the reason for the sample processing hold:
 {{problem_details}}
 
+{{problem_type_questions}}
+
 {{additional_information}}
 
 Please review and update this ticket using the secure Ticket Tracking Link below, or contact our Customer Service team at {{na_edm_email}} for assistance:
@@ -165,7 +170,10 @@ export function buildCustomerEmailContent(
   const allDetails = allProblemDetails(context);
   const includedDetails = customerNotificationDetails(context);
 
-  const problemType = findDetail(allDetails, ['Problem Type', 'ProblemType']);
+  const configuredProblemType = context.table?.columns.find(column => column.column_type === 'problem_type');
+  const problemType = (configuredProblemType
+    ? allDetails.find(detail => detail.fieldKey === configuredProblemType.field_key)
+    : undefined) || findDetail(allDetails, ['Problem Type', 'ProblemType']);
   const sampleTracking = findDetail(allDetails, [
     'ALS Sample Tracking Number',
     'ALS Tracking Number',
@@ -187,6 +195,14 @@ export function buildCustomerEmailContent(
       .map(detail => detail.fieldKey),
   );
   const extraDetails = includedDetails.filter(detail => !coreFieldKeys.has(detail.fieldKey));
+  const questionPrompts = (context.problemTypePrompts || []).filter(prompt =>
+    typeof prompt?.message === 'string' && prompt.message.trim(),
+  );
+  const problemTypeQuestions = questionPrompts.length
+    ? ['Information requested from the customer:', ...questionPrompts.map(prompt =>
+      `${prompt.column}: ${prompt.choice}\n${prompt.message.trim()}`)].join('\n\n')
+    : '';
+
   const additionalInformation = extraDetails.length
     ? ['Additional information:', ...extraDetails.map(detail => `${detail.label}: ${detail.value}`)].join('\n')
     : '';
@@ -215,6 +231,7 @@ export function buildCustomerEmailContent(
     reason_for_hold: reasonForHold?.value || 'Please contact ALS Customer Service for details',
     date_received: dateReceived?.value || 'Not provided',
     problem_details: problemDetailLines.join('\n'),
+    problem_type_questions: problemTypeQuestions,
     additional_information: additionalInformation,
     multiple_contacts_notice: multipleContactsNotice,
     tracking_link: context.trackingUrl || '',
@@ -222,7 +239,20 @@ export function buildCustomerEmailContent(
   };
 
   const subject = renderTemplate(template.subject_template, values);
-  const body = renderTemplate(template.body_template, values);
+  // Older/custom templates may not have the new placeholder. Insert the
+  // questions near ticket details or the tracking link instead of after
+  // the email signature; fall back to an appended section if neither exists.
+  let bodyTemplate = template.body_template;
+  if (problemTypeQuestions && !/{{\s*problem_type_questions\s*}}/.test(bodyTemplate)) {
+    if (/{{\s*problem_details\s*}}/.test(bodyTemplate)) {
+      bodyTemplate = bodyTemplate.replace(/{{\s*problem_details\s*}}/, '{{problem_details}}\n\n{{problem_type_questions}}');
+    } else if (/{{\s*tracking_link\s*}}/.test(bodyTemplate)) {
+      bodyTemplate = bodyTemplate.replace(/{{\s*tracking_link\s*}}/, '{{problem_type_questions}}\n\n{{tracking_link}}');
+    } else {
+      bodyTemplate += '\n\n{{problem_type_questions}}';
+    }
+  }
+  const body = renderTemplate(bodyTemplate, values);
   return { to: toRecipients, cc: ccRecipients, subject, body };
 }
 

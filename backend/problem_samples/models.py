@@ -137,6 +137,7 @@ class ProblemColumn(models.Model):
     TYPE_RECENT_ROW_MODIFIER = 'recent_row_modifier'
     TYPE_BRAND = 'brand'
     TYPE_INTERCOLUMN_CONTROLLER = 'intercolumn_controller'
+    TYPE_PROBLEM_TYPE = 'problem_type'
 
     GROUP_LAB_TECHNICIAN = 'lab_technician'
     GROUP_CUSTOMER_SERVICE = 'customer_service'
@@ -168,6 +169,7 @@ class ProblemColumn(models.Model):
         (TYPE_ROW_CREATOR, 'Row Creator'),
         (TYPE_RECENT_ROW_MODIFIER, 'Recent Row Modifier'),
         (TYPE_INTERCOLUMN_CONTROLLER, 'Intercolumn Value Controller'),
+        (TYPE_PROBLEM_TYPE, 'Problem Type'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -191,6 +193,7 @@ class ProblemColumn(models.Model):
         default=list, blank=True,
         help_text='Ordered ProblemColumn UUIDs used as Client Email company fallbacks.',
     )
+    form_mask_rules = models.JSONField(default=dict, blank=True, help_text='Choice label -> form visibility and customer instructions.')
     intercolumn_rules = models.JSONField(
         default=list, blank=True,
         help_text='Directional equality/assignment rules used by Intercolumn Value Controller columns.',
@@ -238,6 +241,70 @@ def _intercolumn_values_equal(left, right):
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
         return float(left) == float(right)
     return left == right
+
+
+# A mask makes no assertion about a target unless that target is explicitly listed.
+# With multiple masks, the strongest selected assertion wins: required > shown > hidden.
+FORM_MASK_STATES = ('hidden', 'shown', 'required')
+FORM_MASK_RANK = {'hidden': 0, 'shown': 1, 'required': 2}
+
+
+def resolve_problem_type(table, values):
+    """Resolve the current choices of every form mask into creation-time visibility.
+
+    Return mapping by column.field_key, plus 'images' and 'attachments'. A mask
+    itself always remains visible so staff can change which variant is selected.
+    Unspecified targets inherit their normal create-form behavior.
+    """
+    columns = list(table.columns.all())
+    by_id = {str(column.pk): column for column in columns}
+    decisions = {}
+    for mask in columns:
+        if mask.column_type != ProblemColumn.TYPE_PROBLEM_TYPE:
+            continue
+        choice = (values or {}).get(mask.field_key) or mask.default_value
+        definition = (mask.form_mask_rules or {}).get(str(choice), {})
+        if not isinstance(definition, dict):
+            continue
+        for col_id, state in (definition.get('columns') or {}).items():
+            target = by_id.get(str(col_id))
+            if target is None or target.column_type == ProblemColumn.TYPE_PROBLEM_TYPE:
+                continue
+            if state in FORM_MASK_RANK:
+                key = target.field_key
+                if FORM_MASK_RANK[state] > FORM_MASK_RANK.get(decisions.get(key), -1):
+                    decisions[key] = state
+        for key in ('images', 'attachments'):
+            state = definition.get(key)
+            if state in FORM_MASK_RANK and FORM_MASK_RANK[state] > FORM_MASK_RANK.get(decisions.get(key), -1):
+                decisions[key] = state
+    return decisions
+
+
+def selected_problem_type_prompts(table, values):
+    """Capture the configured customer instructions for each selected Problem Type.
+
+    A ticket keeps its own snapshot so later admin edits cannot rewrite the
+    initial message or the text used by follow-up tracking emails.
+    """
+    prompts = []
+    for column in table.columns.all():
+        if column.column_type != ProblemColumn.TYPE_PROBLEM_TYPE:
+            continue
+        choice = (values or {}).get(column.field_key) or column.default_value
+        if not isinstance(choice, str) or choice not in (column.choices or []):
+            continue
+        rules = (column.form_mask_rules or {}).get(choice, {})
+        if not isinstance(rules, dict):
+            continue
+        message = rules.get('customer_details', '')
+        if isinstance(message, str) and message.strip():
+            prompts.append({
+                'column': column.name,
+                'choice': choice,
+                'message': message.strip(),
+            })
+    return prompts
 
 
 def apply_intercolumn_rules_to_values(table, values):
@@ -326,6 +393,21 @@ class ProblemContainer(models.Model):
         default=dict, blank=True,
         help_text='Rollback state captured immediately before the current container disposal.',
     )
+    is_dumping = models.BooleanField(default=False, db_index=True)
+    source_container = models.ForeignKey(
+        'self', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='dumping_containers',
+        help_text='Original physical container emptied into this dumping container.',
+    )
+    dumped_sample_ids = models.JSONField(
+        default=list, blank=True,
+        help_text='Ticket UUIDs originally transferred here, retained after undo for audit.',
+    )
+    restored_at = models.DateTimeField(null=True, blank=True)
+    restored_to_container = models.ForeignKey(
+        'self', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='restored_dumping_containers',
+    )
 
     class Meta:
         ordering = ['-id']
@@ -360,6 +442,7 @@ class PreparedProblemSample(models.Model):
     problem_number = models.PositiveBigIntegerField()
     tracking_token = models.CharField(max_length=128)
     payload = models.JSONField()
+    problem_type_prompts = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_problem = models.ForeignKey('ProblemSample', null=True, blank=True, on_delete=models.SET_NULL)
 
@@ -397,6 +480,7 @@ class ProblemSample(models.Model):
         help_text='Optional follow-up action selected by the customer from the problem sample tracking link.',
     )
     custom_values = models.JSONField(default=dict, blank=True)
+    problem_type_prompts = models.JSONField(default=list, blank=True, help_text='Customer-facing questions snapshotted from selected Problem Type choices.')
     legacy_created_by = models.CharField(max_length=200, blank=True)
     legacy_modified_by = models.CharField(max_length=200, blank=True)
     created_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='problem_samples_created')

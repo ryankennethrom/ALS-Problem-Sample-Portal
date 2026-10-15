@@ -143,7 +143,7 @@ function FollowUpContent() {
   const selectedTable = useMemo(() => tables.find(table => table.id === tableId), [tables, tableId]);
   const activeAdvancedCount = advanced?.tableId === tableId ? advanced.filters.length : 0;
   const choiceColumns = useMemo(
-    () => selectedTable?.columns.filter(column => column.column_type === 'choice' && column.choices.length > 0) || [],
+    () => selectedTable?.columns.filter(column => (column.column_type === 'choice' || column.column_type === 'problem_type') && column.choices.length > 0) || [],
     [selectedTable],
   );
   const savedQuickFilters = tableId ? (quickFiltersByTable[tableId] || EMPTY_QUICK_FILTERS) : EMPTY_QUICK_FILTERS;

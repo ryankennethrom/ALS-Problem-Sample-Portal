@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, initialValue, ProblemTable } from '@/lib/problemTables';
+import { applyIntercolumnRules, CustomValues, initialValue, ProblemTable, resolveProblemTypeMask, MaskFieldState } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import CameraCapture from '@/components/CameraCapture';
@@ -53,6 +53,9 @@ export default function ProblemForm() {
     return requested || tables.find(t => t.is_default) || tables[0];
   }, [tables, requestedTable]);
   const tableId = table?.id || '';
+  const mask: Record<string, MaskFieldState> = useMemo(() => table ? resolveProblemTypeMask(table, customValues) : {}, [table, customValues]);
+  const imageMode = mask.images || 'shown';
+  const attachmentMode = mask.attachments || 'shown';
 
   useEffect(() => {
     if (!table) return;
@@ -94,22 +97,6 @@ export default function ProblemForm() {
     }
   }
 
-  async function uploadSelectedFiles(problemId: string) {
-    for (const [files, path] of [[imageFiles, 'images'], [attachmentFiles, 'attachments']] as const) {
-      for (const file of files) {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('include_in_customer_notification', 'false');
-        try {
-          await api(`/problem-samples/${problemId}/${path}/`, { method: 'POST', body: formData, errorMessage: `Could not upload ${file.name}` });
-        } catch {
-          // The ticket has already been finalized. Preserve it and let the API toast
-          // explain which optional file could not be uploaded.
-        }
-      }
-    }
-  }
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (saving || pendingCreation) return;
@@ -125,12 +112,18 @@ export default function ProblemForm() {
       return;
     }
 
+    if (imageMode === 'required' && imageFiles.length === 0) {
+      setError('At least one image is required by the selected form mask.'); return;
+    }
+    if (attachmentMode === 'required' && attachmentFiles.length === 0) {
+      setError('At least one attachment is required by the selected form mask.'); return;
+    }
     setSaving(true);
     let preparedId = '';
     try {
       const prepared = await api('/problem-samples/prepare-new/', {
         method: 'POST',
-        body: JSON.stringify({ table: tableId, container_code: containerId.trim(), custom_values: customValues }),
+        body: JSON.stringify({ table: tableId, container_code: containerId.trim(), custom_values: customValues, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
         errorMessage: 'Could not prepare ticket',
       });
       preparedId = String(prepared.id || '');
@@ -144,6 +137,7 @@ export default function ProblemForm() {
           problemNumber: prepared.problem_number,
           tableName: table.name,
           trackingUrl: prepared.tracking_url,
+          problemTypePrompts: prepared.problem_type_prompts || [],
         };
         const draft = await prepareCustomerEmail(customerEmails, emailContext);
         emailContent = draft.content;
@@ -178,17 +172,19 @@ export default function ProblemForm() {
     setSaving(true);
     setError('');
     try {
+      const payload = new FormData();
+      payload.append('id', pendingCreation.preparedId);
+      payload.append('sent', String(sent));
+      if (!sent) payload.append('not_sent_reason', notSentReason || 'User chose not to send the tracking-link email during ticket creation.');
+      if (imageMode !== 'hidden') imageFiles.forEach(file => payload.append('images', file));
+      if (attachmentMode !== 'hidden') attachmentFiles.forEach(file => payload.append('attachments', file));
       const result = await api('/problem-samples/create-prepared/', {
         method: 'POST',
-        body: JSON.stringify({
-          id: pendingCreation.preparedId,
-          sent,
-          ...(sent ? {} : { not_sent_reason: notSentReason || 'User chose not to send the tracking-link email during ticket creation.' }),
-        }),
+        body: payload,
         successMessage: sent ? 'Ticket created and tracking-link email recorded.' : 'Ticket and tracking link created without sending the email.',
         errorMessage: 'Could not create ticket',
       });
-      await uploadSelectedFiles(String(result.id));
+      // All selected files are validated and saved with the ticket at finalization.
       setPendingCreation(null);
       router.push(`/problems/${result.id}`);
     } catch (e) {
@@ -251,36 +247,30 @@ export default function ProblemForm() {
 
     {table ? <>
       <div className="grid">
-        <div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value="Assigned when the tracking-link email step begins" disabled readOnly aria-disabled="true" /></div>
-        {table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
-          ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
-          : column.field_key === 'system-tracking-link'
-            ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value="Created only after you confirm the tracking-link email step" disabled readOnly aria-disabled="true" /></div>
-            : column.field_key === 'system-tracking-link-expiry'
-              ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value="Does not expire yet" disabled readOnly aria-disabled="true" /></div>
-              : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)}/>) }
+        {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key)) && (c.column_type === 'problem_type' || mask[c.field_key] !== 'hidden')).map(column =>
+          <DynamicField key={column.id} column={{...column, required: mask[column.field_key] === 'required' || (mask[column.field_key] !== 'shown' && column.required)}} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)}/>) }
       </div>
-      {table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
+      {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key))).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
     </> : null}
 
-    <section className="panel file-create-panel">
-      <div className="panel-header"><strong>Images & Attachments</strong><span className="muted file-header-note">Optional</span></div>
+    {(imageMode !== 'hidden' || attachmentMode !== 'hidden') && <section className="panel file-create-panel">
+      <div className="panel-header"><strong>Images & Attachments</strong><span className="muted file-header-note">{imageMode === 'required' || attachmentMode === 'required' ? 'Requirements set by form mask' : 'Optional'}</span></div>
       <div className="panel-body"><div className="muted file-notification-note">The tracking-link email is prepared before the ticket is created. Selected files are uploaded only after you confirm that the email was sent or not sent.</div><div className="file-upload-grid">
-        <div className="field">
-          <label>Images</label>
+        {imageMode !== 'hidden' && <div className="field">
+          <label>Images{imageMode === 'required' && <span className="required-marker"> *</span>}</label>
           <div className="camera-upload-controls">
             <input className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
             <CameraCapture onCapture={file => setImageFiles(current => [...current, file])} disabled={saving || Boolean(pendingCreation)} />
           </div>
           <div className="muted file-help">Upload JPEG, PNG, GIF, or WebP, or take a photo with this device. Up to 25 MB per image.{imageFiles.length ? ` ${imageFiles.length} selected.` : ''}</div>
-        </div>
-        <div className="field">
-          <label>Attachments</label>
+        </div>}
+        {attachmentMode !== 'hidden' && <div className="field">
+          <label>Attachments{attachmentMode === 'required' && <span className="required-marker"> *</span>}</label>
           <input className="file-control" type="file" multiple onChange={event => setAttachmentFiles(Array.from(event.target.files || []))} />
           <div className="muted file-help">Documents, spreadsheets, PDFs, archives, and other supporting files. Up to 25 MB each.{attachmentFiles.length ? ` ${attachmentFiles.length} selected.` : ''}</div>
-        </div>
+        </div>}
       </div></div>
-    </section>
+    </section>}
 
     {error && <div className="error">{error}</div>}
     {table ? <div><button className="button" disabled={saving || Boolean(pendingCreation)}>{saving ? 'Preparing…' : 'Create Ticket'}</button></div> : null}

@@ -83,15 +83,32 @@ class OptionalContainerWorkflowTests(TestCase):
         self.assertEqual(shipped.workflow_status, PROBLEM_STATUS_SHIPPED_BACK)
         self.assertIsNone(shipped.container_id)
         self.assertEqual(self.container_state()['status'], 'ready_to_dispose')
+
         result = self.client.post(f'/api/problem-containers/{self.container.pk}/dispose/', {}, format='json')
         self.assertEqual(result.status_code, 200, result.data)
         self.assertEqual(result.data['status'], 'disposed')
+        self.assertTrue(result.data['is_dumping'])
+        self.assertEqual(result.data['source_container_id'], self.container.container_id)
+        dump = ProblemContainer.objects.get(pk=result.data['id'])
         disposed.refresh_from_db()
         self.assertEqual(disposed.workflow_status, PROBLEM_STATUS_DISPOSED)
-        undone = self.client.post(f'/api/problem-containers/{self.container.pk}/undo-disposal/', {}, format='json')
+        self.assertEqual(disposed.container_id, dump.pk)
+        self.assertEqual(self.container_state()['status'], 'empty')
+
+        # A dumping container never silently restores to its source.
+        missing_target = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {}, format='json')
+        self.assertEqual(missing_target.status_code, 400, missing_target.data)
+        undone = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'destination_container_id': self.container.container_id,
+        }, format='json')
         self.assertEqual(undone.status_code, 200, undone.data)
+        self.assertEqual(undone.data['status'], 'restored')
         disposed.refresh_from_db()
         self.assertEqual(disposed.workflow_status, PROBLEM_STATUS_DISPOSED)
+        self.assertEqual(disposed.container_id, self.container.pk)
+        self.assertEqual(self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'create_new_container': True,
+        }, format='json').status_code, 409)
 
     def test_mixed_disposal_waiting_and_disposed_tickets_are_ready(self):
         waiting = self.sample(1, PROBLEM_STATUS_TO_BE_DISPOSED, self.container)
@@ -99,18 +116,78 @@ class OptionalContainerWorkflowTests(TestCase):
         self.assertTrue(self.container_state()['ready_to_dispose'])
         result = self.client.post(f'/api/problem-containers/{self.container.pk}/dispose/', {}, format='json')
         self.assertEqual(result.status_code, 200, result.data)
+        dump = ProblemContainer.objects.get(pk=result.data['id'])
         waiting.refresh_from_db()
         already_disposed.refresh_from_db()
         self.assertEqual(waiting.workflow_status, PROBLEM_STATUS_DISPOSED)
         self.assertEqual(already_disposed.workflow_status, PROBLEM_STATUS_DISPOSED)
-        self.container.refresh_from_db()
-        self.assertEqual(set(self.container.disposal_snapshot), {str(waiting.pk)})
-        undone = self.client.post(f'/api/problem-containers/{self.container.pk}/undo-disposal/', {}, format='json')
+        self.assertEqual(waiting.container_id, dump.pk)
+        self.assertEqual(already_disposed.container_id, dump.pk)
+        self.assertEqual(self.container_state()['sample_count'], 0)
+        self.assertEqual(set(dump.disposal_snapshot), {str(waiting.pk)})
+        self.assertEqual(set(dump.dumped_sample_ids), {str(waiting.pk), str(already_disposed.pk)})
+
+        # Undo into a NEW container, NOT the old source, restores both ticket
+        # references and the pre-disposal workflow of only the changed ticket.
+        undone = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'create_new_container': True,
+        }, format='json')
         self.assertEqual(undone.status_code, 200, undone.data)
+        new_destination = ProblemContainer.resolve_identifier(undone.data['restored_to_container_id'])
+        self.assertIsNotNone(new_destination)
+        self.assertNotEqual(new_destination.pk, self.container.pk)
+        self.assertNotEqual(new_destination.pk, dump.pk)
         waiting.refresh_from_db()
         already_disposed.refresh_from_db()
         self.assertEqual(waiting.workflow_status, PROBLEM_STATUS_TO_BE_DISPOSED)
         self.assertEqual(already_disposed.workflow_status, PROBLEM_STATUS_DISPOSED)
+        self.assertEqual(waiting.container_id, new_destination.pk)
+        self.assertEqual(already_disposed.container_id, new_destination.pk)
+        dump.refresh_from_db()
+        self.assertTrue(dump.restored_at)
+        self.assertEqual(set(dump.dumped_sample_ids), {str(waiting.pk), str(already_disposed.pk)})
+        self.assertEqual(self.client.post('/api/problem-samples/prepare-new/', {
+            'table': str(self.table.pk), 'container_code': dump.container_id, 'custom_values': {},
+        }, format='json').status_code, 400)
+
+    def test_original_container_can_be_reused_before_dump_undo(self):
+        old_sample = self.sample(11, PROBLEM_STATUS_TO_BE_DISPOSED, self.container)
+        response = self.client.post(f'/api/problem-containers/{self.container.pk}/dispose/', {}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        dump = ProblemContainer.objects.get(pk=response.data['id'])
+        newer = self.sample(12, CURRENT_WORKFLOW_DEFAULT, self.container)
+        destination = ProblemContainer.objects.create(created_by=self.user)
+        result = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'destination_container_id': destination.container_id,
+        }, format='json')
+        self.assertEqual(result.status_code, 200, result.data)
+        old_sample.refresh_from_db()
+        newer.refresh_from_db()
+        self.assertEqual(old_sample.container_id, destination.pk)
+        self.assertEqual(newer.container_id, self.container.pk)
+        self.assertEqual(newer.workflow_status, CURRENT_WORKFLOW_DEFAULT)
+        self.assertEqual(old_sample.workflow_status, PROBLEM_STATUS_TO_BE_DISPOSED)
+
+    def test_dumping_container_cannot_be_reused_or_undone_if_contents_changed(self):
+        ticket = self.sample(77, PROBLEM_STATUS_TO_BE_DISPOSED, self.container)
+        result = self.client.post(f'/api/problem-containers/{self.container.pk}/dispose/', {}, format='json')
+        self.assertEqual(result.status_code, 200, result.data)
+        dump = ProblemContainer.objects.get(pk=result.data['id'])
+        self.assertEqual(self.client.post(f'/api/problem-containers/{dump.pk}/dispose/', {}, format='json').status_code, 409)
+        self.assertEqual(self.client.post(f'/api/problem-containers/{dump.pk}/dispose-by-date/', {
+            'cutoff_date': timezone.localdate().isoformat(),
+        }, format='json').status_code, 409)
+        moved = self.client.patch(f'/api/problem-samples/{ticket.pk}/', {
+            'container_code': self.container.container_id,
+        }, format='json')
+        self.assertEqual(moved.status_code, 400, moved.data)
+        ProblemSample.objects.filter(pk=ticket.pk).update(container=self.container)
+        undo = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'create_new_container': True,
+        }, format='json')
+        self.assertEqual(undo.status_code, 409, undo.data)
+        dump.refresh_from_db()
+        self.assertIsNone(dump.restored_at)
 
     def set_created_days_ago(self, ticket, days):
         created_at = timezone.now() - timedelta(days=days)
@@ -139,15 +216,22 @@ class OptionalContainerWorkflowTests(TestCase):
         second.refresh_from_db()
         self.assertEqual(first.workflow_status, PROBLEM_STATUS_DISPOSED)
         self.assertEqual(second.workflow_status, PROBLEM_STATUS_DISPOSED)
-        self.container.refresh_from_db()
-        self.assertEqual(set(self.container.disposal_snapshot), {str(first.pk), str(second.pk)})
+        dump = ProblemContainer.objects.get(pk=result.data['id'])
+        self.assertTrue(dump.is_dumping)
+        self.assertEqual(dump.source_container_id, self.container.pk)
+        self.assertEqual(set(dump.disposal_snapshot), {str(first.pk), str(second.pk)})
+        self.assertEqual(self.container_state()['status'], 'empty')
 
-        history = ProblemHistory.objects.filter(problem=first, summary=f'Container {self.container.container_id} disposed').latest('created_at')
+        history = ProblemHistory.objects.filter(
+            problem=first, summary=f'Container {self.container.container_id} disposed into {dump.container_id}'
+        ).latest('created_at')
         self.assertEqual(history.details['disposal_method'], 'dispose_by_date')
         self.assertEqual(history.details['cutoff_date'], cutoff)
         self.assertEqual(history.details['reason'], 'Old physical container cleanup')
 
-        undone = self.client.post(f'/api/problem-containers/{self.container.pk}/undo-disposal/', {}, format='json')
+        undone = self.client.post(f'/api/problem-containers/{dump.pk}/undo-disposal/', {
+            'destination_container_id': self.container.container_id,
+        }, format='json')
         self.assertEqual(undone.status_code, 200, undone.data)
         first.refresh_from_db()
         second.refresh_from_db()

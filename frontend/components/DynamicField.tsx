@@ -70,7 +70,7 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
   if (column.column_type === 'long_text') {
     return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><textarea {...common} className="textarea" value={String(value ?? '')} onChange={e => onChange(e.target.value)}/></div>;
   }
-  if (column.column_type === 'choice') {
+  if (column.column_type === 'choice' || column.column_type === 'problem_type') {
     const current = String(value ?? '');
     return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><select {...common} className="select" value={current} onChange={e => onChange(e.target.value)}><option value="">-- Select --</option>{column.choices.map(c => <option key={c} value={c}>{c}</option>)}</select></div>;
   }

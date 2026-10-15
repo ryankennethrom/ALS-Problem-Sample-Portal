@@ -615,3 +615,32 @@ Staff can reply directly to a customer's “Message us about the issue” Histor
 ### Customer correspondence chat panel
 
 The public tracking action **Message us about the issue** opens a right-side chat panel. The public API exposes only customer-visible correspondence: customer messages and confirmed ALS staff replies. Internal staff comments, workflow changes, recipient lists, and audit metadata remain private. Customer-uploaded images and attachments remain associated with the customer message that sent them. Reply-email links using `?message=1` open the chat panel automatically.
+
+
+## Ticket Creator Form Mask (historical; now Problem Type)
+
+Administrators can add a **Ticket Creator Form Mask** column in the table editor. It is a choice field: each option can control whether other Create Ticket form columns, images and attachments are **Hidden**, **Shown (optional)**, or **Shown and required**. Leave a target on **Use normal behavior** when that mask does not need to control it. Every mask choice field stays visible to allow switching variants. The Container and Ticket ID sections are outside mask control.
+
+If multiple mask columns exist in one table, the form combines their selected rules conservatively: **Required > Shown > Hidden > Use normal behavior**. A required image/attachment setting means at least one file must be included. File requirements are checked on the server during ticket preparation and again when tickets are finalized, with files uploaded as part of finalization. Files are still only saved after the email confirmation step. Hidden custom values are cleared for newly created tickets.
+
+Database-required fields that an admin configures as Hidden or Shown (optional) must have a valid field default (apart from server-computed fields). The server rejects incompatible mask configurations and prevents removing required defaults while a mask still depends on them. Existing tickets remain editable as before; masks only govern new ticket creation.
+
+**Deployment:** run the normal Django migrations (`python manage.py migrate`) before deploying the new frontend. This update adds `problem_samples.0077_ticket_creator_form_mask`.
+
+
+## Problem Type with customer questions (October 2026)
+
+The former Ticket Creator Form Mask column type is now **Problem Type**. The new database migration renames existing mask columns in place and retains their choices, form rules and ticket values. Each choice also has optional **Questions or instructions for the customer**. These instructions appear in the ticket-tracking email and as an opening ALS Edmonton message in the public chat. Multiple Problem Type columns contribute separate messages. The selection and text are snapshotted when a ticket is prepared, so editing table rules later does not alter existing tickets. Required > Shown > Hidden still applies to conflicting field and upload masks.
+
+Run `python manage.py migrate` to apply migration 0078. Update both frontend and backend.
+
+
+## Dumping containers and reversing container disposal
+
+Container disposal (including **Dispose by Date**) now transfers **all** tickets in the source physical container into a newly generated **dumping container** (`PC-xxxxxx`). The physical source container keeps its ID, becomes empty, and may be reused for new tickets. The dumping container is read-only for normal assignment and records its source physical container, exact ticket IDs, disposal date, actor and per-ticket rollback snapshot. The UI prompts staff to move the physical material as well; a software action does not physically move contents.
+
+Open **Disposal → Dumping Containers** (the old Recently Disposed URL, `/disposal/containers/recently-disposed`) to view newest dumping containers and undo a disposal. Undo requires choosing a non-dumping, non-disposed destination container (which may be the original, even if reused) **or** explicitly creating a new one. It restores the previous ticket workflows where they changed on disposal, retains pre-disposed tickets as Disposed, and moves all transferred tickets to the destination. The transaction refuses undo if any ticket is missing or has a conflicting workflow. The dumping container remains in history with source, original ticket IDs, destination, and restoration timestamp, and cannot be reused or undone twice.
+
+`POST /api/problem-containers/{id}/undo-disposal/` for new dumping containers requires JSON `{"destination_container_id":"PC-000001"}` or `{"create_new_container":true}` (exactly one). Historical disposed physical containers made before the migration retain their original legacy undo behavior.
+
+Migration `0079_dumping_containers.py` adds the related audit fields; run `python manage.py migrate` after deploying.

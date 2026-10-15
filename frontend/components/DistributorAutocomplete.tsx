@@ -123,6 +123,5 @@ export default function DistributorAutocomplete({
         </button>) : <div className="distributor-empty">No suggestions found — you can still use the value you typed</div>}
       </div>}
     </div>
-    <div className="muted result-meta">Suggestions come from customer records where CoyType is Distributor. You can also enter any other value.</div>
   </div>;
 }

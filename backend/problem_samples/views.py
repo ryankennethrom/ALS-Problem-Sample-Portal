@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from accounts.models import UserProfile
 from accounts.account_utils import normalize_als_email, user_has_als_email
-from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY
+from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
 from .permissions import IsTrackerAdminOrReadOnly
 from .notification_recipient import get_edmonton_recipient
 from .serializers import (
@@ -705,6 +705,17 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         serializer = ProblemSampleSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         table = serializer.validated_data.get('table') or get_default_table()
+        mask = resolve_problem_type(table, serializer.validated_data.get('custom_values') or {})
+        problem_type_prompts = selected_problem_type_prompts(table, serializer.validated_data.get('custom_values') or {})
+        try:
+            image_count = int(request.data.get('image_count', 0))
+            attachment_count = int(request.data.get('attachment_count', 0))
+        except (ValueError, TypeError):
+            raise DRFValidationError({'detail': 'Invalid selected file counts.'})
+        if mask.get('images') == 'required' and image_count < 1:
+            raise DRFValidationError({'images': 'Select at least one image for this form mask.'})
+        if mask.get('attachments') == 'required' and attachment_count < 1:
+            raise DRFValidationError({'attachments': 'Select at least one attachment for this form mask.'})
         with transaction.atomic():
             table = ProblemTable.objects.select_for_update().get(pk=table.pk)
             ensure_builtin_columns(table)
@@ -714,11 +725,13 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             prepared = PreparedProblemSample.objects.create(
                 table=table, created_by=request.user, problem_number=number,
                 tracking_token=generate_acknowledgement_token(), payload=dict(request.data),
+                problem_type_prompts=problem_type_prompts,
             )
         base = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
         return Response({
             'id': str(prepared.pk), 'problem_number': number,
             'custom_values': serializer.validated_data.get('custom_values', {}),
+            'problem_type_prompts': problem_type_prompts,
             'tracking_url': f'{base}/track/{prepared.tracking_token}' if base else f'/track/{prepared.tracking_token}',
         }, status=status.HTTP_201_CREATED)
 
@@ -733,16 +746,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             prepared.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=False, methods=['post'], url_path='create-prepared')
+    @action(detail=False, methods=['post'], parser_classes=[JSONParser, MultiPartParser, FormParser], url_path='create-prepared')
     def create_prepared(self, request):
         try:
             prepared_id = uuid.UUID(str(request.data.get('id')))
         except (TypeError, ValueError, AttributeError):
             return Response({'detail': 'Prepare the customer information first.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not isinstance(request.data.get('sent'), bool):
+        raw_sent = request.data.get('sent')
+        sent = raw_sent if isinstance(raw_sent, bool) else {'true': True, 'false': False}.get(raw_sent)
+        if not isinstance(sent, bool):
             return Response({'detail': 'Confirm whether the email was sent.'}, status=status.HTTP_400_BAD_REQUEST)
         not_sent_reason = (_required_email_not_sent_reason(request.data.get('not_sent_reason'), 'not_sent_reason')
-                           if request.data['sent'] is False else '')
+                           if sent is False else '')
         with transaction.atomic():
             prepared = PreparedProblemSample.objects.select_for_update().filter(pk=prepared_id, created_by=request.user).first()
             if not prepared:
@@ -751,10 +766,53 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 return Response({'id': str(prepared.completed_problem_id)})
             serializer = ProblemSampleSerializer(data=prepared.payload, context={'request': request})
             serializer.is_valid(raise_exception=True)
+            mask = resolve_problem_type(prepared.table, serializer.validated_data.get('custom_values') or {})
+            images = list(request.FILES.getlist('images'))
+            attachments = list(request.FILES.getlist('attachments'))
+            if mask.get('images') == 'required' and not images:
+                raise DRFValidationError({'images': 'At least one image must be uploaded for this form mask.'})
+            if mask.get('attachments') == 'required' and not attachments:
+                raise DRFValidationError({'attachments': 'At least one attachment must be uploaded for this form mask.'})
+            if mask.get('images') == 'hidden' and images:
+                raise DRFValidationError({'images': 'Images are hidden by the selected form mask.'})
+            if mask.get('attachments') == 'hidden' and attachments:
+                raise DRFValidationError({'attachments': 'Attachments are hidden by the selected form mask.'})
+            processed_images = []
+            for uploaded in images:
+                error = _validate_uploaded_file(uploaded, image=True)
+                if error:
+                    raise DRFValidationError({'images': f'{uploaded.name}: {error}'})
+                try:
+                    compressed, stored_name = compress_problem_image(uploaded, (uploaded.name or 'image')[:255])
+                except (UnidentifiedImageError, OSError, ValueError):
+                    raise DRFValidationError({'images': f'{uploaded.name}: Could not process this image.'})
+                if not compressed:
+                    raise DRFValidationError({'images': f'{uploaded.name}: Could not process this image.'})
+                processed_images.append((uploaded, compressed, stored_name))
+            for uploaded in attachments:
+                error = _validate_uploaded_file(uploaded)
+                if error:
+                    raise DRFValidationError({'attachments': f'{uploaded.name}: {error}'})
             problem = serializer.save(
                 table=prepared.table, problem_number=prepared.problem_number,
                 created_by=request.user, modified_by=request.user,
+                problem_type_prompts=prepared.problem_type_prompts,
             )
+            # Save files before finishing ticket creation, so a missing required
+            # upload cannot create a successfully finalized ticket.
+            for uploaded, compressed, stored_name in processed_images:
+                ProblemImage.objects.create(
+                    problem=problem, image=ContentFile(compressed, name=stored_name),
+                    original_name=(uploaded.name or 'image')[:255], uploaded_by=request.user,
+                    include_in_customer_notification=False,
+                )
+            for uploaded in attachments:
+                ProblemAttachment.objects.create(
+                    problem=problem, file=uploaded, original_name=(uploaded.name or 'attachment')[:255],
+                    content_type=(getattr(uploaded, 'content_type', '') or '')[:160],
+                    size_bytes=uploaded.size, uploaded_by=request.user,
+                    include_in_customer_notification=False,
+                )
             lifecycle_fields = problem.apply_acknowledgement_status_transition('', previous_dispose_automatically=False, changed_at=timezone.now())
             if lifecycle_fields:
                 problem.save(update_fields=list(dict.fromkeys(lifecycle_fields)))
@@ -769,7 +827,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                     details={'email_not_sent': 'customer', 'reason': not_sent_reason, 'changes': []},
                 )
             problem.transition_to_disposal_if_due(now=timezone.now())
-            if request.data.get('sent') is True:
+            if sent is True:
                 recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'mailto', prepared_token=prepared.tracking_token)
                 if recorded.status_code >= 400:
                     raise DRFValidationError(recorded.data)
@@ -782,6 +840,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             prepared.completed_problem = problem
             prepared.save(update_fields=['completed_problem'])
         return Response({'id': str(problem.pk)}, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, *args, **kwargs):
+        profile = getattr(request.user, 'tracker_profile', None)
+        if not (request.user.is_superuser or bool(profile and profile.is_admin)):
+            return Response(
+                {'detail': 'Only administrators can delete tickets.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
@@ -2092,7 +2159,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
 
 class ProblemContainerViewSet(viewsets.ModelViewSet):
-    queryset = (ProblemContainer.objects.select_related('created_by', 'disposed_by')
+    queryset = (ProblemContainer.objects.select_related('created_by', 'disposed_by', 'source_container', 'restored_to_container')
                 .prefetch_related('problem_samples__table')
                 .order_by('-id'))
     serializer_class = ProblemContainerSerializer
@@ -2119,77 +2186,87 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(container).data)
 
     def _apply_container_disposal(self, request, container, samples, disposal_samples, reason, *, history_extra=None):
+        """Move EVERY sample to a new dumping container; free the physical source.
+
+        Both the transfer and the workflow transitions are one database transaction
+        (the calling endpoint is @transaction.atomic). The dumping container alone
+        holds the rollback snapshot and the original source ID.
+        """
         now = timezone.now()
+        dump = ProblemContainer.objects.create(
+            created_by=request.user, is_dumping=True, source_container=container,
+            disposed_at=now, disposed_by=request.user,
+            dumped_sample_ids=[str(sample.pk) for sample in samples],
+        )
+        disposal_ids = {sample.pk for sample in disposal_samples}
         disposal_snapshot = {}
         history_extra = dict(history_extra or {})
-        for sample in disposal_samples:
-            values = dict(sample.custom_values or {})
+        history_extra.update({
+            'source_container_id': container.container_id,
+            'dumping_container_id': dump.container_id,
+        })
+        modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
+        for sample in samples:
             before = sample.workflow_status
-            before_auto = sample.dispose_automatically
-            disposal_snapshot[str(sample.id)] = {
-                'current_workflow': sample.current_workflow,
-                'custom_values': dict(sample.custom_values or {}),
-                'modified_by_id': sample.modified_by_id,
-                'acknowledged_at': sample.acknowledged_at.isoformat() if sample.acknowledged_at else None,
-                'acknowledgement_status_changed_at': (
-                    sample.acknowledgement_status_changed_at.isoformat()
-                    if sample.acknowledgement_status_changed_at else None
-                ),
-                'customer_acknowledgement_action': sample.customer_acknowledgement_action,
-                'automatic_disposal_started_at': (
-                    sample.automatic_disposal_started_at.isoformat()
-                    if sample.automatic_disposal_started_at else None
-                ),
-            }
-            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_DISPOSED
-            values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
-            modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
-            if sample.table_id:
-                for column in sample.table.columns.all():
-                    if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
-                        values[column.field_key] = modifier
-            sample.custom_values = values
-            sample.current_workflow = PROBLEM_STATUS_DISPOSED
-            sample.modified_by = request.user
-            lifecycle_fields = sample.apply_acknowledgement_status_transition(
-                before, previous_dispose_automatically=before_auto, changed_at=now,
-            )
-            sample.save(update_fields=list(dict.fromkeys([
-                'custom_values', 'current_workflow', 'modified_by', 'modified_at', *lifecycle_fields,
-            ])))
-            if before != PROBLEM_STATUS_DISPOSED:
-                details = {
-                    'changes': [{
-                        'field': 'Current Workflow',
-                        'before': before or '—',
-                        'after': PROBLEM_STATUS_DISPOSED,
-                    }],
-                    **history_extra,
+            changes = [{'field': 'Container ID', 'before': container.container_id, 'after': dump.container_id}]
+            update_fields = ['container', 'modified_at', 'modified_by']
+            if sample.pk in disposal_ids:
+                before_auto = sample.dispose_automatically
+                disposal_snapshot[str(sample.id)] = {
+                    'current_workflow': sample.current_workflow,
+                    'custom_values': dict(sample.custom_values or {}),
+                    'modified_by_id': sample.modified_by_id,
+                    'acknowledged_at': sample.acknowledged_at.isoformat() if sample.acknowledged_at else None,
+                    'acknowledgement_status_changed_at': (
+                        sample.acknowledgement_status_changed_at.isoformat()
+                        if sample.acknowledgement_status_changed_at else None
+                    ),
+                    'customer_acknowledgement_action': sample.customer_acknowledgement_action,
+                    'automatic_disposal_started_at': (
+                        sample.automatic_disposal_started_at.isoformat()
+                        if sample.automatic_disposal_started_at else None
+                    ),
                 }
-                ProblemHistory.objects.create(
-                    problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
-                    summary=f'Container {container.container_id} disposed',
-                    details=_history_details(details, reason),
+                values = dict(sample.custom_values or {})
+                values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_DISPOSED
+                values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
+                if sample.table_id:
+                    for column in sample.table.columns.all():
+                        if column.column_type == ProblemColumn.TYPE_RECENT_ROW_MODIFIER:
+                            values[column.field_key] = modifier
+                sample.custom_values = values
+                sample.current_workflow = PROBLEM_STATUS_DISPOSED
+                lifecycle_fields = sample.apply_acknowledgement_status_transition(
+                    before, previous_dispose_automatically=before_auto, changed_at=now,
                 )
+                update_fields += ['custom_values', 'current_workflow', *lifecycle_fields]
+                if before != PROBLEM_STATUS_DISPOSED:
+                    changes.append({'field': 'Current Workflow', 'before': before or '—', 'after': PROBLEM_STATUS_DISPOSED})
 
-        container.disposed_at = now
-        container.disposed_by = request.user
-        # Distinguish an all-Disposed container from legacy disposals that had
-        # no snapshot and still need a history-based rollback.
-        container.disposal_snapshot = disposal_snapshot or {'_no_rows_changed': True}
-        container.save(update_fields=['disposed_at', 'disposed_by', 'disposal_snapshot'])
-        if hasattr(container, '_container_samples_cache'):
-            delattr(container, '_container_samples_cache')
-        return Response(self.get_serializer(container).data)
+            sample.container = dump
+            sample.modified_by = request.user
+            sample.save(update_fields=list(dict.fromkeys(update_fields)))
+            ProblemHistory.objects.create(
+                problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+                summary=f'Container {container.container_id} disposed into {dump.container_id}',
+                details=_history_details({'changes': changes, **history_extra}, reason),
+            )
+
+        dump.disposal_snapshot = disposal_snapshot or {'_no_rows_changed': True}
+        dump.save(update_fields=['disposal_snapshot'])
+        # Source remains a normal, empty reusable container with the same ID.
+        return Response(self.get_serializer(dump).data)
 
     @action(detail=True, methods=['post'], url_path='dispose')
     @transaction.atomic
     def dispose(self, request, pk=None):
         container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        if container.is_dumping:
+            return Response({'detail': 'Dumping containers cannot be disposed again or reused.'}, status=status.HTTP_409_CONFLICT)
         if container.disposed_at:
             return Response(self.get_serializer(container).data)
         reason = _change_reason(request)
-        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
+        samples = list(container.problem_samples.select_for_update().prefetch_related('table__columns'))
         if not samples:
             return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
 
@@ -2215,11 +2292,13 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             )
 
         container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        if container.is_dumping:
+            return Response({'detail': 'Dumping containers cannot be disposed again or reused.'}, status=status.HTTP_409_CONFLICT)
         if container.disposed_at:
             return Response(self.get_serializer(container).data)
 
         reason = _change_reason(request)
-        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
+        samples = list(container.problem_samples.select_for_update().prefetch_related('table__columns'))
         if not samples:
             return Response({'detail': 'An empty container cannot be disposed.'}, status=status.HTTP_409_CONFLICT)
 
@@ -2251,11 +2330,28 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     @transaction.atomic
     def undo_disposal(self, request, pk=None):
         container = ProblemContainer.objects.select_for_update().get(pk=pk)
-        if not container.disposed_at:
-            return Response({'detail': 'This container has not been disposed.'}, status=status.HTTP_409_CONFLICT)
+        if not container.disposed_at or (container.is_dumping and container.restored_at):
+            return Response({'detail': 'This container does not have an active disposal to undo.'}, status=status.HTTP_409_CONFLICT)
+
+        destination = None
+        if container.is_dumping:
+            # Exactly one option must be supplied to prevent silently restoring
+            # into a stale source container that may have been reused already.
+            create_new = request.data.get('create_new_container') is True
+            destination_code = str(request.data.get('destination_container_id') or '').strip()
+            if create_new == bool(destination_code):
+                return Response({'detail': 'Choose an existing destination container OR create a new container.'}, status=status.HTTP_400_BAD_REQUEST)
+            if destination_code:
+                destination = ProblemContainer.resolve_identifier(destination_code)
+                if not destination:
+                    return Response({'detail': 'The selected destination container does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
+                destination = ProblemContainer.objects.select_for_update().get(pk=destination.pk)
+                if destination.is_dumping or destination.disposed_at:
+                    return Response({'detail': 'Choose an active, non-dumping destination container.'}, status=status.HTTP_409_CONFLICT)
+            # Defer creating a new container until all rollback checks succeed.
 
         reason = _change_reason(request)
-        samples = list(container.problem_samples.select_related('table').prefetch_related('table__columns'))
+        samples = list(container.problem_samples.select_for_update().prefetch_related('table__columns'))
         snapshot = container.disposal_snapshot or {}
 
         # A stamped container whose tickets were already Disposed needs only
@@ -2316,6 +2412,18 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 'blocking_problem_ids': missing,
             }, status=status.HTTP_409_CONFLICT)
 
+        if container.is_dumping:
+            transferred_ids = set(container.dumped_sample_ids or [])
+            if transferred_ids != {str(sample.pk) for sample in samples}:
+                return Response({'detail': 'The dumping container contents no longer match the original transfer. Undo was blocked.'}, status=status.HTTP_409_CONFLICT)
+            # Ensure even tickets that were Disposed before the transfer have not
+            # since entered a different workflow.
+            diverged = [sample.problem_number for sample in samples if sample.workflow_status != PROBLEM_STATUS_DISPOSED]
+            if diverged:
+                return Response({'detail': 'One or more transferred tickets changed after disposal.', 'blocking_problem_ids': diverged}, status=status.HTTP_409_CONFLICT)
+            if destination is None:
+                destination = ProblemContainer.objects.create(created_by=request.user)
+
         now = timezone.now()
         for sample, before, saved in restore_plan:
             if saved is not None:
@@ -2363,15 +2471,43 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                     ['custom_values', 'current_workflow', 'modified_by', 'modified_at'] + lifecycle_fields
                 ))
 
+            if container.is_dumping:
+                sample.container = destination
+                update_fields = list(dict.fromkeys([*update_fields, 'container']))
             sample.save(update_fields=update_fields)
             if saved is not None:
                 sample.set_tracking_link_expiration(sample.expected_tracking_link_expiration())
             ProblemHistory.objects.create(
                 problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
                 summary=f'Container {container.container_id} disposal undone',
-                details=_history_details({'changes': [{'field': 'Current Workflow', 'before': PROBLEM_STATUS_DISPOSED, 'after': before or '—'}]}, reason),
+                details=_history_details({'changes': [
+                    {'field': 'Current Workflow', 'before': PROBLEM_STATUS_DISPOSED, 'after': before or '—'},
+                    *([{'field': 'Container ID', 'before': container.container_id, 'after': destination.container_id}] if container.is_dumping else []),
+                ], 'source_container_id': container.source_container.container_id if container.is_dumping and container.source_container_id else None}, reason),
             )
 
+        if container.is_dumping:
+            changed_ids = {sample.pk for sample in rollback_samples}
+            for sample in samples:
+                if sample.pk in changed_ids:
+                    continue
+                sample.container = destination
+                sample.modified_by = request.user
+                sample.save(update_fields=['container', 'modified_by', 'modified_at'])
+                ProblemHistory.objects.create(
+                    problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+                    summary=f'Dumping container {container.container_id} restored',
+                    details=_history_details({'changes': [{
+                        'field': 'Container ID', 'before': container.container_id, 'after': destination.container_id,
+                    }]}, reason),
+                )
+            container.restored_at = now
+            container.restored_to_container = destination
+            container.save(update_fields=['restored_at', 'restored_to_container'])
+            return Response(self.get_serializer(container).data)
+
+        # Legacy container disposals (predating dumping containers) are retained
+        # for compatibility; these still clear their disposal stamp in place.
         container.disposed_at = None
         container.disposed_by = None
         container.disposal_snapshot = {}
@@ -2684,6 +2820,22 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
         table = instance.table
         removed_id = str(instance.id)
 
+        # Prune deleted targets from other mask definitions, preserving all
+        # other choice variants instead of leaving broken admin configuration.
+        for mask in table.columns.filter(column_type=ProblemColumn.TYPE_PROBLEM_TYPE).exclude(pk=instance.pk):
+            rules = dict(mask.form_mask_rules or {})
+            modified = False
+            for choice, config in rules.items():
+                if isinstance(config, dict) and removed_id in (config.get('columns') or {}):
+                    clean = dict(config)
+                    clean['columns'] = dict(config.get('columns') or {})
+                    clean['columns'].pop(removed_id, None)
+                    rules[choice] = clean
+                    modified = True
+            if modified:
+                mask.form_mask_rules = rules
+                mask.save(update_fields=['form_mask_rules', 'modified_at'])
+
         # Remove this field from any prioritized Client Email dependency chains.
         dependent_email_columns = list(table.columns.filter(column_type=ProblemColumn.TYPE_CLIENT_EMAIL).exclude(pk=instance.pk))
         affected_email_columns = []
@@ -2858,6 +3010,24 @@ class ProblemAcknowledgementView(APIView):
         audit details are intentionally excluded from the public tracking API.
         """
         messages = []
+        for index, prompt in enumerate(problem.problem_type_prompts or []):
+            if not isinstance(prompt, dict):
+                continue
+            message = str(prompt.get('message') or '').strip()
+            if not message:
+                continue
+            column = str(prompt.get('column') or 'Problem Type').strip()
+            choice = str(prompt.get('choice') or '').strip()
+            heading = f'{column}: {choice}' if choice else column
+            messages.append({
+                'id': f'problem-type-{index}',
+                'sender': 'staff',
+                'sender_label': 'ALS Edmonton',
+                'message': f'{heading}\n\n{message}',
+                'created_at': problem.created_at,
+                'images': [],
+                'attachments': [],
+            })
         latest_customer_signature = self._latest_customer_signature(problem)
         history = problem.history.select_related('actor').order_by('created_at', 'id')
         for entry in history:
@@ -2999,7 +3169,18 @@ class ProblemAcknowledgementView(APIView):
         # Expose these fields explicitly for the customer-message chat panel.
         # The issue may be called Problem Issue, Issue Description, or Reason for Hold
         # in different table schemas, so normalize those labels here.
-        problem_type = public_detail_value('Problem Type') or str(problem.problem_type or '').strip()
+        # A Problem Type column can have any admin-provided name: use its type,
+        # not only the literal column label, for the public tracking context.
+        configured_type = ''
+        if problem.table_id:
+            for column in problem.table.columns.all():
+                if column.column_type != ProblemColumn.TYPE_PROBLEM_TYPE:
+                    continue
+                selected = (problem.custom_values or {}).get(column.field_key)
+                if isinstance(selected, str) and selected.strip():
+                    configured_type = selected.strip()
+                    break
+        problem_type = configured_type or public_detail_value('Problem Type') or str(problem.problem_type or '').strip()
         problem_issue = (
             public_detail_value('Problem Issue', 'Issue Description', 'Issue', 'Reason for Hold', 'Hold Reason')
             or str(problem.issue_description or '').strip()

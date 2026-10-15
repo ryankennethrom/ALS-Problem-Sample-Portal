@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
+from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, resolve_problem_type, FORM_MASK_STATES, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
 
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
 
@@ -35,7 +35,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
             'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
-            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'position', 'is_system',
+            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'form_mask_rules', 'position', 'is_system',
             'created_at', 'modified_at',
         ]
         read_only_fields = ['field_key', 'is_system', 'group_users', 'depends_on_column_name', 'depends_on_field_key', 'client_email_dependency_details', 'created_at', 'modified_at']
@@ -245,7 +245,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             attrs['group_role'] = ''
 
         choices = attrs.get('choices', getattr(self.instance, 'choices', [])) or []
-        if column_type in {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_MULTI_CHOICE}:
+        if column_type in {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_MULTI_CHOICE, ProblemColumn.TYPE_PROBLEM_TYPE}:
             if not isinstance(choices, list) or not all(isinstance(x, str) and x.strip() for x in choices):
                 raise serializers.ValidationError({'choices': 'Choice columns require a list of non-empty text options.'})
             cleaned = []
@@ -258,6 +258,54 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             attrs['choices'] = cleaned
         else:
             attrs['choices'] = []
+
+        # A mask is a choice field whose selections define explicit creation-time
+        # visibility. Column keys are stable UUIDs, not mutable field names.
+        if column_type == ProblemColumn.TYPE_PROBLEM_TYPE:
+            raw_masks = attrs.get('form_mask_rules', getattr(self.instance, 'form_mask_rules', {})) or {}
+            if not isinstance(raw_masks, dict):
+                raise serializers.ValidationError({'form_mask_rules': 'Mask rules must be an object keyed by choice.'})
+            unknown = set(raw_masks) - set(attrs['choices'])
+            if unknown:
+                raise serializers.ValidationError({'form_mask_rules': f'Rules reference unknown choices: {", ".join(sorted(unknown))}.'})
+            all_columns = {str(candidate.pk): candidate for candidate in table.columns.all()} if table else {}
+            cleaned_masks = {}
+            for choice in attrs['choices']:
+                config = raw_masks.get(choice, {})
+                if not isinstance(config, dict):
+                    raise serializers.ValidationError({'form_mask_rules': f'{choice}: expected a rule object.'})
+                raw_columns = config.get('columns', {})
+                if not isinstance(raw_columns, dict):
+                    raise serializers.ValidationError({'form_mask_rules': f'{choice}: columns must be an object.'})
+                cleaned_columns = {}
+                for col_id, state in raw_columns.items():
+                    target = all_columns.get(str(col_id))
+                    if target is None or (self.instance and target.pk == self.instance.pk):
+                        raise serializers.ValidationError({'form_mask_rules': f'{choice}: one referenced column is missing or is this mask.'})
+                    if target.column_type == ProblemColumn.TYPE_PROBLEM_TYPE:
+                        raise serializers.ValidationError({'form_mask_rules': f'{choice}: mask columns must always remain visible.'})
+                    if state not in FORM_MASK_STATES:
+                        raise serializers.ValidationError({'form_mask_rules': f'{choice}: invalid state for {target.name}.'})
+                    if (target.required and state != 'required'
+                            and target.column_type not in {ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR,
+                                                           ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}
+                            and target.field_key not in {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+                            and (target.default_value is None or target.default_value == '' or target.default_value == [])):
+                        raise serializers.ValidationError({'form_mask_rules': f'{choice}: {target.name} is database-required. Give it a default before marking it {state}.'})
+                    cleaned_columns[str(col_id)] = state
+                images = config.get('images')
+                attachments = config.get('attachments')
+                if (images is not None and images not in FORM_MASK_STATES) or (attachments is not None and attachments not in FORM_MASK_STATES):
+                    raise serializers.ValidationError({'form_mask_rules': f'{choice}: invalid image or attachment state.'})
+                customer_details = config.get('customer_details', '')
+                if not isinstance(customer_details, str):
+                    raise serializers.ValidationError({'form_mask_rules': f'{choice}: customer details must be text.'})
+                if len(customer_details.strip()) > 8000:
+                    raise serializers.ValidationError({'form_mask_rules': f'{choice}: customer details must be 8000 characters or fewer.'})
+                cleaned_masks[choice] = {'columns': cleaned_columns, **({'images': images} if images is not None else {}), **({'attachments': attachments} if attachments is not None else {}), **({'customer_details': customer_details.strip()} if customer_details.strip() else {})}
+            attrs['form_mask_rules'] = cleaned_masks
+        else:
+            attrs['form_mask_rules'] = {}
 
         # Fixed Value, Row Creator, and Recent Row Modifier columns are read-only
         # on individual rows. The two user-audit types are populated by the server.
@@ -319,6 +367,20 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'default_value': 'Choose a default user before changing the group on a required column that already contains rows.'
             })
+        # Do not let a later edit of a database-required column invalidate
+        # existing masks by removing the default those masks depend on.
+        if (self.instance is not None and table and required
+                and column_type not in {ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR,
+                                        ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}
+                and self.instance.field_key not in {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+                and attrs.get('default_value') is None):
+            for mask in table.columns.filter(column_type=ProblemColumn.TYPE_PROBLEM_TYPE).exclude(pk=self.instance.pk):
+                for choice, configuration in (mask.form_mask_rules or {}).items():
+                    state = (configuration.get('columns') or {}).get(str(self.instance.pk)) if isinstance(configuration, dict) else None
+                    if state in {'hidden', 'shown'}:
+                        raise serializers.ValidationError({
+                            'default_value': f'{mask.name} ({choice}) makes this required field optional or hidden. Configure a default value first.'
+                        })
         return attrs
 
     def create(self, validated_data):
@@ -463,6 +525,8 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
     all_expired = serializers.SerializerMethodField()
     ready_to_dispose = serializers.SerializerMethodField()
     disposed_by_email = serializers.EmailField(source='disposed_by.email', read_only=True)
+    source_container_id = serializers.SerializerMethodField()
+    restored_to_container_id = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     samples = serializers.SerializerMethodField()
 
@@ -472,8 +536,16 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
             'id', 'container_id', 'sample_count', 'expired_count', 'active_count',
             'unnotified_count', 'all_expired', 'ready_to_dispose', 'status', 'samples',
             'created_by_email', 'created_at', 'disposed_at', 'disposed_by_email',
+            'is_dumping', 'source_container_id', 'dumped_sample_ids',
+            'restored_at', 'restored_to_container_id',
         ]
         read_only_fields = fields
+
+    def get_source_container_id(self, obj):
+        return obj.source_container.container_id if obj.source_container_id else None
+
+    def get_restored_to_container_id(self, obj):
+        return obj.restored_to_container.container_id if obj.restored_to_container_id else None
 
     def _samples(self, obj):
         cache_name = '_container_samples_cache'
@@ -506,10 +578,14 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
         return sample.workflow_status in {PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED}
 
     def get_ready_to_dispose(self, obj):
+        if obj.is_dumping:
+            return False
         samples = self._samples(obj)
         return bool(samples) and all(self._sample_ready_for_disposal(sample) for sample in samples)
 
     def get_status(self, obj):
+        if obj.is_dumping and obj.restored_at:
+            return 'restored'
         if obj.disposed_at:
             return 'disposed'
         all_samples = self._samples(obj)
@@ -653,7 +729,7 @@ def _validate_custom_value(column, value):
             return float(value)
         except (TypeError, ValueError):
             raise serializers.ValidationError('Must be a number.')
-    if kind == ProblemColumn.TYPE_CHOICE:
+    if kind in {ProblemColumn.TYPE_CHOICE, ProblemColumn.TYPE_PROBLEM_TYPE}:
         if value not in column.choices:
             raise serializers.ValidationError(f'Must be one of: {", ".join(column.choices)}')
         return value
@@ -758,6 +834,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     table_name = serializers.CharField(source='table.name', read_only=True)
     search_score = serializers.FloatField(read_only=True, required=False)
     container_id = serializers.CharField(source='container.container_id', read_only=True)
+    container_is_dumping = serializers.BooleanField(source='container.is_dumping', read_only=True)
     container_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
     pt_days = serializers.IntegerField(source='table.pt_days', read_only=True)
     expires_at = serializers.SerializerMethodField()
@@ -772,7 +849,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemSample
         fields = '__all__'
-        read_only_fields = ['problem_number', 'container', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'created_at', 'modified_at']
+        read_only_fields = ['problem_number', 'container', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
 
     def get_expires_at(self, obj):
         return obj.expires_at
@@ -812,7 +889,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 container = ProblemContainer.resolve_identifier(container_code)
                 if not container:
                     raise serializers.ValidationError({'container_code': 'Container not found.'})
-                if container.disposed_at:
+                if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
         elif container_code:
@@ -822,11 +899,11 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             if instance.container_id and instance.container_id != container.pk:
                 if instance.container and instance.container.disposed_at:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be moved out of a disposed container. Undo that container disposal first.'})
-                if container.disposed_at:
+                if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be moved into a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
             elif not instance.container_id:
-                if container.disposed_at:
+                if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
         elif instance is not None and container_code == '' and instance.container_id:
@@ -914,6 +991,14 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 ).strip()
             merged[key] = modifier
 
+        # Mask resolution is based on the actual selected mask values. Hidden
+        # fields are never accepted from the client during ticket creation.
+        mask_decisions = resolve_problem_type(table, merged) if instance is None else {}
+        if instance is None:
+            for key, decision in mask_decisions.items():
+                if decision == 'hidden' and key in columns:
+                    merged.pop(key, None)
+
         # Apply ordinary column defaults on row creation. The frontend also
         # prefills these values, but enforcing them here keeps API-created rows
         # consistent too.
@@ -981,6 +1066,10 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             if column.required and _is_empty(merged.get(key)):
                 errors[key] = 'This field is required.'
 
+        if instance is None:
+            for key, decision in mask_decisions.items():
+                if decision == 'required' and key in columns and _is_empty(merged.get(key)):
+                    errors[key] = 'This field is required by the selected Problem Type.'
         if errors:
             raise serializers.ValidationError({'custom_values': errors})
 
