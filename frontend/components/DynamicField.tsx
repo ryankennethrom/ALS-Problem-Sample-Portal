@@ -6,6 +6,7 @@ import EndUserAutocomplete from '@/components/EndUserAutocomplete';
 import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
 import BrandAutocomplete from '@/components/BrandAutocomplete';
 import ColumnInfo from '@/components/ColumnInfo';
+import { useCurrentUser } from '@/components/CurrentUserContext';
 
 function ColumnFieldLabel({
   column,
@@ -24,6 +25,8 @@ function ColumnFieldLabel({
 }
 
 export default function DynamicField({ column, value, allValues = {}, onChange }: { column: ProblemColumn; value: unknown; allValues?: Record<string, unknown>; onChange: (value: unknown) => void }) {
+  const currentUser = useCurrentUser();
+  const noBackToTesting = column.field_key === 'current-workflow' && currentUser?.role === 'customer_service';
   const id = `custom-${column.id}`;
   const common = { id, required: column.required };
 
@@ -72,7 +75,7 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
   }
   if (column.column_type === 'choice' || column.column_type === 'problem_type') {
     const current = String(value ?? '');
-    return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><select {...common} className="select" value={current} onChange={e => onChange(e.target.value)}><option value="">-- Select --</option>{column.choices.map(c => <option key={c} value={c}>{c}</option>)}</select></div>;
+    return <div className="field"><ColumnFieldLabel column={column} htmlFor={id}/><select {...common} className="select" value={current} onChange={e => onChange(e.target.value)}><option value="">-- Select --</option>{column.choices.map(c => <option key={c} value={c} disabled={noBackToTesting && c === 'Back to testing'}>{c}</option>)}</select>{noBackToTesting && <div className="muted result-meta">Only Lab staff can move a ticket to Back to testing.</div>}</div>;
   }
   if (column.column_type === 'multi_choice') {
     const selected = Array.isArray(value) ? value.map(String) : [];

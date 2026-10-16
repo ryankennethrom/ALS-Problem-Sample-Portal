@@ -1122,3 +1122,72 @@ a.result:hover{background:#f7f9fb}
 .dump-restore-header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:15px}
 .dump-restore-header h2{margin:0;font-size:20px}
 .container-status-restored{background:#e8f4ea;color:#20743a;border-color:#abd5b5}
+
+/* Take back sample(s): choose return method before modifying workflow. */
+.public-return-dialog{width:min(590px,100%)}
+.public-return-options{display:grid;gap:12px;margin-top:12px}
+.public-return-options>label{display:flex;align-items:flex-start;gap:11px;padding:12px 14px;border:1px solid #d7dfe6;border-radius:6px;background:#f8fafc;cursor:pointer;line-height:1.5;color:#273743}
+.public-return-options>label input[type=radio]{margin-top:5px;flex:0 0 auto;accent-color:#1d6fb8}
+.public-return-options>label:has(input:checked){border-color:#1d6fb8;background:#edf5fb}
+.public-return-account{display:grid;gap:7px;padding:0 14px 3px 39px}
+.public-return-account label{font-size:13px;font-weight:700;color:#273743}
+.public-return-account input{width:100%;padding:11px 12px;font:inherit;border-radius:5px;border:1px solid #aebfc9}
+.public-return-account input:focus{outline:2px solid #91bbdf;border-color:#1d6fb8}
+
+/* Responsive drawer: the mobile menu button must actually open navigation.
+   The desktop collapsed-sidebar setting is deliberately ignored below 900px. */
+/* Native drawer switch: sibling CSS makes it independent from React click handlers. */
+.mobile-sidebar-switch{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden}
+.mobile-sidebar-backdrop,.mobile-sidebar-close,.mobile-menu-toggle{display:none}
+.desktop-menu-toggle{display:grid}
+@media (max-width:900px){
+  .desktop-menu-toggle{display:none}
+  .mobile-menu-toggle{display:grid;align-items:center;justify-items:center}
+  .mobile-menu-toggle span{grid-column:1;}
+  .mobile-menu-toggle{display:grid;place-content:center;gap:4px;cursor:pointer}
+  .mobile-menu-toggle:focus-visible{outline:2px solid #1687f8;outline-offset:-3px}
+  .admin-shell .sidebar,.admin-shell.sidebar-collapsed .sidebar{
+    display:block;width:min(350px,calc(100vw - 44px));max-width:100%;height:100dvh;
+    transform:translateX(-105%);visibility:hidden;pointer-events:none;
+    transition:transform .2s ease,visibility .2s ease;
+    z-index:81;overflow-y:auto;overscroll-behavior:contain;
+  }
+  /* The checked input and sidebar are siblings: works without hydration. */
+  .admin-shell #mobile-sidebar-switch:checked ~ .sidebar{
+    transform:translateX(0);visibility:visible;pointer-events:auto;
+  }
+  .admin-shell .main-column,.admin-shell.sidebar-collapsed .main-column{margin-left:0}
+  .admin-shell .sidebar .brand-label,
+  .admin-shell .sidebar .user-copy,
+  .admin-shell .sidebar .side-label{display:block}
+  .admin-shell .sidebar .sidebar-brand{padding:0 54px 0 24px}
+  .admin-shell .sidebar .user-panel{padding:14px;margin:0 10px;justify-content:flex-start}
+  .admin-shell .sidebar .side-nav{padding:16px 9px;max-height:none;overflow:visible}
+  .admin-shell .sidebar .side-link{padding:0 18px;justify-content:flex-start}
+  .admin-shell .sidebar .side-group-chevron{display:grid}
+  .admin-shell .sidebar .side-group-expand{display:grid}
+  .admin-shell .sidebar .side-subnav{display:grid}
+  .admin-shell .sidebar .side-empty-label,
+  .admin-shell .sidebar .side-section-label{display:block}
+  .admin-shell .sidebar .side-group-header .side-link{padding-right:48px}
+  .admin-shell .sidebar .side-subnav .table-side-link{padding-left:16px}
+  .admin-shell .sidebar .side-count-badge{
+    position:static;min-width:22px;height:22px;padding:0 6px;font-size:11px;
+  }
+  .admin-shell .sidebar .side-nav-divider{margin:8px 10px}
+  .mobile-sidebar-backdrop{
+    display:none;position:fixed;inset:0;border:0;border-radius:0;
+    background:rgba(15,23,32,.55);z-index:80;cursor:pointer;
+  }
+  .admin-shell #mobile-sidebar-switch:checked ~ .mobile-sidebar-backdrop{display:block}
+  .mobile-sidebar-close{
+    display:flex;position:absolute;right:7px;top:7px;align-items:center;
+    justify-content:center;width:44px;height:44px;border:0;border-radius:6px;
+    color:#fff;background:rgba(255,255,255,.1);font-size:28px;z-index:1;cursor:pointer;
+  }
+  .mobile-sidebar-close:focus-visible,.menu-toggle:focus-visible{outline:2px solid #1687f8;outline-offset:-3px}
+  .topbar-title{display:block}
+}
+@media (prefers-reduced-motion:reduce){
+  .admin-shell .sidebar{transition:none}
+}

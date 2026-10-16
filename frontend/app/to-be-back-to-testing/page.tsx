@@ -7,6 +7,7 @@ import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import WorkflowQueueAdvancedSearch from '@/components/WorkflowQueueAdvancedSearch';
 import BackToTestingEmailModal from '@/components/BackToTestingEmailModal';
+import { useCurrentUser } from '@/components/CurrentUserContext';
 import { QueueAdvancedFilter, QueueMatchMode, matchesWorkflowQueueAdvanced, matchesWorkflowQueueSearch } from '@/lib/workflowQueueSearch';
 
 type TestingSample = {
@@ -40,6 +41,8 @@ function rowValue(item: TestingSample, directValue: unknown, fieldKeys: string[]
 }
 
 export default function ToBeBackToTestingPage() {
+  const currentUser = useCurrentUser();
+  const isCustomerService = currentUser?.role === 'customer_service';
   const { requestChangeReason, changeReasonModal } = useChangeReasonModal();
   const [items, setItems] = useState<TestingSample[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -90,7 +93,7 @@ export default function ToBeBackToTestingPage() {
   }
 
   async function moveSelected() {
-    if (!selectedCount) return;
+    if (isCustomerService || !selectedCount) return;
     const noun = selectedCount === 1 ? 'ticket' : 'tickets';
     const reason = await requestChangeReason(`Why are you making this change to ${selectedCount} selected ${noun}?`);
     if (reason === null) return;
@@ -127,10 +130,10 @@ export default function ToBeBackToTestingPage() {
       <div>
         <div className="eyebrow">Testing</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>To be back to testing</h1>
-        <div className="muted table-description">Select one or more tickets awaiting testing, then confirm the NA.EDM email to move them Back to testing together.</div>
+        <div className="muted table-description">{isCustomerService ? 'Only Lab staff can move tickets Back to testing. You can still view the queue.' : 'Select one or more tickets awaiting testing, then confirm the NA.EDM email to move them Back to testing together.'}</div>
       </div>
       <div className="toolbar-actions">
-        <button className="button" type="button" onClick={moveSelected} disabled={!selectedCount || updating || Boolean(pendingSelection)}>
+        <button className="button" type="button" onClick={moveSelected} disabled={isCustomerService || !selectedCount || updating || Boolean(pendingSelection)}>
           {updating ? 'Updating…' : selectedCount ? `Move Selected (${selectedCount})` : 'Move Selected'}
         </button>
       </div>
@@ -166,7 +169,7 @@ export default function ToBeBackToTestingPage() {
           <thead>
             <tr>
               <th className="shipping-select-column">
-                <input type="checkbox" aria-label="Select all visible samples" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={filtered.length === 0 || updating || Boolean(pendingSelection)} />
+                <input type="checkbox" aria-label="Select all visible samples" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={isCustomerService || filtered.length === 0 || updating || Boolean(pendingSelection)} />
               </th>
               <th>Ticket ID</th>
               <th>Date Created</th>
@@ -183,7 +186,7 @@ export default function ToBeBackToTestingPage() {
             {!loading && filtered.length === 0 && <tr><td colSpan={10} className="empty-table">{items.length ? 'No tickets match your search.' : 'No tickets are awaiting testing.'}</td></tr>}
             {loading && <tr><td colSpan={10} className="empty-table">Loading samples…</td></tr>}
             {!loading && filtered.map(item => <tr key={item.id} className={selected.has(item.id) ? 'shipping-row-selected' : ''}>
-              <td className="shipping-select-column"><input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={updating || Boolean(pendingSelection)} /></td>
+              <td className="shipping-select-column"><input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={isCustomerService || updating || Boolean(pendingSelection)} /></td>
               <td><Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link></td>
               <td>{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</td>
               <td>{item.table_name || '—'}</td>

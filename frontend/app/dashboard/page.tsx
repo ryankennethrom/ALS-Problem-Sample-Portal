@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
 import { useCurrentUser } from '@/components/CurrentUserContext';
@@ -58,25 +58,47 @@ function dateOffset(days:number) {
 }
 
 function Chart({points,ariaLabel,tooltipNoun='ticket'}:{points:Point[];ariaLabel:string;tooltipNoun?:string}) {
-  const W=920,H=320,L=52,R=20,T=20,B=56,iw=W-L-R,ih=H-T-B;
-  const max=Math.max(1,...points.map(p=>p.count));
-  const ymax=max<=4?4:Math.ceil(max/4)*4;
-  const step=points.length<2?0:iw/(points.length-1);
-  const pts=points.map((p,i)=>({...p,x:L+(points.length<2?iw/2:i*step),y:T+ih-p.count/ymax*ih}));
-  const line=pts.map(p=>`${p.x},${p.y}`).join(' ');
-  const every=Math.max(1,Math.ceil(points.length/8));
-  return <div className={styles.scroll}>
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(0);
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const measure = () => setAvailableWidth(element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  // Keep a readable vertical scale on phones instead of shrinking a 920px SVG.
+  const W = Math.max(250, availableWidth || 920);
+  const compact = W < 550;
+  const H = compact ? 270 : 320;
+  const L = compact ? 38 : 52, R = compact ? 12 : 20, T = 24, B = compact ? 56 : 56;
+  const iw = W-L-R, ih = H-T-B;
+  const max = Math.max(1, ...points.map(p => p.count));
+  const ymax = max <= 4 ? 4 : Math.ceil(max/4)*4;
+  const step = points.length < 2 ? 0 : iw/(points.length-1);
+  const pts = points.map((p,i) => ({...p,x:L+(points.length<2 ? iw/2 : i*step),y:T+ih-p.count/ymax*ih}));
+  const line = pts.map(p => `${p.x},${p.y}`).join(' ');
+  const labelCount = Math.max(2, Math.floor(iw/(compact ? 76 : 105)));
+  const lastIndex = pts.length - 1;
+  const ticks = new Set<number>();
+  if (pts.length) {
+    for (let i=0; i<labelCount; i++) ticks.add(Math.round(i*lastIndex/(labelCount-1)));
+  }
+  return <div ref={chartRef} className={styles.scroll}>
     <svg viewBox={`0 0 ${W} ${H}`} className={styles.chart} role="img" aria-label={ariaLabel}>
-      {[0,1,2,3,4].map(i=>{const v=Math.round(ymax*i/4),y=T+ih-v/ymax*ih;return <g key={i}>
+      {[0,1,2,3,4].map(i => {const v=Math.round(ymax*i/4), y=T+ih-v/ymax*ih;return <g key={i}>
         <line x1={L} x2={W-R} y1={y} y2={y} className={styles.grid}/>
         <text x={L-8} y={y+4} textAnchor="end">{v}</text>
       </g>})}
       {pts.length>1 && <polyline points={line} className={styles.line} fill="none"/>}
-      {pts.map((p,i)=><g key={p.period}>
-        <circle cx={p.x} cy={p.y} r="4" className={styles.point}>
+      {pts.map((p,i) => <g key={p.period}>
+        <circle cx={p.x} cy={p.y} r={compact ? 3 : 4} className={styles.point}>
           <title>{p.label}: {p.count} {tooltipNoun}{p.count===1?'':'s'}</title>
         </circle>
-        {(i%every===0||i===pts.length-1) && <text x={p.x} y={H-21} textAnchor="middle">{p.label.replace('Week of ','')}</text>}
+        {ticks.has(i) && <text x={p.x} y={H-19} textAnchor={i===0 ? 'start' : i===lastIndex ? 'end' : 'middle'}>{p.label.replace('Week of ','')}</text>}
       </g>)}
     </svg>
   </div>;

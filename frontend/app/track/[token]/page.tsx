@@ -7,6 +7,7 @@ const API = '/backend-api';
 const TRACKING_API = `${API}/public/problem-sample-tracking`;
 
 type CustomerAction = '' | 'dispose' | 'ship_back' | 'hold' | 'requested_info';
+type ShippingMethod = '' | 'courier_account' | 'pickup' | 'shipping_quote';
 
 type PublicImage = { id: number; name: string; size_bytes: number };
 type PublicAttachment = { id: number; name: string; size_bytes: number; content_type?: string };
@@ -27,7 +28,6 @@ type TrackingState = {
   message: string;
   problem_number?: number;
   problem_type?: string;
-  problem_issue?: string;
   ticket_status?: string;
   acknowledged_at?: string;
   visible_until?: string;
@@ -63,7 +63,7 @@ function formatConversationTime(value: string) {
 
 const actionLabels: Record<Exclude<CustomerAction, ''>, string> = {
   dispose: 'Dispose Sample(s)',
-  ship_back: 'Ship back samples',
+  ship_back: 'Take back sample(s)',
   hold: 'Hold sample',
   requested_info: 'Message us about the issue',
 };
@@ -75,6 +75,9 @@ export default function ProblemSampleTrackingPage() {
   const [busy, setBusy] = useState(false);
   const [signature, setSignature] = useState('');
   const [requestedInfoOpen, setRequestedInfoOpen] = useState(false);
+  const [returnDialogOpen, setReturnDialogOpen] = useState(false);
+  const [shippingMethod, setShippingMethod] = useState<ShippingMethod>('');
+  const [courierAccountNumber, setCourierAccountNumber] = useState('');
   const [requestedInformation, setRequestedInformation] = useState('');
   const [requestedImages, setRequestedImages] = useState<File[]>([]);
   const [requestedAttachments, setRequestedAttachments] = useState<File[]>([]);
@@ -133,6 +136,8 @@ export default function ProblemSampleTrackingPage() {
     requestedInfo = '',
     images: File[] = [],
     attachments: File[] = [],
+    returnMethod: ShippingMethod = '',
+    returnCourierAccount = '',
   ) {
     const signedName = effectiveSignature;
     if (busy || !signedName) return;
@@ -152,7 +157,10 @@ export default function ProblemSampleTrackingPage() {
         response = await fetch(`${TRACKING_API}/${token}/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, signature: signedName, requested_information: requestedInfo.trim() }),
+          body: JSON.stringify({
+            action, signature: signedName, requested_information: requestedInfo.trim(),
+            ...(action === 'ship_back' ? { shipping_method: returnMethod, courier_account_number: returnMethod === 'courier_account' ? returnCourierAccount.trim() : '' } : {}),
+          }),
         });
       }
       const body = await response.json().catch(() => ({}));
@@ -161,6 +169,11 @@ export default function ProblemSampleTrackingPage() {
       setRequestedInformation('');
       setRequestedImages([]);
       setRequestedAttachments([]);
+      if (action === 'ship_back') {
+        setReturnDialogOpen(false);
+        setShippingMethod('');
+        setCourierAccountNumber('');
+      }
       if (action === 'requested_info') {
         // Keep the chat open so the customer immediately sees the new message
         // in the conversation thread and can continue the correspondence.
@@ -252,7 +265,9 @@ export default function ProblemSampleTrackingPage() {
           <div className="public-ack-action-buttons">
             <button className="button" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about the issue</button>
-            <button className="button secondary" disabled={busy || !signature.trim()} onClick={() => chooseAction('ship_back')}>Ship back</button>
+            <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => {
+              setError(''); setShippingMethod(''); setCourierAccountNumber(''); setReturnDialogOpen(true);
+            }}>Take back sample(s)</button>
           </div>
         </div>}
         {data.state === 'acknowledged' && !data.can_choose_action && data.customer_action && <div className="public-ack-selection">
@@ -264,6 +279,37 @@ export default function ProblemSampleTrackingPage() {
         {data.state === 'dumped' && <p>This ticket has been disposed. No customer action is available.</p>}
         {data.state === 'expired' && <p>This ticket tracking link is no longer active.</p>}
       </>}
+
+        {returnDialogOpen && <div className="public-requested-info-overlay" role="presentation" onMouseDown={event => {
+          if (event.target === event.currentTarget && !busy) setReturnDialogOpen(false);
+        }}>
+          <section className="public-requested-info-dialog public-return-dialog" role="dialog" aria-modal="true" aria-labelledby="return-samples-title">
+            <h2 id="return-samples-title">Take back sample(s)</h2>
+            <p>We do not charge a client handling fee. However, shipping charges still apply.</p>
+            <p><strong>Please let us know which option you prefer:</strong></p>
+            <div className="public-return-options" role="radiogroup" aria-label="Return method">
+              <label><input type="radio" name="return-method" checked={shippingMethod === 'courier_account'} disabled={busy} onChange={() => setShippingMethod('courier_account')} />
+                <span>1. Provide your courier account number, if available.</span>
+              </label>
+              {shippingMethod === 'courier_account' && <div className="public-return-account">
+                <label htmlFor="return-courier-account">Courier account number <strong aria-hidden="true">*</strong></label>
+                <input id="return-courier-account" type="text" maxLength={200} value={courierAccountNumber} onChange={event => setCourierAccountNumber(event.target.value)} autoComplete="off" disabled={busy} required placeholder="Enter your courier account number" />
+              </div>}
+              <label><input type="radio" name="return-method" checked={shippingMethod === 'pickup'} disabled={busy} onChange={() => setShippingMethod('pickup')} />
+                <span>2. Pick up in person.</span>
+              </label>
+              <label><input type="radio" name="return-method" checked={shippingMethod === 'shipping_quote'} disabled={busy} onChange={() => setShippingMethod('shipping_quote')} />
+                <span>3. Receive a quote for the shipping charges.</span>
+              </label>
+            </div>
+            {error && <p className="error" role="alert">{error}</p>}
+            <div className="public-requested-info-signature">Submitting as: <strong>{effectiveSignature}</strong></div>
+            <div className="public-requested-info-actions">
+              <button className="button secondary" type="button" disabled={busy} onClick={() => setReturnDialogOpen(false)}>Cancel</button>
+              <button className="button" type="button" disabled={busy || !effectiveSignature || !shippingMethod || (shippingMethod === 'courier_account' && !courierAccountNumber.trim())} onClick={() => chooseAction('ship_back', '', [], [], shippingMethod, courierAccountNumber)}>{busy ? 'Saving…' : 'Confirm return method'}</button>
+            </div>
+          </section>
+        </div>}
 
         {requestedInfoOpen && <div className="public-requested-info-overlay public-chat-overlay" role="presentation" onMouseDown={event => {
           if (event.target === event.currentTarget && !busy) setRequestedInfoOpen(false);
@@ -285,7 +331,6 @@ export default function ProblemSampleTrackingPage() {
 
             <div className="public-chat-ticket-context" aria-label="Issue details">
               <div><span>Problem Type</span><strong>{data?.problem_type || 'Not provided'}</strong></div>
-              <div><span>Problem Issue</span><strong>{data?.problem_issue || 'Not provided'}</strong></div>
             </div>
 
             <div className="public-chat-thread" aria-label="Conversation history">

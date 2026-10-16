@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, clearToken, getToken } from '@/lib/api';
 import { accountSetupUrl, currentReturnPath, loginUrl, requestedReturnPath } from '@/lib/authRedirect';
 import { ProblemTable } from '@/lib/problemTables';
@@ -36,11 +36,69 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [narrowScreen, setNarrowScreen] = useState(false);
+  const mobileCloseRef = useRef<HTMLLabelElement>(null);
+  const menuToggleRef = useRef<HTMLLabelElement>(null);
+  // A native checkbox controls the mobile drawer even before hydration or if
+  // JavaScript fails to initialize on the client's browser.
+  const mobileDrawerRef = useRef<HTMLInputElement>(null);
   const [user, setUser] = useState<User | null>(null);
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [problemSamplesOpen, setProblemSamplesOpen] = useState(pathname === '/problem-samples');
   const [disposalOpen, setDisposalOpen] = useState(false);
   const [mentionUnread, setMentionUnread] = useState(0);
+
+  function closeMobileDrawer() {
+    if (mobileDrawerRef.current) mobileDrawerRef.current.checked = false;
+    setMobileOpen(false);
+  }
+
+  // A narrow screen uses a real off-canvas drawer, not the desktop icon-only sidebar.
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 900px)');
+    const update = () => {
+      setNarrowScreen(query.matches);
+      if (!query.matches) closeMobileDrawer();
+    };
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  // Route changes (including browser back/forward navigation) dismiss the drawer.
+  useEffect(() => { closeMobileDrawer(); }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen || !narrowScreen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    mobileCloseRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMobileDrawer();
+        menuToggleRef.current?.focus();
+      }
+      // Keep keyboard focus in the open navigation drawer.
+      if (event.key === 'Tab') {
+        const items = Array.from(document.querySelectorAll<HTMLElement>(
+          '#main-sidebar a[href], #main-sidebar button:not([disabled])'
+        )).filter(element => element.getClientRects().length > 0);
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobileOpen, narrowScreen]);
 
   useEffect(() => {
     if ((pathname.startsWith('/tables') || pathname === '/backup-restore') && user && !user.is_admin) router.replace('/dashboard');
@@ -94,15 +152,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/')) return <>{children}</>;
 
   async function logout() {
+    closeMobileDrawer();
     try { if (getToken()) await api('/auth/logout/', { method: 'POST', successMessage:'Signed out successfully.', errorMessage:'Could not sign out cleanly' }); } catch {}
     clearToken(); setUser(null); router.push('/login');
   }
 
   return <div className={`admin-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
-    <aside className="sidebar">
-      <Link href="/dashboard" className="sidebar-brand"><span className="brand-mark">E</span><span className="brand-label">Edmonton Ticket Tracker</span></Link>
-      <Link href="/account" className="user-panel user-panel-link"><div className="avatar">{(user?.name || user?.username || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.is_admin ? 'Administrator' : (user?.role_label || 'Choose role')}</div><div className="user-email">{user?.username ? `@${user.username}` : 'Sign in required'}</div></div></Link>
-      <nav className="side-nav" aria-label="Main navigation">
+    <input id="mobile-sidebar-switch" ref={mobileDrawerRef} type="checkbox" className="mobile-sidebar-switch" aria-label="Mobile navigation is open" tabIndex={-1} onChange={event => setMobileOpen(event.currentTarget.checked)} />
+    <label htmlFor="mobile-sidebar-switch" className="mobile-sidebar-backdrop" aria-label="Close navigation menu" />
+    <aside id="main-sidebar" className="sidebar" aria-label="Main sidebar">
+      <label ref={mobileCloseRef} htmlFor="mobile-sidebar-switch" className="mobile-sidebar-close" role="button" tabIndex={0} aria-label="Close navigation menu"
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            mobileDrawerRef.current?.click();
+          }
+        }}>×</label>
+      <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">E</span><span className="brand-label">Edmonton Ticket Tracker</span></Link>
+      <Link href="/account" className="user-panel user-panel-link" onClick={closeMobileDrawer}><div className="avatar">{(user?.name || user?.username || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.is_admin ? 'Administrator' : (user?.role_label || 'Choose role')}</div><div className="user-email">{user?.username ? `@${user.username}` : 'Sign in required'}</div></div></Link>
+      <nav className="side-nav" aria-label="Main navigation" onClickCapture={(event) => {
+        if ((event.target as HTMLElement).closest('a')) closeMobileDrawer();
+      }}>
         <Link href="/dashboard" className={`side-link ${pathname.startsWith('/dashboard') ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="dashboard"/></span><span className="side-label">Dashboard</span>
         </Link>
@@ -218,7 +288,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </button>
       </nav>
     </aside>
-    <div className="main-column"><header className="admin-topbar"><button className="menu-toggle" type="button" aria-label="Toggle sidebar" onClick={()=>setCollapsed(v=>!v)}><span></span><span></span><span></span></button><div className="topbar-title">Edmonton Ticket Tracker</div></header><main className="page-content">
+    <div className="main-column"><header className="admin-topbar">
+      <label ref={menuToggleRef} htmlFor="mobile-sidebar-switch" className="menu-toggle mobile-menu-toggle" role="button" tabIndex={0}
+        aria-controls="main-sidebar" aria-expanded={mobileOpen} aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            mobileDrawerRef.current?.click();
+          }
+        }}><span></span><span></span><span></span></label>
+      <button className="menu-toggle desktop-menu-toggle" type="button" aria-controls="main-sidebar" aria-expanded={!collapsed} aria-label="Toggle sidebar" onClick={() => setCollapsed(value => !value)}><span></span><span></span><span></span></button>
+      <div className="topbar-title">Edmonton Ticket Tracker</div></header><main className="page-content">
       <CurrentUserContext.Provider value={user}>
         {!user
           ? <div className="muted">Checking session…</div>

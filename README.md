@@ -339,7 +339,13 @@ The first confirmed customer email turns **Dispose Automatically** from **No** t
 
 ## Shipping-back workflow
 
-`Current Workflow = To be shipped back to client` records a pending return. Customer selection of **Ship back samples** sets that workflow. Once staff completes the return, Current Workflow becomes `Shipped back to client`. Completed shipped-back samples are ignored for container disposal readiness and are not changed when a container is disposed.
+`Current Workflow = To be shipped back to client` records a pending return. The public tracking page offers **Take back sample(s)**, which explains that ALS does not charge a client handling fee but shipping charges still apply. The customer must choose one of three methods:
+
+- **Provide a courier account number:** the number is required and saved in ticket history; route to **To be shipped back to client**.
+- **Pick up in person:** record the method in ticket history; route to **To be shipped back to client**.
+- **Receive a quote for the shipping charges:** record the request in ticket history; route to **CS Follow-Up** for the team to prepare a quote.
+
+The customer can revise their response until ALS completes the action. Both `/track/[token]` and `/acknowledge/[token]` use the same backend validation; incomplete return requests are rejected. Previous `ship_back` records retain their internal value for compatibility. When staff completes the return, Current Workflow becomes `Shipped back to client`. Completed shipped-back samples are ignored for container disposal readiness and are not changed when a container is disposed.
 
 ## CS Follow-Up queue
 

@@ -37,6 +37,9 @@ type HistoryEntry = {
     email_not_sent?: string;
     customer_signature?: string;
     customer_requested_information?: string;
+    customer_shipping_method?: 'courier_account' | 'pickup' | 'shipping_quote';
+    customer_shipping_method_label?: string;
+    customer_courier_account_number?: string;
     customer_uploaded_images?: { id:number; name:string; size_bytes:number }[];
     customer_uploaded_attachments?: { id:number; name:string; size_bytes:number; content_type?:string }[];
     replied_to_history_id?: number;
@@ -614,6 +617,10 @@ export default function Detail() {
               <div className="history-meta">{actor}</div>
               {entry.details?.reason && <div className="history-reason"><strong>Reason:</strong> {entry.details.reason}</div>}
               {entry.details?.customer_signature && <div className="history-signature"><strong>Customer signature:</strong> {entry.details.customer_signature}</div>}
+              {entry.details?.customer_shipping_method && <div className="history-customer-information">
+                <strong>Return method:</strong> {entry.details.customer_shipping_method_label || entry.details.customer_shipping_method}
+                {entry.details.customer_courier_account_number && <div><strong>Courier account number:</strong> {entry.details.customer_courier_account_number}</div>}
+              </div>}
               {entry.details?.customer_requested_information && <div className="history-customer-information">
                 <strong>Information provided by customer:</strong><div>{entry.details.customer_requested_information}</div>
                 <div style={{marginTop:10}}><button type="button" className="button secondary small" onClick={() => openHistoryReply(entry)}>Reply</button></div>
@@ -643,7 +650,7 @@ export default function Detail() {
                   <span className="history-after">{displayHistoryValue(change.after)}</span>
                 </div>)}
               </div>}
-              {entry.action === 'updated' && changes.length === 0 && !entry.details?.email_not_sent && <div className="muted history-no-change">No field values changed.</div>}
+              {entry.action === 'updated' && changes.length === 0 && !entry.details?.customer_shipping_method && !entry.details?.customer_requested_information && !entry.details?.email_not_sent && <div className="muted history-no-change">No field values changed.</div>}
             </div>
           </div>;
         })}
