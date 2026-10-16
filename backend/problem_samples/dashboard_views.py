@@ -162,6 +162,48 @@ def _series(queryset, datetime_field, start_at, end_at, bucket):
     return points
 
 
+def action_required_snapshot(now=None):
+    """One authoritative all-table snapshot shared by dashboard and email drafts."""
+    if now is None:
+        now = timezone.now()
+    counts = ProblemSample.objects.aggregate(
+        to_be_shipped=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)),
+        to_be_back_to_testing=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)),
+    )
+    counts = {key: int(value or 0) for key, value in counts.items()}
+    counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
+    counts['customer_service_other'] = customer_service_other_tickets().count()
+    age_months = old_ticket_age_months()
+    counts['old_tickets'] = ProblemSample.objects.filter(
+        created_at__lt=old_ticket_before(age_months)
+    ).count()
+    # Identical to Disposal -> Ready to Dispose: at least one ticket and all
+    # tickets are ready/disposed, excluding dumping and disposed containers.
+    ready_workflows = [PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED]
+    counts['containers_ready_to_dispose'] = (
+        ProblemContainer.objects.filter(disposed_at__isnull=True)
+        .annotate(
+            dashboard_sample_count=Count('problem_samples'),
+            dashboard_blocking_count=Count(
+                'problem_samples',
+                filter=~Q(problem_samples__current_workflow__in=ready_workflows),
+            ),
+        )
+        .filter(dashboard_sample_count__gt=0, dashboard_blocking_count=0)
+        .count()
+    )
+    local_today = timezone.localdate(now)
+    tz = timezone.get_current_timezone()
+    today_start = timezone.make_aware(datetime.combine(local_today, time.min), tz)
+    tomorrow_start = timezone.make_aware(datetime.combine(local_today + timedelta(days=1), time.min), tz)
+    counts['tracking_emails_today'] = ProblemTrackingLink.objects.filter(
+        date_created__gte=today_start,
+        date_created__lt=tomorrow_start,
+    ).count()
+    counts['customer_responded'] = _customer_responded_tickets().count()
+    return counts
+
+
 class DashboardView(APIView):
     def get(self, request):
         now = timezone.now()
@@ -198,48 +240,8 @@ class DashboardView(APIView):
             year=Count('id', filter=Q(created_at__gte=now - WINDOWS['year'])),
         )
         counts = {key: int(value or 0) for key, value in opened_counts.items()}
-        action_counts = ProblemSample.objects.aggregate(
-            to_be_shipped=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)),
-            to_be_back_to_testing=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)),
-        )
-        counts.update({key: int(value or 0) for key, value in action_counts.items()})
-        counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
-        counts['customer_service_other'] = customer_service_other_tickets().count()
+        counts.update(action_required_snapshot(now))
         age_months = old_ticket_age_months()
-        counts['old_tickets'] = ProblemSample.objects.filter(
-            created_at__lt=old_ticket_before(age_months)
-        ).count()
-        # Match Dispose Containers -> Ready to Dispose: the container must be
-        # non-empty, not already disposed, and every attached ticket must be
-        # To be Disposed or Disposed.
-        ready_workflows = [PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED]
-        counts['containers_ready_to_dispose'] = (
-            ProblemContainer.objects.filter(disposed_at__isnull=True)
-            .annotate(
-                dashboard_sample_count=Count('problem_samples'),
-                dashboard_blocking_count=Count(
-                    'problem_samples',
-                    filter=~Q(problem_samples__current_workflow__in=ready_workflows),
-                ),
-            )
-            .filter(dashboard_sample_count__gt=0, dashboard_blocking_count=0)
-            .count()
-        )
-
-        # A tracking link is persisted only when the customer tracking email is
-        # explicitly confirmed as sent. Count links created during the current
-        # local calendar day (not a rolling 24-hour window).
-        local_today = timezone.localdate(now)
-        tz = timezone.get_current_timezone()
-        today_start = timezone.make_aware(datetime.combine(local_today, time.min), tz)
-        tomorrow_start = timezone.make_aware(
-            datetime.combine(local_today + timedelta(days=1), time.min), tz
-        )
-        counts['tracking_emails_today'] = ProblemTrackingLink.objects.filter(
-            date_created__gte=today_start,
-            date_created__lt=tomorrow_start,
-        ).count()
-        counts['customer_responded'] = _customer_responded_tickets().count()
         counts['custom'] = None
         custom_payload = None
         if custom:
@@ -300,6 +302,95 @@ class DashboardView(APIView):
             },
         })
 
+
+
+class ActionRequiredEmailPreviewView(APIView):
+    """Generate a current email draft; the staff member sends it via their mail app.
+
+    This endpoint never sends mail itself or records a false successful send.
+    Recipient resolution uses the existing staff mention permissions/routing.
+    """
+
+    def post(self, request):
+        from django.conf import settings
+        from .views import (
+            MENTION_RE, _resolve_mentions, _mention_delivery_addresses,
+            _mention_labels, _mention_handle,
+        )
+
+        raw = request.data.get('recipients')
+        if not isinstance(raw, list) or not (1 <= len(raw) <= 100):
+            return Response({'detail': 'Choose at least one recipient (maximum 100).'}, status=400)
+        handles = []
+        seen = set()
+        for recipient in raw:
+            if not isinstance(recipient, str):
+                return Response({'detail': 'Recipients must be staff or group mentions.'}, status=400)
+            value = recipient.strip()
+            match = MENTION_RE.fullmatch(value)
+            if not match:
+                return Response({'detail': f'Invalid recipient: {value[:100]}'}, status=400)
+            handle = match.group(1)
+            if handle.lower() not in seen:
+                seen.add(handle.lower())
+                handles.append(f'@{handle}')
+
+        users, unavailable, groups, direct_ids = _resolve_mentions(' '.join(handles))
+        if unavailable:
+            return Response({'detail': 'These users have no ALS email: ' + ', '.join(
+                '@' + _mention_handle(user) for user in unavailable)}, status=400)
+        recognized = {f'@{handle}'.lower() for handle in ('Lab', 'CustomerService') if
+                      (handle == 'Lab' and 'lab' in groups) or
+                      (handle == 'CustomerService' and 'customerservice' in groups)}
+        recognized.update('@' + _mention_handle(user).lower() for user in users if user.id in direct_ids)
+        unrecognized = [handle for handle in handles if handle.lower() not in recognized]
+        if unrecognized:
+            return Response({'detail': 'Unknown or inactive recipient: ' + ', '.join(unrecognized)}, status=400)
+        addresses = _mention_delivery_addresses(users, groups, direct_ids)
+        if not addresses:
+            return Response({'detail': 'No eligible email addresses found for the recipients.'}, status=400)
+
+        note = request.data.get('message', '')
+        if not isinstance(note, str) or len(note) > 2000:
+            return Response({'detail': 'Additional message must be 2,000 characters or fewer.'}, status=400)
+        note = note.strip()
+        now = timezone.now()
+        timestamp = timezone.localtime(now).strftime('%b %d, %Y at %I:%M %p %Z')
+        counts = action_required_snapshot(now)
+        frontend = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
+        def queue_link(path):
+            return f'{frontend}{path}' if frontend else path
+        rows = [
+            ('Tracking Not Sent', 'tracking_not_sent', '/follow-up-required/tracking-not-sent'),
+            ('New Tracking Link Response', 'customer_responded', '/follow-up-required/customer-responded'),
+            ('Other (CS Follow-Up)', 'customer_service_other', '/follow-up-required/other'),
+            ('To be shipped', 'to_be_shipped', '/shipping/to-be-shipped'),
+            ('To be back to testing', 'to_be_back_to_testing', '/to-be-back-to-testing'),
+            ('Containers ready to be disposed', 'containers_ready_to_dispose', '/disposal/containers'),
+            ('Old Tickets', 'old_tickets', '/dashboard'),
+        ]
+        author = request.user.get_full_name().strip() or _mention_handle(request.user)
+        lines = [
+            'Hello,', '',
+            f'{author} is sharing the current Action Required status from the ALS Edmonton Ticket Tracker.',
+            f'Snapshot: {timestamp} (all ticket tables)', '',
+        ]
+        if note:
+            lines.extend(['Update from ' + author + ':', note, ''])
+        lines.append('Action Required:')
+        for label, key, path in rows:
+            lines.extend([f'- {label}: {counts[key]}', f'  {queue_link(path)}'])
+        lines.extend(['', 'Open the Dashboard:', queue_link('/dashboard'), '',
+                      'Counts reflect the time this draft was generated and may change.', '',
+                      'Regards,', author, 'ALS Edmonton Ticket Tracker'])
+        return Response({
+            'recipients': addresses,
+            'mentions': _mention_labels(users, groups, direct_ids),
+            'subject': f'Action required update — ALS Edmonton ({timezone.localdate(now).isoformat()})',
+            'body': '\n'.join(lines),
+            'generated_at': now.isoformat(),
+            'counts': {key: counts[key] for _, key, _ in rows},
+        })
 
 
 class DashboardStorageView(APIView):

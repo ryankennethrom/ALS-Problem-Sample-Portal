@@ -7,6 +7,7 @@ import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import WorkflowQueueAdvancedSearch from '@/components/WorkflowQueueAdvancedSearch';
 import BackToTestingEmailModal from '@/components/BackToTestingEmailModal';
+import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import { QueueAdvancedFilter, QueueMatchMode, matchesWorkflowQueueAdvanced, matchesWorkflowQueueSearch } from '@/lib/workflowQueueSearch';
 
@@ -113,7 +114,7 @@ export default function ToBeBackToTestingPage() {
           back_to_testing_email_sent: sent, back_to_testing_email_body: sent ? body : '',
           email_recipient: recipient, ...(!sent ? { back_to_testing_not_sent_reason: notSentReason } : {}),
         }),
-        successMessage: `${pendingSelection.ids.length} ticket${pendingSelection.ids.length === 1 ? '' : 's'} moved Back to testing.`,
+        successMessage: `${pendingSelection.ids.length} ticket${pendingSelection.ids.length === 1 ? '' : 's'} moved Back to testing. ${rackRemovalReminder(pendingSelection.ids.length)}`,
         errorMessage: 'Could not update the selected tickets',
       });
       setPendingSelection(null);
@@ -131,6 +132,7 @@ export default function ToBeBackToTestingPage() {
         <div className="eyebrow">Testing</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>To be back to testing</h1>
         <div className="muted table-description">{isCustomerService ? 'Only Lab staff can move tickets Back to testing. You can still view the queue.' : 'Select one or more tickets awaiting testing, then confirm the NA.EDM email to move them Back to testing together.'}</div>
+        {!isCustomerService && <p className="rack-removal-warning"><strong>Rack reminder:</strong> Before completing this workflow, remove each ticket from the problem sample rack to prevent accidental disposal.</p>}
       </div>
       <div className="toolbar-actions">
         <button className="button" type="button" onClick={moveSelected} disabled={isCustomerService || !selectedCount || updating || Boolean(pendingSelection)}>

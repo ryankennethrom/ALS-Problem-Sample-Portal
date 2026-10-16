@@ -53,3 +53,7 @@
   .custom button{grid-column:auto}
   .chartPanel .header{padding:10px}
 }
+
+.actionHeadingRow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.actionHeadingRow .sectionHeading{margin:0}
+@media(max-width:500px){.actionHeadingRow button{width:100%}}

@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import styles from './dashboard.module.css';
+import ActionRequiredEmailModal from '@/components/ActionRequiredEmailModal';
 
 type Range = 'week' | 'month' | 'six_months' | 'year' | 'custom';
 type Point = { period: string; label: string; count: number };
@@ -120,6 +121,7 @@ export default function Dashboard() {
   const [tables,setTables]=useState<ProblemTable[]>([]);
   const [tableId,setTableId]=useState('');
   const [tablesLoading,setTablesLoading]=useState(true);
+  const [showActionEmail,setShowActionEmail]=useState(false);
 
 
   useEffect(()=>{
@@ -191,12 +193,16 @@ export default function Dashboard() {
   }
 
   return <div>
+    {showActionEmail && <ActionRequiredEmailModal onClose={() => setShowActionEmail(false)}/>}
     <div className="page-heading-row"><div>
       <h1 className="page-heading">Dashboard</h1>
     </div></div>
 
     <section className={styles.dashboardSection} aria-labelledby="action-required-heading">
-      <h2 id="action-required-heading" className={styles.sectionHeading}>Action Required</h2>
+      <div className={styles.actionHeadingRow}>
+        <h2 id="action-required-heading" className={styles.sectionHeading}>Action Required</h2>
+        <button type="button" className="button" onClick={() => setShowActionEmail(true)}>Send action required update</button>
+      </div>
 
       <section className={styles.newCard} aria-label="Tracking Not Sent">
         <div>

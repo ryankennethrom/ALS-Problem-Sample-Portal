@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { api } from '@/lib/api';
+import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 
 export type TestingCustomerMessage = {
   message: string;
@@ -20,13 +21,14 @@ export type TestingEmailDetails = {
 type Props = {
   details?: TestingEmailDetails;
   problemNumbers?: number[];
+  showRackReminder?: boolean;
   onConfirm: (sent: boolean, body: string, recipient: string, notSentReason?: string) => void;
   onCancel: () => void;
   busy: boolean;
   error: string;
 };
 
-export default function BackToTestingEmailModal({ details, problemNumbers, onConfirm, onCancel, busy, error }: Props) {
+export default function BackToTestingEmailModal({ details, problemNumbers, showRackReminder = true, onConfirm, onCancel, busy, error }: Props) {
   const [recipient, setRecipient] = useState('');
   const [recipientError, setRecipientError] = useState('');
   const [additional, setAdditional] = useState('');
@@ -99,6 +101,7 @@ export default function BackToTestingEmailModal({ details, problemNumbers, onCon
   return <div className="email-confirm-overlay" role="presentation">
     <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="testing-email-title">
       <h2 id="testing-email-title">Notify NA.EDM: Back to Testing</h2>
+      {showRackReminder && <p className="rack-removal-warning" role="alert"><strong>Before moving {isBulk ? 'these tickets' : 'this ticket'} Back to testing:</strong> {rackRemovalReminder(problemNumbers?.length || 1)}</p>}
       <p className="customer-email-company-reminder"><strong>Send this email from your ALS company email account.</strong> You can copy the address and message if your email application does not open.</p>
       <div className="customer-email-preview-content">
         <div className="customer-email-preview-heading"><strong>Recipient</strong><button type="button" className="button secondary" onClick={() => copy(recipient, 'Address')} disabled={!recipient}>Copy address</button></div>

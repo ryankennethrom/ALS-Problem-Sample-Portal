@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
-from problem_samples.dashboard_views import DashboardView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
+from problem_samples.dashboard_views import DashboardView, ActionRequiredEmailPreviewView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
 from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView
 
@@ -10,6 +10,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/dashboard/', DashboardView.as_view()),
+    path('api/dashboard/action-required-email/', ActionRequiredEmailPreviewView.as_view()),
     path('api/dashboard/opened-tickets/', DashboardOpenedTicketsView.as_view()),
     path('api/dashboard/storage/', DashboardStorageView.as_view()),
     path('api/dashboard/customer-responded/', CustomerRespondedTicketsView.as_view()),

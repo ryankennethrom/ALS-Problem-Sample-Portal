@@ -215,12 +215,14 @@ export function buildCustomerEmailContent(
   problemDetailLines.push(`Date Received: ${dateReceived?.value || 'Not provided'}`);
 
   const expirationDays = context.table?.pt_days ?? 30;
+  // Honor the configured expiration period. The standard 30-day notification
+  // matches the wording requested for customer emails exactly.
   const automaticDisposalNotice = expirationDays === 0
-    ? 'Please note: this notification activates automatic disposal. If no customer action is selected, Current Workflow will be changed to To be Disposed immediately.'
-    : `Please note: this notification activates automatic disposal and starts a new ${expirationDays}-day expiration period. If no customer action is selected, Current Workflow will be changed to To be Disposed when that period ends.`;
+    ? 'Please note: the sample(s) in this ticket will be up for disposal if no action is received today.'
+    : `Please note: the sample(s) in this ticket will be up for disposal if no action is received in ${expirationDays} ${expirationDays === 1 ? 'day' : 'days'}.`;
 
   const multipleContactsNotice = multipleCustomerContacts
-    ? 'This notification is being sent to multiple contacts because a primary contact for the affected sample(s) could not be confirmed from our records. If another person in your organization should handle this matter, please forward this message to them or let ALS Customer Service know.'
+    ? 'This notification is being sent to multiple contacts because a primary contact for the sample(s) could not be confirmed from our records. If another person in your organization should handle this matter, please forward this message to them or let ALS Customer Service know.'
     : '';
 
   const values: Record<string, string> = {

@@ -1191,3 +1191,7 @@ a.result:hover{background:#f7f9fb}
 @media (prefers-reduced-motion:reduce){
   .admin-shell .sidebar{transition:none}
 }
+
+/* Prevent accidental disposal when samples are shipped or returned to testing. */
+.rack-removal-warning{padding:11px 13px;border:1px solid #dab26a;border-left:4px solid #c68522;border-radius:5px;background:#fff7e8;color:#69430b;line-height:1.5;margin:8px 0 12px}
+.rack-removal-warning strong{color:inherit}

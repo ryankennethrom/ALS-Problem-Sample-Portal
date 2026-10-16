@@ -13,6 +13,7 @@ import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackT
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
+import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import CameraCapture from '@/components/CameraCapture';
 import StaffImage from '@/components/StaffImage';
 import StaffAttachmentLink from '@/components/StaffAttachmentLink';
@@ -282,6 +283,9 @@ export default function Detail() {
       setTestingEmailError('');
       setTestingEmailDraft({ mode: 'transition', values: { ...customValues }, containerCode: requestedContainer, reason });
       return;
+    }
+    if (p && p.custom_values?.['current-workflow'] !== 'Shipped back to client' && customValues['current-workflow'] === 'Shipped back to client') {
+      if (!window.confirm(`Before marking this ticket Shipped back to client:\n\n${rackRemovalReminder()}\n\nContinue saving?`)) return;
     }
     try {
       const updated = await api(`/problem-samples/${id}/`, {
@@ -751,7 +755,7 @@ export default function Detail() {
 
     {pendingEmailLaunch && <CustomerEmailModal content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
     {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
-    {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
+    {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} showRackReminder={testingEmailDraft.mode === 'transition'} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
     {mentionEmailDraft && <MentionEmailModal emails={mentionEmailDraft.emails} onComplete={() => saveComment(mentionEmailDraft.body, mentionEmailDraft.confirmationToken).catch(() => {})} onCancel={() => setMentionEmailDraft(null)} busy={savingMentionComment} error={error} />}
   </div>;
 }

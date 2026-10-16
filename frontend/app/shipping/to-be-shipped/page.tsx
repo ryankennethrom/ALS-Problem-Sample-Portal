@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import WorkflowQueueAdvancedSearch from '@/components/WorkflowQueueAdvancedSearch';
@@ -92,7 +93,7 @@ export default function ToBeShippedPage() {
     const noun = selectedCount === 1 ? 'ticket' : 'tickets';
     const reason = await requestChangeReason(`Why are you making this change to ${selectedCount} selected ${noun}?`);
     if (reason === null) return;
-    if (!confirm(`Mark ${selectedCount} selected ${noun} as Shipped back to client?`)) return;
+    if (!confirm(`Mark ${selectedCount} selected ${noun} as Shipped back to client?\n\nIMPORTANT: ${rackRemovalReminder(selectedCount)}\n\nContinue?`)) return;
 
     setShipping(true);
     setError('');
@@ -101,7 +102,7 @@ export default function ToBeShippedPage() {
         method: 'POST',
         headers: changeReasonHeaders(reason),
         body: JSON.stringify({ problem_ids: Array.from(selected) }),
-        successMessage: `${selectedCount} ${noun} marked Shipped back to client.`,
+        successMessage: `${selectedCount} ${noun} marked Shipped back to client. ${rackRemovalReminder(selectedCount)}`,
         errorMessage: 'Could not ship the selected tickets',
       });
       await load();
@@ -118,6 +119,7 @@ export default function ToBeShippedPage() {
         <div className="eyebrow">Shipping</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>To be shipped</h1>
         <div className="muted table-description">Select one or more tickets that are ready to be returned to the client, then mark them as shipped together.</div>
+        <p className="rack-removal-warning"><strong>Rack reminder:</strong> Before completing this workflow, remove each ticket from the problem sample rack to prevent accidental disposal.</p>
       </div>
       <div className="toolbar-actions">
         <button className="button" type="button" onClick={shipSelected} disabled={!selectedCount || shipping}>
