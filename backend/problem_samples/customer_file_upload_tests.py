@@ -130,3 +130,56 @@ class CustomerRequestedInfoFileUploadTests(TestCase):
         self.assertEqual(ProblemImage.objects.filter(problem=self.problem).count(), 0)
         self.problem.refresh_from_db()
         self.assertEqual(self.problem.customer_acknowledgement_action, '')
+
+    def test_customer_can_send_camera_photo_without_text_and_staff_can_reply(self):
+        """Phone-camera photos should be visible in the chat and auditable history."""
+        from .views import _customer_message_history, _customer_history_reply_email
+        response = self.client.post(
+            self.url,
+            {
+                'action': 'requested_info',
+                'signature': 'Customer Name',
+                'requested_information': '',
+                'images': [SimpleUploadedFile('phone-photo.jpg', PNG_BYTES, content_type='image/png')],
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(ProblemImage.objects.filter(problem=self.problem).count(), 1)
+        customer_messages = [message for message in response.data['conversation'] if message['sender'] == 'customer']
+        self.assertEqual(len(customer_messages), 1)
+        self.assertEqual(customer_messages[0]['message'], '')
+        self.assertEqual(customer_messages[0]['images'][0]['name'], 'phone-photo.jpg')
+        history = ProblemHistory.objects.filter(
+            problem=self.problem,
+            summary='Customer selected: Message us about the issue',
+        ).latest('created_at')
+        self.assertIsNotNone(_customer_message_history(self.problem, history.id))
+        reply = _customer_history_reply_email(self.problem, history, 'Photo received.', ['example@example.com'])
+        self.assertIn('Customer sent 1 photo(s)', reply['body'])
+
+    def test_customer_can_send_attachment_without_text(self):
+        response = self.client.post(
+            self.url,
+            {
+                'action': 'requested_info',
+                'signature': 'Customer Name',
+                'attachments': [SimpleUploadedFile('notes.txt', b'notes', content_type='text/plain')],
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        customer_messages = [message for message in response.data['conversation'] if message['sender'] == 'customer']
+        self.assertEqual(len(customer_messages), 1)
+        self.assertEqual(customer_messages[0]['message'], '')
+        self.assertEqual(customer_messages[0]['attachments'][0]['name'], 'notes.txt')
+
+    def test_empty_customer_message_with_no_files_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {'action': 'requested_info', 'signature': 'Customer Name', 'requested_information': '  '},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('message or attach', response.data['detail'])
+        self.assertFalse(ProblemHistory.objects.filter(problem=self.problem).exists())

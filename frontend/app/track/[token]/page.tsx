@@ -61,6 +61,19 @@ function formatConversationTime(value: string) {
   });
 }
 
+// Browser preview for photos taken on the phone before they are sent.
+function PendingChatPhoto({ file }: { file: File }) {
+  const [previewUrl, setPreviewUrl] = useState('');
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  return previewUrl
+    ? <img src={previewUrl} className="public-chat-file-chip-preview" alt="Photo ready to send" />
+    : <span className="public-chat-file-chip-icon" aria-hidden="true">▧</span>;
+}
+
 const actionLabels: Record<Exclude<CustomerAction, ''>, string> = {
   dispose: 'Dispose Sample(s)',
   ship_back: 'Take back sample(s)',
@@ -84,6 +97,7 @@ export default function ProblemSampleTrackingPage() {
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const autoMessageOpenHandled = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -372,7 +386,7 @@ export default function ProblemSampleTrackingPage() {
             <div className="public-chat-composer">
               {(requestedImages.length > 0 || requestedAttachments.length > 0) && <div className="public-chat-pending-files" aria-label="Files ready to send">
                 {requestedImages.map((file, index) => <div className="public-chat-file-chip" key={`image-${index}-${file.name}-${file.size}`}>
-                  <span className="public-chat-file-chip-icon" aria-hidden="true">▧</span>
+                  <PendingChatPhoto file={file} />
                   <span className="public-chat-file-chip-name">{file.name}</span>
                   <button type="button" aria-label={`Remove ${file.name}`} disabled={busy} onClick={() => setRequestedImages(files => files.filter((_, itemIndex) => itemIndex !== index))}>×</button>
                 </div>)}
@@ -396,6 +410,9 @@ export default function ProblemSampleTrackingPage() {
                     onClick={() => setAttachmentMenuOpen(open => !open)}
                   >+</button>
                   {attachmentMenuOpen && <div className="public-chat-add-menu" role="menu">
+                    <button type="button" role="menuitem" disabled={busy} onClick={() => { setAttachmentMenuOpen(false); cameraInputRef.current?.click(); }}>
+                      <span aria-hidden="true">📷</span><span><strong>Take photo</strong><small>Open your device camera</small></span>
+                    </button>
                     <button type="button" role="menuitem" disabled={busy} onClick={() => { setAttachmentMenuOpen(false); imageInputRef.current?.click(); }}>
                       <span aria-hidden="true">▧</span><span><strong>Add images</strong><small>JPEG, PNG, GIF or WebP</small></span>
                     </button>
@@ -403,6 +420,20 @@ export default function ProblemSampleTrackingPage() {
                       <span aria-hidden="true">⌕</span><span><strong>Add files</strong><small>Up to 25 MB each</small></span>
                     </button>
                   </div>}
+                  <input
+                    ref={cameraInputRef}
+                    className="public-chat-hidden-input"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    aria-label="Take photo with camera"
+                    disabled={busy}
+                    onChange={event => {
+                      const photos = Array.from(event.target.files || []);
+                      setRequestedImages(current => [...current, ...photos]);
+                      event.currentTarget.value = '';
+                    }}
+                  />
                   <input
                     ref={imageInputRef}
                     className="public-chat-hidden-input"
@@ -441,7 +472,7 @@ export default function ProblemSampleTrackingPage() {
                     onKeyDown={event => {
                       if (event.key === 'Enter' && !event.shiftKey) {
                         event.preventDefault();
-                        if (!busy && effectiveSignature && requestedInformation.trim()) {
+                        if (!busy && effectiveSignature && (requestedInformation.trim() || requestedImages.length || requestedAttachments.length)) {
                           chooseAction('requested_info', requestedInformation, requestedImages, requestedAttachments);
                         }
                       }
@@ -452,14 +483,14 @@ export default function ProblemSampleTrackingPage() {
                 <button
                   className="public-chat-send-button"
                   type="button"
-                  aria-label="Send message"
-                  disabled={busy || !effectiveSignature || !requestedInformation.trim()}
+                  aria-label={!requestedInformation.trim() && requestedImages.length ? 'Send photo' : 'Send message'}
+                  disabled={busy || !effectiveSignature || (!requestedInformation.trim() && !requestedImages.length && !requestedAttachments.length)}
                   onClick={() => chooseAction('requested_info', requestedInformation, requestedImages, requestedAttachments)}
                 >{busy ? <span className="public-chat-send-busy">…</span> : <span aria-hidden="true">➤</span>}</button>
               </div>
               <div className="public-chat-compose-help">
                 <span>{requestedInformation.length}/4000</span>
-                <span>Enter to send · Shift+Enter for a new line</span>
+                <span>Photos can be sent without text · Shift+Enter for a new line</span>
               </div>
             </div>
           </aside>

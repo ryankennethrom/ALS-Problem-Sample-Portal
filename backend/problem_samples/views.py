@@ -401,7 +401,7 @@ def _customer_message_history(problem, history_id):
     if details.get('responded_via') not in {'public_tracking_link', 'public_acknowledgement_link'}:
         return None
     message = str(details.get('customer_requested_information') or '').strip()
-    if not message:
+    if not (message or details.get('customer_uploaded_images') or details.get('customer_uploaded_attachments')):
         return None
     return entry
 
@@ -420,6 +420,12 @@ def _customer_history_reply_email(problem, customer_history, staff_reply, recipi
     direct_url = f'{base_url}?message=1'
     details = customer_history.details if isinstance(customer_history.details, dict) else {}
     customer_message = str(details.get('customer_requested_information') or '').strip()
+    if not customer_message:
+        # File-only customer messages can receive a staff reply, too. The
+        # actual files remain securely accessible through the tracking link.
+        image_count = len(details.get('customer_uploaded_images') or [])
+        attachment_count = len(details.get('customer_uploaded_attachments') or [])
+        customer_message = f'[Customer sent {image_count} photo(s) and {attachment_count} attachment(s)]'
     subject = f'ALS reply regarding Ticket #{problem.problem_number}'
     body = (
         'Hello,\n\n'
@@ -3046,7 +3052,7 @@ class ProblemAcknowledgementView(APIView):
             if (
                 entry.actor_id is None
                 and responded_via in {'public_tracking_link', 'public_acknowledgement_link'}
-                and customer_message
+                and (customer_message or details.get('customer_uploaded_images') or details.get('customer_uploaded_attachments'))
             ):
                 images = []
                 for item in details.get('customer_uploaded_images') or []:
@@ -3368,8 +3374,8 @@ class ProblemAcknowledgementView(APIView):
 
         prepared_customer_images = []
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
-            if not requested_information:
-                return Response({'detail': 'Enter the requested information before sending this response.'}, status=status.HTTP_400_BAD_REQUEST)
+            if not (requested_information or customer_image_uploads or customer_attachment_uploads):
+                return Response({'detail': 'Enter a message or attach a photo or file before sending.'}, status=status.HTTP_400_BAD_REQUEST)
             if len(requested_information) > 4000:
                 return Response({'detail': 'Requested information must be 4000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 

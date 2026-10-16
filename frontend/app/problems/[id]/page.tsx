@@ -625,8 +625,9 @@ export default function Detail() {
                 <strong>Return method:</strong> {entry.details.customer_shipping_method_label || entry.details.customer_shipping_method}
                 {entry.details.customer_courier_account_number && <div><strong>Courier account number:</strong> {entry.details.customer_courier_account_number}</div>}
               </div>}
-              {entry.details?.customer_requested_information && <div className="history-customer-information">
-                <strong>Information provided by customer:</strong><div>{entry.details.customer_requested_information}</div>
+              {(entry.details?.customer_requested_information || (entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-information">
+                <strong>{entry.details?.customer_requested_information ? 'Information provided by customer:' : 'Customer sent files:'}</strong>
+                {entry.details?.customer_requested_information && <div>{entry.details.customer_requested_information}</div>}
                 <div style={{marginTop:10}}><button type="button" className="button secondary small" onClick={() => openHistoryReply(entry)}>Reply</button></div>
               </div>}
               {entry.details?.staff_reply && <div className="history-customer-information"><strong>Staff reply:</strong><div>{entry.details.staff_reply}</div>{entry.details.customer_message && <div className="muted" style={{marginTop:6}}><strong>Replying to:</strong> {entry.details.customer_message}</div>}{entry.details.recipients?.length ? <div className="muted" style={{marginTop:4}}>Emailed to {entry.details.recipients.join('; ')}</div> : null}</div>}
@@ -654,7 +655,7 @@ export default function Detail() {
                   <span className="history-after">{displayHistoryValue(change.after)}</span>
                 </div>)}
               </div>}
-              {entry.action === 'updated' && changes.length === 0 && !entry.details?.customer_shipping_method && !entry.details?.customer_requested_information && !entry.details?.email_not_sent && <div className="muted history-no-change">No field values changed.</div>}
+              {entry.action === 'updated' && changes.length === 0 && !entry.details?.customer_shipping_method && !entry.details?.customer_requested_information && !entry.details?.customer_uploaded_images?.length && !entry.details?.customer_uploaded_attachments?.length && !entry.details?.email_not_sent && <div className="muted history-no-change">No field values changed.</div>}
             </div>
           </div>;
         })}

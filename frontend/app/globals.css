@@ -1075,8 +1075,9 @@ a.result:hover{background:#f7f9fb}
 .public-chat-file-icon{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;background:#eef3f6;color:#526b7a;font-weight:900}
 .public-chat-composer{position:relative;display:block;padding:10px 12px 11px;border-top:1px solid #e4e9ed;background:#fff;max-height:none;overflow:visible}
 .public-chat-pending-files{display:flex;gap:6px;overflow-x:auto;padding:0 0 8px;scrollbar-width:thin}
-.public-chat-file-chip{display:grid;grid-template-columns:20px minmax(75px,150px) 20px;align-items:center;gap:5px;flex:0 0 auto;padding:6px 7px;border:1px solid #dfe5e9;border-radius:10px;background:#f7f9fa;font-size:10px;color:#52616b}
-.public-chat-file-chip-icon{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;background:#fff;border:1px solid #e1e6e9}
+.public-chat-file-chip{display:grid;grid-template-columns:32px minmax(75px,150px) 20px;align-items:center;gap:5px;flex:0 0 auto;padding:6px 7px;border:1px solid #dfe5e9;border-radius:10px;background:#f7f9fa;font-size:10px;color:#52616b}
+ .public-chat-file-chip-icon{display:grid;place-items:center;width:32px;height:32px;border-radius:6px;background:#fff;border:1px solid #e1e6e9}
+.public-chat-file-chip-preview{display:block;width:32px;height:32px;object-fit:cover;border-radius:6px;border:1px solid #d8e0e5;background:#fff}
 .public-chat-file-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .public-chat-file-chip button{width:20px;height:20px;border:0;border-radius:50%;background:transparent;color:#6a7881;cursor:pointer;font-size:16px;line-height:1}
 .public-chat-file-chip button:hover{background:#e8edf0}
