@@ -46,7 +46,7 @@ CUSTOMER_ACTION_HOLD = 'hold'
 CUSTOMER_ACTION_REQUESTED_INFORMATION = 'requested_info'
 CUSTOMER_ACTION_CHOICES = [
     (CUSTOMER_ACTION_DISPOSE, 'Dispose Sample(s)'),
-    (CUSTOMER_ACTION_SHIP_BACK, 'Ship back samples'),
+    (CUSTOMER_ACTION_SHIP_BACK, 'Take back sample(s)'),
     (CUSTOMER_ACTION_HOLD, 'Hold sample'),
     (CUSTOMER_ACTION_REQUESTED_INFORMATION, 'Message us about the issue'),
 ]

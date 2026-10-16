@@ -240,7 +240,7 @@ class CustomerRecentRowModifierTests(TestCase):
 
         changed_to_shipping = self.client.post(
             tracking_url,
-            data={'action': 'ship_back', 'signature': 'Customer Name'},
+            data={'action': 'ship_back', 'signature': 'Customer Name', 'shipping_method': 'pickup'},
             content_type='application/json',
         )
         self.assertEqual(changed_to_shipping.status_code, 200)

@@ -1197,6 +1197,14 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'], url_path='bulk-back-to-testing')
     @transaction.atomic
     def bulk_back_to_testing(self, request):
+        # Bulk completion bypasses the ticket serializer: check the actor here
+        # so a Customer Service account cannot bypass the per-ticket rule.
+        profile = getattr(request.user, 'tracker_profile', None)
+        if profile is not None and profile.role == 'customer_service':
+            return Response(
+                {'detail': 'Customer Service users cannot change the workflow to Back to testing.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         reason = _change_reason(request)
         raw_ids = request.data.get('problem_ids')
         if not isinstance(raw_ids, list) or not raw_ids:
@@ -3125,11 +3133,19 @@ class ProblemAcknowledgementView(APIView):
         for entry in problem.history.all()[:25]:
             details = entry.details if isinstance(entry.details, dict) else {}
             if details.get('customer_action') == action and details.get('customer_action_label'):
+                if action == CUSTOMER_ACTION_SHIP_BACK:
+                    method = str(details.get('customer_shipping_method') or '')
+                    suffix = {
+                        'courier_account': 'Provide a courier account number',
+                        'pickup': 'Pick up in person',
+                        'shipping_quote': 'Receive a quote for the shipping charges',
+                    }.get(method)
+                    return f'Take back sample(s) — {suffix}' if suffix else 'Take back sample(s)'
                 return str(details['customer_action_label'])
 
         return {
             CUSTOMER_ACTION_DISPOSE: 'Dispose Sample(s)',
-            CUSTOMER_ACTION_SHIP_BACK: 'Ship back samples',
+            CUSTOMER_ACTION_SHIP_BACK: 'Take back sample(s)',
             CUSTOMER_ACTION_HOLD: 'Hold sample',
             CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }.get(action, '')
@@ -3166,11 +3182,9 @@ class ProblemAcknowledgementView(APIView):
                     return str(detail.get('value') or '').strip()
             return ''
 
-        # Expose these fields explicitly for the customer-message chat panel.
-        # The issue may be called Problem Issue, Issue Description, or Reason for Hold
-        # in different table schemas, so normalize those labels here.
-        # A Problem Type column can have any admin-provided name: use its type,
-        # not only the literal column label, for the public tracking context.
+        # Expose Problem Type for the customer chat context. Issue Description
+        # remains a staff ticket field; it is no longer part of the chat header.
+        # Problem Type may have a custom admin-provided column name.
         configured_type = ''
         if problem.table_id:
             for column in problem.table.columns.all():
@@ -3181,14 +3195,9 @@ class ProblemAcknowledgementView(APIView):
                     configured_type = selected.strip()
                     break
         problem_type = configured_type or public_detail_value('Problem Type') or str(problem.problem_type or '').strip()
-        problem_issue = (
-            public_detail_value('Problem Issue', 'Issue Description', 'Issue', 'Reason for Hold', 'Hold Reason')
-            or str(problem.issue_description or '').strip()
-        )
         public_details = {
             'details': details,
             'problem_type': problem_type,
-            'problem_issue': problem_issue,
             'ticket_status': self._ticket_status_label(problem),
             'conversation': self._public_conversation(problem),
             'customer_signature': self._latest_customer_signature(problem),
@@ -3230,7 +3239,7 @@ class ProblemAcknowledgementView(APIView):
                 **public_files,
                 'visible_until': visible_until,
                 'customer_action': problem.customer_acknowledgement_action or CUSTOMER_ACTION_SHIP_BACK,
-                'customer_action_label': self._customer_action_label(problem) or 'Ship back',
+                'customer_action_label': self._customer_action_label(problem) or 'Take back sample(s)',
                 'can_choose_action': False,
             }
 
@@ -3322,6 +3331,32 @@ class ProblemAcknowledgementView(APIView):
         if customer_action not in allowed_actions:
             return Response({'detail': 'Choose a valid sample action.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # A return request is incomplete without the customer's preferred method.
+        # Reject missing/invalid methods rather than routing a bare ship_back action
+        # straight to Shipping (which would hide requests for a shipping quote).
+        shipping_method = str(request.data.get('shipping_method') or '').strip()
+        courier_account_number = ' '.join(str(request.data.get('courier_account_number') or '').split())
+        shipping_method_labels = {
+            'courier_account': 'Provide a courier account number',
+            'pickup': 'Pick up in person',
+            'shipping_quote': 'Receive a quote for the shipping charges',
+        }
+        if customer_action == CUSTOMER_ACTION_SHIP_BACK:
+            if shipping_method not in shipping_method_labels:
+                return Response(
+                    {'detail': 'Choose a return method: courier account, pickup in person, or shipping quote.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if shipping_method == 'courier_account':
+                if not courier_account_number:
+                    return Response({'detail': 'Enter your courier account number.'}, status=status.HTTP_400_BAD_REQUEST)
+                if len(courier_account_number) > 200:
+                    return Response({'detail': 'Courier account number must be 200 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+            elif courier_account_number:
+                return Response({'detail': 'A courier account number is only allowed with the courier account option.'}, status=status.HTTP_400_BAD_REQUEST)
+        elif shipping_method or courier_account_number:
+            return Response({'detail': 'Return details can only be sent with Take back sample(s).'}, status=status.HTTP_400_BAD_REQUEST)
+
         requested_information = str(request.data.get('requested_information') or '').strip()
         customer_image_uploads = list(request.FILES.getlist('images'))
         customer_attachment_uploads = list(request.FILES.getlist('attachments'))
@@ -3406,7 +3441,11 @@ class ProblemAcknowledgementView(APIView):
             values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_TO_BE_DISPOSED
             values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
         elif customer_action == CUSTOMER_ACTION_SHIP_BACK:
-            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = PROBLEM_STATUS_TO_BE_SHIPPED_BACK
+            # A quotation needs CS action before any shipment is queued.
+            values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = (
+                CURRENT_WORKFLOW_DEFAULT if shipping_method == 'shipping_quote'
+                else PROBLEM_STATUS_TO_BE_SHIPPED_BACK
+            )
             values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
         elif customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = CURRENT_WORKFLOW_DEFAULT
@@ -3485,7 +3524,7 @@ class ProblemAcknowledgementView(APIView):
 
         label = {
             CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
-            CUSTOMER_ACTION_SHIP_BACK: 'Ship back',
+            CUSTOMER_ACTION_SHIP_BACK: 'Take back sample(s)',
             CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }[customer_action]
         details = {
@@ -3494,6 +3533,13 @@ class ProblemAcknowledgementView(APIView):
             'customer_signature': customer_signature,
             'responded_via': 'public_tracking_link',
         }
+        if customer_action == CUSTOMER_ACTION_SHIP_BACK:
+            details['customer_shipping_method'] = shipping_method
+            details['customer_shipping_method_label'] = shipping_method_labels[shipping_method]
+            if shipping_method == 'courier_account':
+                details['customer_courier_account_number'] = courier_account_number
+            label = f'Take back sample(s) — {shipping_method_labels[shipping_method]}'
+            details['customer_action_label'] = label
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             details['customer_requested_information'] = requested_information
             if customer_saved_images:
@@ -3515,7 +3561,7 @@ class ProblemAcknowledgementView(APIView):
             problem=problem,
             action=ProblemHistory.ACTION_UPDATED,
             actor=None,
-            summary=f'Customer selected: {label}',
+            summary=f'Customer selected: {details["customer_action_label"]}',
             details=details,
         )
         return Response(self._payload(problem))

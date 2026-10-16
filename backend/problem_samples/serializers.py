@@ -1051,6 +1051,19 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         workflow_value = str(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
         if workflow_value not in CURRENT_WORKFLOW_CHOICES:
             errors[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = 'Choose a valid Current Workflow.'
+        # The API must enforce this role restriction even if a client sends a
+        # crafted PATCH/PUT, or completes a previously prepared ticket. Existing
+        # Back to testing tickets can still be edited without changing workflow.
+        actor_profile = getattr(request_user, 'tracker_profile', None) if request_user is not None else None
+        if (
+            actor_profile is not None
+            and actor_profile.role == UserProfile.ROLE_CUSTOMER_SERVICE
+            and workflow_value == PROBLEM_STATUS_BACK_TO_TESTING
+            and (instance is None or instance.workflow_status != PROBLEM_STATUS_BACK_TO_TESTING)
+        ):
+            errors[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = (
+                'Customer Service users cannot change the workflow to Back to testing.'
+            )
 
         # Routed/terminal workflows always stop automatic disposal. This keeps
         # disposal/shipping/testing actions authoritative even if a stale client
