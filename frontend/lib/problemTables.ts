@@ -53,6 +53,12 @@ export type ClientEmailDependency = {
   column_type_label: string;
 };
 
+export type DistributorCCRule = {
+  match_type: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'wildcard';
+  pattern: string;
+  cc_emails: string[];
+};
+
 export type MaskFieldState = 'hidden' | 'shown' | 'required';
 export type ProblemTypeRules = Record<string, {
   columns: Record<string, MaskFieldState>;
@@ -104,6 +110,7 @@ export type ProblemColumn = {
   client_email_dependency_details: ClientEmailDependency[];
   intercolumn_rules: IntercolumnRule[];
   form_mask_rules: ProblemTypeRules;
+  distributor_cc_rules: DistributorCCRule[];
   position: number;
   is_system: boolean;
 };

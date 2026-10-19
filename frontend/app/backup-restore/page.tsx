@@ -1,6 +1,6 @@
 'use client';
 
-import { ChangeEvent, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, RefObject, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api, clearToken } from '@/lib/api';
 import { loginUrl } from '@/lib/authRedirect';
@@ -32,6 +32,45 @@ function formatBytes(value: number) {
   let index = 0;
   while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
   return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
+}
+
+// Keep this component outside BackupRestorePage so state updates while typing
+// do not change its React component identity and remount the input.
+type RestorePanelProps = {
+  kind: BackupKind;
+  title: string;
+  description: string;
+  file: File | null;
+  confirmationInput: string;
+  busy: BackupKind | null;
+  fileInputRef: RefObject<HTMLInputElement | null>;
+  onChooseFile: (kind: BackupKind, event: ChangeEvent<HTMLInputElement>) => void;
+  onConfirmationChange: (kind: BackupKind, value: string) => void;
+  onRestore: (kind: BackupKind) => void;
+};
+
+function RestorePanel({
+  kind, title, description, file, confirmationInput, busy,
+  fileInputRef, onChooseFile, onConfirmationChange, onRestore,
+}: RestorePanelProps) {
+  const expected = RESTORE_CONFIRMATIONS[kind];
+  return <section className="panel" style={{marginBottom: 18}}>
+    <div className="panel-header">{title}</div>
+    <div className="panel-body">
+      <p className="muted">{description}</p>
+      <div className="field" style={{marginBottom: 14}}>
+        <label htmlFor={`${kind}-backup-file`}>Backup file</label>
+        <input ref={fileInputRef} id={`${kind}-backup-file`} className="input" type="file" accept=".tar.gz,application/gzip" disabled={busy !== null} onChange={event => onChooseFile(kind, event)} />
+      </div>
+      {file && <div className="field" style={{marginBottom: 14}}>
+        <label htmlFor={`${kind}-confirmation`}>Type <strong>{expected}</strong> to confirm</label>
+        <input id={`${kind}-confirmation`} className="input" autoComplete="off" value={confirmationInput} disabled={busy !== null} onChange={event => onConfirmationChange(kind, event.target.value)} />
+      </div>}
+      <button type="button" className="button" disabled={!file || confirmationInput !== expected || busy !== null} onClick={() => onRestore(kind)}>
+        {busy === kind ? 'Restoring…' : title}
+      </button>
+    </div>
+  </section>;
 }
 
 export default function BackupRestorePage() {
@@ -137,26 +176,14 @@ export default function BackupRestorePage() {
     } finally { setBusy(null); }
   }
 
-  function RestorePanel({ kind, title, description }: { kind: BackupKind; title: string; description: string }) {
-    const expected = RESTORE_CONFIRMATIONS[kind];
-    return <section className="panel" style={{marginBottom: 18}}>
-      <div className="panel-header">{title}</div>
-      <div className="panel-body">
-        <p className="muted">{description}</p>
-        <div className="field" style={{marginBottom: 14}}>
-          <label htmlFor={`${kind}-backup-file`}>Backup file</label>
-          <input ref={fileInputs[kind]} id={`${kind}-backup-file`} className="input" type="file" accept=".tar.gz,application/gzip" disabled={busy !== null} onChange={e => chooseFile(kind, e)} />
-        </div>
-        {files[kind] && <div className="field" style={{marginBottom: 14}}>
-          <label htmlFor={`${kind}-confirmation`}>Type <strong>{expected}</strong> to confirm</label>
-          <input id={`${kind}-confirmation`} className="input" autoComplete="off" value={confirmationInputs[kind]} disabled={busy !== null} onChange={e => setConfirmationInputs(current => ({ ...current, [kind]: e.target.value }))} />
-        </div>}
-        <button type="button" className="button" disabled={!files[kind] || confirmationInputs[kind] !== expected || busy !== null} onClick={() => void restore(kind)}>
-          {busy === kind ? 'Restoring…' : title}
-        </button>
-      </div>
-    </section>;
-  }
+
+  const panelActions = {
+    busy,
+    onChooseFile: chooseFile,
+    onConfirmationChange: (kind: BackupKind, value: string) =>
+      setConfirmationInputs(current => ({ ...current, [kind]: value })),
+    onRestore: (kind: BackupKind) => { void restore(kind); },
+  };
 
   if (loading) return <div className="muted">Loading backup information…</div>;
 
@@ -198,8 +225,8 @@ export default function BackupRestorePage() {
       <strong>Restore is destructive.</strong> Do it when staff are not actively using the tracker. Database and Full Restore replace business data and sign everyone out. Only restore backups created by this tracker version; the backend checks the migration schema before changing data.
     </div>
 
-    <RestorePanel kind="database" title="Restore Database" description="Restores users, tables, tickets, customers, history, tracking links, settings, and other durable tracker records. It does not change image/attachment files. Restore the matching media backup separately if needed." />
-    <RestorePanel kind="media" title="Restore Media" description="Restores/overwrites files contained in a Media Backup but keeps additional files currently on the media volume. This is safer when the current database may reference newer uploads." />
-    <RestorePanel kind="full" title="Restore Full Backup" description="Restores the database and media from one Full Backup. After all backup media is written successfully, media files not present in that backup are removed so the media folder matches the backup." />
+    <RestorePanel {...panelActions} file={files.database} confirmationInput={confirmationInputs.database} fileInputRef={fileInputs.database} kind="database" title="Restore Database" description="Restores users, tables, tickets, customers, history, tracking links, settings, and other durable tracker records. It does not change image/attachment files. Restore the matching media backup separately if needed." />
+    <RestorePanel {...panelActions} file={files.media} confirmationInput={confirmationInputs.media} fileInputRef={fileInputs.media} kind="media" title="Restore Media" description="Restores/overwrites files contained in a Media Backup but keeps additional files currently on the media volume. This is safer when the current database may reference newer uploads." />
+    <RestorePanel {...panelActions} file={files.full} confirmationInput={confirmationInputs.full} fileInputRef={fileInputs.full} kind="full" title="Restore Full Backup" description="Restores the database and media from one Full Backup. After all backup media is written successfully, media files not present in that backup are removed so the media folder matches the backup." />
   </div>;
 }

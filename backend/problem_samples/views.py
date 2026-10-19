@@ -367,6 +367,36 @@ def _email_values(value):
     return _validated_email_list(expanded)
 
 
+def _distributor_auto_cc(problem):
+    """Configured CC recipients for this ticket's current Distributor values."""
+    values = problem.custom_values or {}
+    recipients = []
+    seen = set()
+    for column in problem.table.columns.filter(column_type=ProblemColumn.TYPE_DISTRIBUTOR):
+        value = str(values.get(column.field_key, column.default_value) or '').strip().casefold()
+        if not value:
+            continue
+        for rule in column.distributor_cc_rules or []:
+            pattern = str(rule.get('pattern') or '').strip().casefold()
+            mode = rule.get('match_type')
+            if not pattern:
+                continue
+            matches = {
+                'exact': lambda: value == pattern,
+                'contains': lambda: pattern in value,
+                'starts_with': lambda: value.startswith(pattern),
+                'ends_with': lambda: value.endswith(pattern),
+                'wildcard': lambda: re.fullmatch(re.escape(pattern).replace(r'\*', '.*').replace(r'\?', '.'), value) is not None,
+            }
+            if mode not in matches or not matches[mode]():
+                continue
+            for address in _validated_email_list(rule.get('cc_emails')):
+                if address.casefold() not in seen:
+                    recipients.append(address)
+                    seen.add(address.casefold())
+    return recipients
+
+
 def _customer_email_recipients(problem):
     """Mirror the frontend customer-recipient selection on the server."""
     table = problem.table
@@ -1677,7 +1707,11 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
     def customer_notification_draft(self, request, pk=None):
         problem = self.get_object()
         to_recipients = _validated_email_list(request.data.get('to'))
-        cc_recipients = _validated_email_list(request.data.get('cc'))
+        cc_recipients = _validated_email_list([
+            *_validated_email_list(request.data.get('cc')),
+            *_distributor_auto_cc(problem),
+        ])
+        cc_recipients = [address for address in cc_recipients if address.casefold() not in {email.casefold() for email in to_recipients}]
         subject = str(request.data.get('subject') or f'Ticket #{problem.problem_number}')[:500]
         body = str(request.data.get('body') or '')
         if not to_recipients:

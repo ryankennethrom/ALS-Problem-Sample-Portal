@@ -194,6 +194,7 @@ class ProblemColumn(models.Model):
         help_text='Ordered ProblemColumn UUIDs used as Client Email company fallbacks.',
     )
     form_mask_rules = models.JSONField(default=dict, blank=True, help_text='Choice label -> form visibility and customer instructions.')
+    distributor_cc_rules = models.JSONField(default=list, blank=True, help_text='Distributor name match patterns and customer tracking email CC recipients.')
     intercolumn_rules = models.JSONField(
         default=list, blank=True,
         help_text='Directional equality/assignment rules used by Intercolumn Value Controller columns.',

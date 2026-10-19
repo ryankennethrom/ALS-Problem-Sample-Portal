@@ -1,4 +1,4 @@
-import { CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
+import { CustomValues, displayCustomValue, ProblemTable, DistributorCCRule } from '@/lib/problemTables';
 import { api } from '@/lib/api';
 
 export type ProblemTypePrompt = {column: string; choice: string; message: string};
@@ -74,6 +74,46 @@ function findDetail(details: ProblemDetail[], aliases: string[]): ProblemDetail 
 function findCustomerEmailColumns(table: ProblemTable | null | undefined) {
   if (!table) return [];
   return table.columns.filter(column => column.column_type === 'client_email' || column.column_type === 'email');
+}
+
+/** Case-insensitive Distributor name matching; * and ? work in wildcard mode. */
+export function distributorNameMatches(value: string, rule: DistributorCCRule): boolean {
+  const name = value.trim().toLocaleLowerCase();
+  const pattern = (rule.pattern || '').trim().toLocaleLowerCase();
+  if (!name || !pattern) return false;
+  switch (rule.match_type) {
+    case 'exact': return name === pattern;
+    case 'contains': return name.includes(pattern);
+    case 'starts_with': return name.startsWith(pattern);
+    case 'ends_with': return name.endsWith(pattern);
+    case 'wildcard': {
+      const escaped = Array.from(pattern, ch => ch === '*' ? '.*' : ch === '?' ? '.' : ('\\^$+?.()|{}[]'.includes(ch) ? '\\' + ch : ch)).join('');
+      const regex = '^' + escaped + '$';
+      return new RegExp(regex, 'u').test(name);
+    }
+    default: return false;
+  }
+}
+
+/** Combine all matching Distributor-column rules; never add the To contact again in CC. */
+export function findDistributorCCRecipients(table: ProblemTable | null | undefined, values: CustomValues, to: string[] = []): string[] {
+  const exclude = new Set(to.map(email => email.trim().toLowerCase()));
+  const recipients: string[] = [];
+  for (const column of table?.columns || []) {
+    if (column.column_type !== 'distributor') continue;
+    const name = String(values[column.field_key] ?? column.default_value ?? '');
+    for (const rule of column.distributor_cc_rules || []) {
+      if (!distributorNameMatches(name, rule)) continue;
+      for (const raw of rule.cc_emails || []) {
+        const address = raw.trim();
+        if (address && !exclude.has(address.toLowerCase())) {
+          recipients.push(address);
+          exclude.add(address.toLowerCase());
+        }
+      }
+    }
+  }
+  return recipients;
 }
 
 export function findCustomerEmails(table: ProblemTable | null | undefined, values: CustomValues): string[] {
@@ -159,8 +199,11 @@ export function buildCustomerEmailContent(
 ) {
   const recipientList = normalizeEmails(email);
   const additionalTo = normalizeEmails(context.additionalTo || []);
-  const ccRecipients = normalizeEmails(context.cc || []);
   const toRecipients = normalizeEmails([...recipientList, ...additionalTo]);
+  const ccRecipients = normalizeEmails([
+    ...normalizeEmails(context.cc || []),
+    ...findDistributorCCRecipients(context.table, context.values || {}, toRecipients),
+  ]).filter(address => !toRecipients.some(to => to.toLowerCase() === address.toLowerCase()));
   const multipleCustomerContacts = recipientList.length > 1;
 
   const problemNumber = context.problemNumber == null || context.problemNumber === ''

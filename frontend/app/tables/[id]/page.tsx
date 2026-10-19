@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { queueToastForReload } from '@/lib/toast';
-import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable, MaskFieldState, ProblemTypeRules } from '@/lib/problemTables';
+import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable, MaskFieldState, ProblemTypeRules, DistributorCCRule } from '@/lib/problemTables';
 import DistributorAutocomplete from '@/components/DistributorAutocomplete';
 import EndUserAutocomplete from '@/components/EndUserAutocomplete';
 import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
@@ -348,6 +348,50 @@ function MaskRulesEditor({
   </div>;
 }
 
+function DistributorCCRulesEditor({ rules, onChange }: {
+  rules: DistributorCCRule[];
+  onChange: (rules: DistributorCCRule[]) => void;
+}) {
+  const update = (index: number, changes: Partial<DistributorCCRule>) =>
+    onChange(rules.map((rule, i) => i === index ? { ...rule, ...changes } : rule));
+
+  return <div className="field" style={{gridColumn:'1 / -1'}}>
+    <label>Automatic CC recipients (customer tracking emails)</label>
+    <div className="muted result-meta" style={{marginBottom:8}}>
+      When this Distributor value matches a rule, add its recipients in Cc of the tracking email draft.
+      Rules are case-insensitive; all matching rules are combined, with duplicates removed.
+      Wildcards: * matches any characters; ? matches one character. Leave the rules empty to disable automatic Cc.
+    </div>
+    <div className="stack">
+      {rules.map((rule, i) => <div className="intercolumn-rule-card stack" key={i}>
+        <div className="intercolumn-rule-header"><strong>CC rule {i + 1}</strong>
+          <button className="button danger" type="button" onClick={() => onChange(rules.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+        <div className="intercolumn-rule-grid">
+          <div className="field"><label htmlFor={`distributor-rule-mode-${i}`}>Match type</label>
+            <select id={`distributor-rule-mode-${i}`} className="select" value={rule.match_type} onChange={e => update(i, {match_type: e.target.value as DistributorCCRule['match_type']})}>
+              <option value="exact">Exactly equals</option>
+              <option value="contains">Contains</option>
+              <option value="starts_with">Starts with</option>
+              <option value="ends_with">Ends with</option>
+              <option value="wildcard">Wildcard (* and ?)</option>
+            </select>
+          </div>
+          <div className="field"><label htmlFor={`distributor-rule-pattern-${i}`}>Distributor pattern</label>
+            <input id={`distributor-rule-pattern-${i}`} className="input" maxLength={160} value={rule.pattern} onChange={e => update(i, {pattern: e.target.value})} placeholder="e.g. Acme*" />
+          </div>
+        </div>
+        <div className="field"><label htmlFor={`distributor-rule-cc-${i}`}>CC email addresses (one per line)</label>
+          <textarea id={`distributor-rule-cc-${i}`} className="textarea compact-textarea" rows={3} value={(rule.cc_emails || []).join('\n')}
+            onChange={e => update(i, {cc_emails: e.target.value.split(/[\n;,]+/).map(x => x.trim())})}
+            placeholder={'support@example.com\nmanager@example.com'} />
+        </div>
+      </div>)}
+      {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {match_type:'contains', pattern:'', cc_emails:[]}])}>+ Add CC rule</button></div>}
+    </div>
+  </div>;
+}
+
 function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn; allColumns: ProblemColumn[]; onChanged: () => Promise<void>}) {
   const [name, setName] = useState(column.name);
   const [columnDescription, setColumnDescription] = useState(column.description || '');
@@ -358,6 +402,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
   const [dependencyIds, setDependencyIds] = useState<string[]>(column.client_email_dependencies || (column.depends_on_column ? [column.depends_on_column] : []));
   const [intercolumnRules, setIntercolumnRules] = useState<IntercolumnRule[]>(column.intercolumn_rules || []);
   const [maskRules, setMaskRules] = useState<ProblemTypeRules>(column.form_mask_rules || {});
+  const [distributorCCRules, setDistributorCCRules] = useState<DistributorCCRule[]>(column.distributor_cc_rules || []);
   const [required, setRequired] = useState(column.required);
   const [searchable, setSearchable] = useState(column.searchable);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(column.include_in_customer_notification);
@@ -390,6 +435,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
         intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
         form_mask_rules: type === 'problem_type' ? Object.fromEntries(Object.entries(maskRules).filter(([choice]) => choiceList.includes(choice))) : {},
+        distributor_cc_rules: type === 'distributor' ? distributorCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
         default_value: (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
       }), successMessage:'Column updated successfully.', errorMessage:'Could not update column'});
       await onChanged();
@@ -411,6 +457,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
     setDependencyIds([]);
     if (next !== 'intercolumn_controller') setIntercolumnRules([]);
     if (next !== 'problem_type') setMaskRules({});
+    if (next !== 'distributor') setDistributorCCRules([]);
   }
 
   return <div className="column-editor">
@@ -423,6 +470,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       {type === 'problem_type' && <MaskRulesEditor choices={choiceList} rules={maskRules} onChange={setMaskRules} columns={allColumns} excludeId={column.id} />}
+      {type === 'distributor' && <DistributorCCRulesEditor rules={distributorCCRules} onChange={setDistributorCCRules} />}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer notification</label></div>
     </div>
@@ -448,6 +496,7 @@ export default function TableSettings() {
   const [colDependencyIds, setColDependencyIds] = useState<string[]>([]);
   const [colIntercolumnRules, setColIntercolumnRules] = useState<IntercolumnRule[]>([]);
   const [colMaskRules, setColMaskRules] = useState<ProblemTypeRules>({});
+  const [colDistributorCCRules, setColDistributorCCRules] = useState<DistributorCCRule[]>([]);
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
@@ -485,6 +534,7 @@ export default function TableSettings() {
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
         intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
         form_mask_rules: colType === 'problem_type' ? Object.fromEntries(Object.entries(colMaskRules).filter(([choice]) => choiceList.includes(choice))) : {},
+        distributor_cc_rules: colType === 'distributor' ? colDistributorCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
         default_value: (colType === 'row_creator' || colType === 'recent_row_modifier' || colType === 'date_today') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
       setColName('');
@@ -496,6 +546,7 @@ export default function TableSettings() {
       setColDependencyIds([]);
       setColIntercolumnRules([]);
       setColMaskRules({});
+      setColDistributorCCRules([]);
       setRequired(false);
       setSearchable(true);
       setIncludeInCustomerNotification(false);
@@ -548,6 +599,7 @@ export default function TableSettings() {
     setColDependencyIds([]);
     if (next !== 'intercolumn_controller') setColIntercolumnRules([]);
     if (next !== 'problem_type') setColMaskRules({});
+    if (next !== 'distributor') setColDistributorCCRules([]);
   }
 
   if (!table) return <div>{error || 'Loading…'}</div>;
@@ -623,6 +675,7 @@ export default function TableSettings() {
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             {colType === 'problem_type' && <MaskRulesEditor choices={newChoiceList} rules={colMaskRules} onChange={setColMaskRules} columns={table.columns} />}
+            {colType === 'distributor' && <DistributorCCRulesEditor rules={colDistributorCCRules} onChange={setColDistributorCCRules} />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
             <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>

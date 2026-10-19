@@ -35,7 +35,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
             'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
-            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'form_mask_rules', 'position', 'is_system',
+            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'form_mask_rules', 'distributor_cc_rules', 'position', 'is_system',
             'created_at', 'modified_at',
         ]
         read_only_fields = ['field_key', 'is_system', 'group_users', 'depends_on_column_name', 'depends_on_field_key', 'client_email_dependency_details', 'created_at', 'modified_at']
@@ -258,6 +258,44 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             attrs['choices'] = cleaned
         else:
             attrs['choices'] = []
+
+        # Automatic customer-notification CC rules belong only to Distributor fields.
+        # Validate on the server so admins cannot persist invalid addresses/patterns.
+        if column_type == ProblemColumn.TYPE_DISTRIBUTOR:
+            rules = attrs.get('distributor_cc_rules', getattr(self.instance, 'distributor_cc_rules', [])) or []
+            if not isinstance(rules, list) or len(rules) > 30:
+                raise serializers.ValidationError({'distributor_cc_rules': 'Provide up to 30 matching rules.'})
+            cleaned_rules = []
+            modes = {'exact', 'contains', 'starts_with', 'ends_with', 'wildcard'}
+            for index, rule in enumerate(rules, start=1):
+                if not isinstance(rule, dict):
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index} must be an object.'})
+                mode = rule.get('match_type')
+                pattern = rule.get('pattern')
+                addresses = rule.get('cc_emails')
+                if mode not in modes:
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: select a matching method.'})
+                if not isinstance(pattern, str) or not pattern.strip() or len(pattern.strip()) > 160:
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: pattern must be 1 to 160 characters.'})
+                if not isinstance(addresses, list) or not 1 <= len(addresses) <= 20:
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: enter 1 to 20 CC addresses.'})
+                cleaned = []
+                seen = set()
+                for address in addresses:
+                    if not isinstance(address, str):
+                        raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid CC address.'})
+                    address = address.strip()
+                    try:
+                        validate_email(address)
+                    except DjangoValidationError:
+                        raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid CC address: {address}.'})
+                    if address.casefold() not in seen:
+                        cleaned.append(address)
+                        seen.add(address.casefold())
+                cleaned_rules.append({'match_type': mode, 'pattern': pattern.strip(), 'cc_emails': cleaned})
+            attrs['distributor_cc_rules'] = cleaned_rules
+        else:
+            attrs['distributor_cc_rules'] = []
 
         # A mask is a choice field whose selections define explicit creation-time
         # visibility. Column keys are stable UUIDs, not mutable field names.
