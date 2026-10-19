@@ -122,6 +122,15 @@ export default function Dashboard() {
   const [tableId,setTableId]=useState('');
   const [tablesLoading,setTablesLoading]=useState(true);
   const [showActionEmail,setShowActionEmail]=useState(false);
+  const [pendingSystemEmails,setPendingSystemEmails] = useState<number | null>(null);
+  useEffect(() => {
+    let stop = false;
+    api('/system-emails/?summary=1').then((d: {pending_count:number}) => {
+      if (!stop) setPendingSystemEmails(d.pending_count);
+    }).catch(() => { if (!stop) setPendingSystemEmails(null); });
+    return () => { stop = true; };
+  }, []);
+
 
 
   useEffect(()=>{
@@ -203,6 +212,15 @@ export default function Dashboard() {
         <h2 id="action-required-heading" className={styles.sectionHeading}>Action Required</h2>
         <button type="button" className="button" onClick={() => setShowActionEmail(true)}>Send action required update</button>
       </div>
+
+      <section className={styles.newCard} aria-label="Pending System Emails">
+        <div>
+          <div className={styles.label}>Pending System Emails</div>
+          <div className={styles.value}>{pendingSystemEmails == null ? '…' : format(pendingSystemEmails)}</div>
+          <div className={styles.note}>Distributor monthly reports awaiting staff review and sending</div>
+        </div>
+        <Link href="/send-system-emails#pending-system-emails" className={styles.seeAll}>See all &gt;</Link>
+      </section>
 
       <section className={styles.newCard} aria-label="Tracking Not Sent">
         <div>

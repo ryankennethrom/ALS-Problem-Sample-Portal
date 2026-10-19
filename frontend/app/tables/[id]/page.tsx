@@ -356,11 +356,11 @@ function DistributorCCRulesEditor({ rules, onChange }: {
     onChange(rules.map((rule, i) => i === index ? { ...rule, ...changes } : rule));
 
   return <div className="field" style={{gridColumn:'1 / -1'}}>
-    <label>Automatic CC recipients (customer tracking emails)</label>
+    <label>Distributor CC recipients and monthly reports</label>
     <div className="muted result-meta" style={{marginBottom:8}}>
       When this Distributor value matches a rule, add its recipients in Cc of the tracking email draft.
       Rules are case-insensitive; all matching rules are combined, with duplicates removed.
-      Wildcards: * matches any characters; ? matches one character. Leave the rules empty to disable automatic Cc.
+      Wildcards: * matches any characters; ? matches one character. Enable Send Monthly Reports to queue a monthly summary for these same recipients, filtered to matching Distributor tickets. Reports are reviewed and sent manually under Send System Emails.
     </div>
     <div className="stack">
       {rules.map((rule, i) => <div className="intercolumn-rule-card stack" key={i}>
@@ -386,8 +386,13 @@ function DistributorCCRulesEditor({ rules, onChange }: {
             onChange={e => update(i, {cc_emails: e.target.value.split(/[\n;,]+/).map(x => x.trim())})}
             placeholder={'support@example.com\nmanager@example.com'} />
         </div>
+        <label className="checkbox-label" style={{display:'flex',alignItems:'center',gap:9}}>
+          <input type="checkbox" checked={Boolean(rule.send_monthly_reports)} onChange={e => update(i, {send_monthly_reports: e.target.checked})} />
+          <strong>Send Monthly Reports</strong>
+        </label>
+        {rule.send_monthly_reports && <div className="muted result-meta">On the 1st of each month, queue one report for the prior calendar month. Staff review it in Send System Emails before sending.</div>}
       </div>)}
-      {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {match_type:'contains', pattern:'', cc_emails:[]}])}>+ Add CC rule</button></div>}
+      {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {match_type:'contains', pattern:'', cc_emails:[], send_monthly_reports:false}])}>+ Add CC rule</button></div>}
     </div>
   </div>;
 }

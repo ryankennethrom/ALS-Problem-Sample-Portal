@@ -1207,3 +1207,7 @@ a.result:hover{background:#f7f9fb}
 .reopen-container-summary{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
 .reopen-container-summary strong{overflow-wrap:anywhere}
 @media(max-width:520px){.reopen-container-dialog{padding:18px}.reopen-container-options{padding:12px}.reopen-container-input{margin-left:0}}
+
+/* Physical capacity check before placing a ticket into an existing container. */
+.reopen-container-fit-actions{display:flex;flex-direction:column;align-items:stretch;gap:10px}
+.reopen-container-fit-actions .button{width:100%;height:auto;min-height:42px;white-space:normal;text-align:center;overflow-wrap:anywhere}

@@ -7,6 +7,7 @@ import { applyIntercolumnRules, CustomValues, initialValue, ProblemTable, resolv
 import DynamicField from '@/components/DynamicField';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import CameraCapture from '@/components/CameraCapture';
+import CreateTicketContainerFitModal from '@/components/CreateTicketContainerFitModal';
 import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, prepareCustomerEmail } from '@/lib/customerEmail';
 
 type PendingTicketCreation = {
@@ -24,6 +25,8 @@ export default function ProblemForm() {
   const [tables, setTables] = useState<ProblemTable[]>([]);
   const [containerMode, setContainerMode] = useState<'existing' | 'new'>('existing');
   const [containerId, setContainerId] = useState('');
+  const [confirmedExistingContainerId, setConfirmedExistingContainerId] = useState('');
+  const [showFitConfirmation, setShowFitConfirmation] = useState(false);
   const [recentContainerId, setRecentContainerId] = useState('');
   const [newContainerId, setNewContainerId] = useState('');
   const [creatingContainer, setCreatingContainer] = useState(false);
@@ -118,12 +121,24 @@ export default function ProblemForm() {
     if (attachmentMode === 'required' && attachmentFiles.length === 0) {
       setError('At least one attachment is required by the selected form mask.'); return;
     }
+    // An existing container must be physically checked before the ticket can be
+    // prepared. Checking one Container ID never authorizes another Container ID.
+    if (containerMode === 'existing' && confirmedExistingContainerId !== containerId.trim()) {
+      setShowFitConfirmation(true);
+      return;
+    }
+    await prepareTicket(containerId.trim());
+  }
+
+  async function prepareTicket(assignedContainerId: string) {
+    if (saving || pendingCreation) return;
+    if (!table) { setError('No ticket table is available.'); return; }
     setSaving(true);
     let preparedId = '';
     try {
       const prepared = await api('/problem-samples/prepare-new/', {
         method: 'POST',
-        body: JSON.stringify({ table: tableId, container_code: containerId.trim(), custom_values: customValues, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
+        body: JSON.stringify({ table: tableId, container_code: assignedContainerId, custom_values: customValues, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
         errorMessage: 'Could not prepare ticket',
       });
       preparedId = String(prepared.id || '');
@@ -214,21 +229,41 @@ export default function ProblemForm() {
 
   return <>
   <form className="stack" onSubmit={submit}>
+    {tables.length > 0 && <section className="panel panel-blue">
+      <div className="panel-header"><strong>Ticket Table</strong></div>
+      <div className="panel-body">
+        <div className="field" style={{ maxWidth: 520 }}>
+          <label htmlFor="create-ticket-table">Table <span className="required-marker" aria-hidden="true">*</span></label>
+          <select id="create-ticket-table" className="input" value={tableId} disabled={saving || Boolean(pendingCreation)}
+            onChange={event => {
+              if (!event.target.value || event.target.value === tableId) return;
+              setError('');
+              setImageFiles([]);
+              setAttachmentFiles([]);
+              router.replace(`/problems/new?table=${encodeURIComponent(event.target.value)}`);
+            }}>
+            {tables.map(choice => <option key={choice.id} value={choice.id}>{choice.name}{choice.is_default ? ' (Default)' : ''}</option>)}
+          </select>
+          <div className="muted result-meta">Choose which table will store this ticket. Switching tables resets the ticket details and selected files.</div>
+        </div>
+      </div>
+    </section>}
     <section className="panel panel-blue container-create-panel">
       <div className="panel-header"><strong>Container</strong><span className="muted file-header-note">Required for new tickets</span></div>
       <div className="panel-body stack">
         <div className="container-mode-row" role="radiogroup" aria-label="Choose container">
-          <label className="check-label"><input type="radio" name="container-mode" checked={containerMode === 'existing'} onChange={() => { setContainerMode('existing'); setNewContainerId(''); }} /> Use an existing container</label>
-          <label className="check-label"><input type="radio" name="container-mode" checked={containerMode === 'new'} onChange={() => { setContainerMode('new'); setContainerId(''); setNewContainerId(''); }} /> Create a new container</label>
+          <label className="check-label"><input type="radio" name="container-mode" checked={containerMode === 'existing'} onChange={() => { setContainerMode('existing'); setNewContainerId(''); setConfirmedExistingContainerId(''); }} /> Use an existing container</label>
+          <label className="check-label"><input type="radio" name="container-mode" checked={containerMode === 'new'} onChange={() => { setContainerMode('new'); setContainerId(''); setNewContainerId(''); setConfirmedExistingContainerId(''); }} /> Create a new container</label>
         </div>
         {containerMode === 'existing' ? <div className="field" style={{maxWidth:420}}>
           <label htmlFor="container-id">Container ID <span className="required-marker" aria-hidden="true">*</span></label>
-          <input id="container-id" className="input" required value={containerId} onChange={e => setContainerId(e.target.value)} placeholder={recentContainerId || 'e.g. PC-000123'} />
+          <input id="container-id" className="input" required value={containerId} onChange={e => { setContainerId(e.target.value); setConfirmedExistingContainerId(''); }} placeholder={recentContainerId || 'e.g. PC-000123'} />
           {recentContainerId && <div className="recent-container-suggestion">
             <span className="muted result-meta">Most recently created available container:</span>
-            <button type="button" className="button secondary recent-container-button" onClick={() => setContainerId(recentContainerId)}>Use {recentContainerId}</button>
+            <button type="button" className="button secondary recent-container-button" onClick={() => { setContainerId(recentContainerId); setConfirmedExistingContainerId(''); }}>Use {recentContainerId}</button>
           </div>}
-          <div className="muted result-meta">Enter an active Container ID or choose Create a new container. The ID is verified when you save.</div>
+          <div className="muted result-meta">Enter an active Container ID or choose Create a new container. When creating the ticket, you must confirm that its samples physically fit in an existing container. The ID is verified on save.</div>
+          {confirmedExistingContainerId === containerId.trim() && containerId.trim() && <div role="status" className="muted result-meta">Physical fit confirmed for {confirmedExistingContainerId}. If you change the ID, you'll be asked again.</div>}
         </div> : <div className="new-container-box">
           {!newContainerId ? <>
             <div><strong>Create a new container</strong></div>
@@ -275,6 +310,28 @@ export default function ProblemForm() {
     {error && <div className="error">{error}</div>}
     {table ? <div><button className="button" disabled={saving || Boolean(pendingCreation)}>{saving ? 'Preparing…' : 'Create Ticket'}</button></div> : null}
   </form>
+  {showFitConfirmation && containerMode === 'existing' && <CreateTicketContainerFitModal
+    containerId={containerId.trim()}
+    onFits={() => {
+      const confirmedId = containerId.trim();
+      setConfirmedExistingContainerId(confirmedId);
+      setShowFitConfirmation(false);
+      void prepareTicket(confirmedId);
+    }}
+    onDifferent={() => {
+      setShowFitConfirmation(false);
+      setContainerId('');
+      setConfirmedExistingContainerId('');
+    }}
+    onCreateNew={() => {
+      setShowFitConfirmation(false);
+      setContainerMode('new');
+      setContainerId('');
+      setNewContainerId('');
+      setConfirmedExistingContainerId('');
+    }}
+    onDismiss={() => setShowFitConfirmation(false)}
+  />}
   {pendingCreation && <CustomerEmailModal
     content={pendingCreation.emailContent}
     onSent={() => finalizeCreation(true)}

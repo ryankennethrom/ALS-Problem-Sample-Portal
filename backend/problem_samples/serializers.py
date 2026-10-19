@@ -1,3 +1,4 @@
+import uuid
 import re
 import copy
 import math
@@ -292,7 +293,27 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                     if address.casefold() not in seen:
                         cleaned.append(address)
                         seen.add(address.casefold())
-                cleaned_rules.append({'match_type': mode, 'pattern': pattern.strip(), 'cc_emails': cleaned})
+                # Stable identity: monthly report jobs must not duplicate when rules reorder.
+                rule_id = rule.get('id')
+                try:
+                    rule_id = str(uuid.UUID(str(rule_id))) if rule_id else str(uuid.uuid4())
+                except (TypeError, ValueError, AttributeError):
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid rule identifier.'})
+                if any(item['id'] == rule_id for item in cleaned_rules):
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: duplicate rule identifier.'})
+                monthly = rule.get('send_monthly_reports', False)
+                if not isinstance(monthly, bool):
+                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: Send Monthly Reports must be true or false.'})
+                existing = next((old for old in (getattr(self.instance, 'distributor_cc_rules', []) or [])
+                                 if isinstance(old, dict) and old.get('id') == rule_id), None)
+                enabled_at = (existing or {}).get('monthly_reports_enabled_at') if (existing or {}).get('send_monthly_reports') else None
+                if monthly and not enabled_at:
+                    enabled_at = timezone.now().isoformat()
+                if not monthly:
+                    enabled_at = None
+                cleaned_rules.append({'id': rule_id, 'match_type': mode, 'pattern': pattern.strip(),
+                                      'cc_emails': cleaned, 'send_monthly_reports': monthly,
+                                      'monthly_reports_enabled_at': enabled_at})
             attrs['distributor_cc_rules'] = cleaned_rules
         else:
             attrs['distributor_cc_rules'] = []
@@ -929,7 +950,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 'container_code': 'Choose either an existing Container ID or create a new container, not both.'
             })
         if create_new_container and instance is None:
-            raise serializers.ValidationError({'create_new_container': 'This option is only for reopening existing tickets.'})
+            raise serializers.ValidationError({'create_new_container': 'A new container can only be created for an existing ticket.'})
         if instance is None:
             if container_code:
                 container = ProblemContainer.resolve_identifier(container_code)
@@ -1105,8 +1126,19 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
             instance and instance.workflow_status in TERMINAL_PROBLEM_STATUSES
             and workflow_value not in TERMINAL_PROBLEM_STATUSES
         )
-        if create_new_container and not reactivating:
-            errors['create_new_container'] = 'A new container can only be created when reopening a terminal ticket.'
+        # An existing ticket may be reassigned to a freshly generated container
+        # even if its workflow is unchanged. Never assign a physical container to
+        # a completed/terminal ticket, or move contents out of a dumping container
+        # without using Undo Disposal.
+        if create_new_container:
+            if workflow_value in TERMINAL_PROBLEM_STATUSES:
+                errors['create_new_container'] = 'Reopen this ticket before assigning a new container.'
+            elif instance and instance.container_id and instance.container and (instance.container.is_dumping or instance.container.disposed_at):
+                errors['container_code'] = 'Undo the container disposal before changing this ticket’s container.'
+            else:
+                # Delayed until update(): field validation must pass before a
+                # container is created; perform_update() is transaction.atomic.
+                attrs['create_new_container'] = True
         if reactivating:
             if instance.container_id and instance.container and (instance.container.is_dumping or instance.container.disposed_at):
                 errors['container_code'] = 'Undo the dumping container disposal before reopening this ticket.'
@@ -1115,10 +1147,6 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                     'Choose an existing Container ID or create a new container '
                     'before changing a terminal workflow to a non-terminal workflow.'
                 )
-            if create_new_container and not errors:
-                # Delayed until update(): all field validation must pass before
-                # a new container is created, and the view wraps save in atomic().
-                attrs['create_new_container'] = True
         # The API must enforce this role restriction even if a client sends a
         # crafted PATCH/PUT, or completes a previously prepared ticket. Existing
         # Back to testing tickets can still be edited without changing workflow.

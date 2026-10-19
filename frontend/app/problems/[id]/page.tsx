@@ -106,6 +106,8 @@ export default function Detail() {
   const [table, setTable] = useState<ProblemTable | null>(null);
   const [customValues, setCustomValues] = useState<CustomValues>({});
   const [containerCode, setContainerCode] = useState('');
+  const [changeContainerOpen, setChangeContainerOpen] = useState(false);
+  const [pendingContainerChoice, setPendingContainerChoice] = useState<{ mode:'existing' | 'new'; containerId:string } | null>(null);
   const [reopenContainerMode, setReopenContainerMode] = useState<'existing' | 'new'>('existing');
   const [reopenExistingContainer, setReopenExistingContainer] = useState('');
   const [reopenContainerConfirmed, setReopenContainerConfirmed] = useState(false);
@@ -152,6 +154,7 @@ export default function Detail() {
     try {
       const problem: Problem = await api(`/problem-samples/${id}/`);
       setP(problem); setCustomValues(problem.custom_values || {}); setContainerCode(problem.container_id || '');
+      setPendingContainerChoice(null); setChangeContainerOpen(false);
       setReopenContainerMode('existing'); setReopenExistingContainer('');
       setReopenContainerConfirmed(false); setPendingReopenWorkflow(null);
       if (problem.table) setTable(await api(`/problem-tables/${problem.table}/`));
@@ -174,9 +177,13 @@ export default function Detail() {
       // The modal runs before changing the draft workflow, so Cancel leaves it unchanged.
       if (p && TERMINAL_WORKFLOWS.has(String(p.custom_values?.['current-workflow'] || ''))
         && nextWorkflow && !TERMINAL_WORKFLOWS.has(nextWorkflow)) {
+        setPendingContainerChoice(null);
         setPendingReopenWorkflow(nextWorkflow);
         return;
       }
+      // A workflow change invalidates a staged container move. In particular,
+      // shipped/testing completion detaches the container on the server.
+      setPendingContainerChoice(null);
       setReopenContainerConfirmed(false);
       setReopenExistingContainer('');
     }
@@ -313,6 +320,13 @@ export default function Detail() {
     setError('');
   }
 
+  function confirmChangedContainer(choice: { mode: 'existing' | 'new'; containerId: string }) {
+    setPendingContainerChoice(choice);
+    setChangeContainerOpen(false);
+    setError('');
+    setSaved('');
+  }
+
   async function saveCustom() {
     setSaved(''); setError('');
     // A workflow rule may also change Current Workflow indirectly. Never bypass the modal.
@@ -322,7 +336,7 @@ export default function Detail() {
     }
     const requestedContainer = reopeningTerminalTicket
       ? (reopenContainerMode === 'existing' ? reopenExistingContainer.trim() : '')
-      : containerCode.trim();
+      : pendingContainerChoice?.mode === 'existing' ? pendingContainerChoice.containerId.trim() : containerCode.trim();
     if (reopeningTerminalTicket && reopenContainerMode === 'existing' && !requestedContainer) {
       setPendingReopenWorkflow(String(customValues['current-workflow']));
       return;
@@ -331,9 +345,16 @@ export default function Detail() {
       setError('Undo the dumping container disposal before reopening this ticket.');
       return;
     }
-    const containerSelection = reopeningTerminalTicket && reopenContainerMode === 'new'
+    const createNewContainer = reopeningTerminalTicket
+      ? reopenContainerMode === 'new'
+      : pendingContainerChoice?.mode === 'new';
+    // Do not overwrite an unchanged container from stale page state. Only
+    // submit a container assignment when staff explicitly choose one.
+    const containerSelection = createNewContainer
       ? { create_new_container: true }
-      : { container_code: requestedContainer };
+      : (reopeningTerminalTicket || pendingContainerChoice)
+        ? { container_code: requestedContainer }
+        : {};
     const reason = await requestChangeReason('Why are you changing this ticket?');
     if (reason === null) return;
     if (p && p.custom_values?.['current-workflow'] !== 'Back to testing' && customValues['current-workflow'] === 'Back to testing') {
@@ -734,7 +755,12 @@ export default function Detail() {
                 <button type="button" className="button secondary small" onClick={() => setPendingReopenWorkflow(String(customValues['current-workflow']))}>Change container</button>
               </div>
               {p.container_is_dumping && <p className="error" role="alert">Undo the dumping container disposal before reopening this ticket.</p>}
-            </div> : <div className="field"><label htmlFor="edit-container-id">Container ID</label><input id="edit-container-id" className="input" value={containerCode} onChange={event=>setContainerCode(event.target.value)} placeholder="e.g. PC-000123" /><div className="muted result-meta">Enter an active Container ID to assign this ticket, or clear the field to remove it from its container.</div></div>}{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
+            </div> : <div className="field"><label>Container ID</label>
+              <div className="reopen-container-summary"><strong>{pendingContainerChoice ? (pendingContainerChoice.mode === 'new' ? 'New container (generated on save)' : pendingContainerChoice.containerId) : (p.container_id || 'Unassigned')}</strong><button type="button" className="button secondary small" disabled={Boolean(p.container_is_dumping) || TERMINAL_WORKFLOWS.has(String(customValues['current-workflow'] || ''))} onClick={() => setChangeContainerOpen(true)}>Change</button></div>
+              {pendingContainerChoice && <div className="muted result-meta" role="status">Pending container change. Click Save Changes to apply it.</div>}
+              {TERMINAL_WORKFLOWS.has(String(customValues['current-workflow'] || '')) && <div className="muted result-meta">Reopen this ticket to assign a different container.</div>}
+              {p.container_is_dumping && <div className="muted result-meta">Undo disposal before changing this container.</div>}
+            </div>}{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
             ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({...p, custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
             : column.field_key === 'system-tracking-link'
               ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{p.tracking_url ? <a className="table-link tracking-link-value" href={p.tracking_url} target="_blank" rel="noreferrer">{p.tracking_url}</a> : <input className="input readonly-input" value="—" disabled readOnly aria-disabled="true" />}</div>
@@ -786,7 +812,7 @@ export default function Detail() {
 
       </div>
 
-      <aside className="panel"><div className="panel-header">Ticket Information</div><div className="panel-body"><dl className="detail-list"><dt>Table</dt><dd>{p.table_name || '—'}</dd><dt>Ticket ID</dt><dd>{p.problem_number}</dd><dt>Date Created</dt><dd>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</dd><dt>Container ID</dt><dd>{p.container_id ? <Link className="table-link" href={`/disposal/containers/${p.container_is_dumping ? "recently-disposed" : "all"}#container-${p.container_id}`}>{p.container_id}</Link> : 'Unassigned'}</dd><dt>Ticket expiration period</dt><dd>{(p.pt_days ?? table?.pt_days ?? 30) === 0 ? 'Immediate when Dispose Automatically is changed to Yes' : `${p.pt_days ?? table?.pt_days ?? 30} day${(p.pt_days ?? table?.pt_days ?? 30) === 1 ? '' : 's'} from the most recent change of Dispose Automatically from No to Yes`}</dd><dt>Customer notified</dt><dd>{p.customer_notified_at ? new Date(p.customer_notified_at).toLocaleString() : 'Not yet confirmed'}</dd><dt>Automatic disposal started</dt><dd>{p.automatic_disposal_started_at ? new Date(p.automatic_disposal_started_at).toLocaleString() : 'Not active'}</dd><dt>Expires</dt><dd>{p.expires_at ? new Date(p.expires_at).toLocaleString() : '—'}</dd><dt>Expiration status</dt><dd>{p.expiration_status === 'expired' ? 'Expired' : 'Active'}</dd><dt>Internal Row ID</dt><dd>{p.id}</dd><dt>Columns</dt><dd>{table?.columns.length || 0}</dd><dt>Images</dt><dd>{p.images?.length || 0}</dd><dt>Attachments</dt><dd>{p.attachments?.length || 0}</dd></dl></div></aside>
+      <aside className="panel"><div className="panel-header">Ticket Information</div><div className="panel-body"><dl className="detail-list"><dt>Table</dt><dd>{p.table_name || '—'}</dd><dt>Ticket ID</dt><dd>{p.problem_number}</dd><dt>Date Created</dt><dd>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</dd><dt>Container ID</dt><dd><div className="reopen-container-summary">{p.container_id ? <Link className="table-link" href={`/disposal/containers/${p.container_is_dumping ? "recently-disposed" : "all"}#container-${p.container_id}`}>{p.container_id}</Link> : 'Unassigned'}<button type="button" className="button secondary small" disabled={Boolean(p.container_is_dumping) || TERMINAL_WORKFLOWS.has(String(customValues['current-workflow'] || '')) || reopeningTerminalTicket} onClick={() => setChangeContainerOpen(true)}>Change</button></div>{pendingContainerChoice && !reopeningTerminalTicket && <div className="muted result-meta">Pending: {pendingContainerChoice.mode === 'new' ? 'New container' : pendingContainerChoice.containerId} — save to apply</div>}</dd><dt>Ticket expiration period</dt><dd>{(p.pt_days ?? table?.pt_days ?? 30) === 0 ? 'Immediate when Dispose Automatically is changed to Yes' : `${p.pt_days ?? table?.pt_days ?? 30} day${(p.pt_days ?? table?.pt_days ?? 30) === 1 ? '' : 's'} from the most recent change of Dispose Automatically from No to Yes`}</dd><dt>Customer notified</dt><dd>{p.customer_notified_at ? new Date(p.customer_notified_at).toLocaleString() : 'Not yet confirmed'}</dd><dt>Automatic disposal started</dt><dd>{p.automatic_disposal_started_at ? new Date(p.automatic_disposal_started_at).toLocaleString() : 'Not active'}</dd><dt>Expires</dt><dd>{p.expires_at ? new Date(p.expires_at).toLocaleString() : '—'}</dd><dt>Expiration status</dt><dd>{p.expiration_status === 'expired' ? 'Expired' : 'Active'}</dd><dt>Internal Row ID</dt><dd>{p.id}</dd><dt>Columns</dt><dd>{table?.columns.length || 0}</dd><dt>Images</dt><dd>{p.images?.length || 0}</dd><dt>Attachments</dt><dd>{p.attachments?.length || 0}</dd></dl></div></aside>
     </div>
 
     {currentUser?.is_admin && deleteConfirmationOpen && <div className="delete-row-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deletingProblem) setDeleteConfirmationOpen(false); }}>
@@ -819,6 +845,16 @@ export default function Detail() {
     </div>}
 
     {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} launchedAt={historyReplyEmailDraft.launchedAt} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
+
+    {changeContainerOpen && <ReopenContainerModal
+      purpose="change"
+      ticketNumber={p.problem_number}
+      previousWorkflow={String(p.custom_values?.['current-workflow'] || '')}
+      nextWorkflow={String(customValues['current-workflow'] || '')}
+      isInDumpingContainer={Boolean(p.container_is_dumping)}
+      onCancel={() => setChangeContainerOpen(false)}
+      onConfirm={confirmChangedContainer}
+    />}
 
     {pendingReopenWorkflow && <ReopenContainerModal
       ticketNumber={p.problem_number}

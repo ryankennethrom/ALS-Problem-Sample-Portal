@@ -54,6 +54,8 @@ export type ClientEmailDependency = {
 };
 
 export type DistributorCCRule = {
+  id?: string;
+  send_monthly_reports?: boolean;
   match_type: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'wildcard';
   pattern: string;
   cc_emails: string[];

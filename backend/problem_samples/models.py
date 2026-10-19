@@ -1000,3 +1000,30 @@ def delete_problem_image_file(sender, instance, **kwargs):
 def delete_problem_attachment_file(sender, instance, **kwargs):
     if instance.file:
         instance.file.delete(save=False)
+
+
+class SystemEmail(models.Model):
+    """A due, reviewable system-generated draft; never automatically sends email."""
+    TYPE_DISTRIBUTOR_MONTHLY = 'distributor_monthly'
+    STATUS_PENDING = 'pending'
+    STATUS_SENT = 'sent'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    email_type = models.CharField(max_length=40, default=TYPE_DISTRIBUTOR_MONTHLY)
+    source_column = models.ForeignKey(ProblemColumn, on_delete=models.CASCADE, related_name='system_emails')
+    rule_identifier = models.UUIDField()
+    period_start = models.DateField()
+    period_end = models.DateField()  # exclusive
+    distributor_pattern = models.CharField(max_length=160)
+    to_emails = models.JSONField(default=list)
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    matched_ticket_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=12, default=STATUS_PENDING, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    sent_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='confirmed_system_emails')
+
+    class Meta:
+        ordering = ['-period_start', '-created_at']
+        constraints = [models.UniqueConstraint(fields=['source_column', 'rule_identifier', 'period_start'], name='unique_monthly_email_per_rule_period')]

@@ -176,6 +176,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/dashboard" className={`side-link ${pathname.startsWith('/dashboard') ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="dashboard"/></span><span className="side-label">Dashboard</span>
         </Link>
+        <Link href="/send-system-emails" className={`side-link ${pathname === '/send-system-emails' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="mail"/></span><span className="side-label">Send System Emails</span>
+        </Link>
         <Link href="/mentions" className={`side-link ${pathname === '/mentions' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="mention"/></span><span className="side-label">Mentions</span>{mentionUnread > 0 && <span className="side-count-badge" aria-label={`${mentionUnread} unread mentions`}>{mentionUnread > 99 ? '99+' : mentionUnread}</span>}
         </Link>
@@ -194,7 +197,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="side-section-label">Lab</div>
 
-        <Link href="/create-problem-sample" className={`side-link ${pathname === '/create-problem-sample' || pathname === '/problems/new' ? 'active' : ''}`}>
+        <Link href="/problems/new" className={`side-link ${pathname === '/create-problem-sample' || pathname === '/problems/new' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="create"/></span><span className="side-label">Create Ticket</span>
         </Link>
 
