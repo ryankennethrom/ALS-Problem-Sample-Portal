@@ -6,7 +6,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
-import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, invokeCustomerEmail, mailtoForCustomerEmail, prepareCustomerEmail } from '@/lib/customerEmail';
+import ReopenContainerModal from '@/components/ReopenContainerModal';
+import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, findDistributorCCRecipients, invokeCustomerEmail, mailtoForCustomerEmail, prepareCustomerEmail } from '@/lib/customerEmail';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import GeneralCustomerEmailModal from '@/components/GeneralCustomerEmailModal';
 import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackToTestingEmailModal';
@@ -47,6 +48,7 @@ type HistoryEntry = {
     customer_message?: string;
     staff_reply?: string;
     recipients?: string[];
+    cc?: string[];
     tracking_url?: string;
   };
   actor_email: string;
@@ -54,6 +56,11 @@ type HistoryEntry = {
   created_at: string;
 };
 type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues };
+
+// Only completed workflows require a container when staff reopen the ticket.
+const TERMINAL_WORKFLOWS = new Set([
+  'Back to testing', 'Disposed', 'Shipped back to client',
+]);
 
 type MentionEmailPreview = {
   requires_email: boolean;
@@ -99,6 +106,10 @@ export default function Detail() {
   const [table, setTable] = useState<ProblemTable | null>(null);
   const [customValues, setCustomValues] = useState<CustomValues>({});
   const [containerCode, setContainerCode] = useState('');
+  const [reopenContainerMode, setReopenContainerMode] = useState<'existing' | 'new'>('existing');
+  const [reopenExistingContainer, setReopenExistingContainer] = useState('');
+  const [reopenContainerConfirmed, setReopenContainerConfirmed] = useState(false);
+  const [pendingReopenWorkflow, setPendingReopenWorkflow] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [historyEntryOpen, setHistoryEntryOpen] = useState(false);
   const [preparingMentionEmail, setPreparingMentionEmail] = useState(false);
@@ -131,11 +142,18 @@ export default function Detail() {
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deletingProblem, setDeletingProblem] = useState(false);
   const initialHashHandled = useRef(false);
+  const reopeningTerminalTicket = Boolean(
+    p && TERMINAL_WORKFLOWS.has(String(p.custom_values?.['current-workflow'] || ''))
+    && !TERMINAL_WORKFLOWS.has(String(customValues['current-workflow'] || ''))
+    && Boolean(customValues['current-workflow'])
+  );
 
   async function load() {
     try {
       const problem: Problem = await api(`/problem-samples/${id}/`);
       setP(problem); setCustomValues(problem.custom_values || {}); setContainerCode(problem.container_id || '');
+      setReopenContainerMode('existing'); setReopenExistingContainer('');
+      setReopenContainerConfirmed(false); setPendingReopenWorkflow(null);
       if (problem.table) setTable(await api(`/problem-tables/${problem.table}/`));
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
   }
@@ -151,6 +169,17 @@ export default function Detail() {
   }, [p]);
   function updateCustomValue(columnId: string, fieldKey: string, value: unknown) {
     if (!table) return;
+    if (fieldKey === 'current-workflow') {
+      const nextWorkflow = String(value || '');
+      // The modal runs before changing the draft workflow, so Cancel leaves it unchanged.
+      if (p && TERMINAL_WORKFLOWS.has(String(p.custom_values?.['current-workflow'] || ''))
+        && nextWorkflow && !TERMINAL_WORKFLOWS.has(nextWorkflow)) {
+        setPendingReopenWorkflow(nextWorkflow);
+        return;
+      }
+      setReopenContainerConfirmed(false);
+      setReopenExistingContainer('');
+    }
     setCustomValues(current => {
       const next = { ...current, [fieldKey]: value };
       for (const candidate of table.columns) {
@@ -274,9 +303,37 @@ export default function Detail() {
     }
   }
 
+  function confirmReopenContainer(choice: { mode: 'existing' | 'new'; containerId: string }) {
+    if (!pendingReopenWorkflow || !table) return;
+    setReopenContainerMode(choice.mode);
+    setReopenExistingContainer(choice.containerId);
+    setReopenContainerConfirmed(true);
+    setCustomValues(current => applyIntercolumnRules(table, { ...current, 'current-workflow': pendingReopenWorkflow }));
+    setPendingReopenWorkflow(null);
+    setError('');
+  }
+
   async function saveCustom() {
     setSaved(''); setError('');
-    const requestedContainer = containerCode.trim();
+    // A workflow rule may also change Current Workflow indirectly. Never bypass the modal.
+    if (reopeningTerminalTicket && !reopenContainerConfirmed) {
+      setPendingReopenWorkflow(String(customValues['current-workflow']));
+      return;
+    }
+    const requestedContainer = reopeningTerminalTicket
+      ? (reopenContainerMode === 'existing' ? reopenExistingContainer.trim() : '')
+      : containerCode.trim();
+    if (reopeningTerminalTicket && reopenContainerMode === 'existing' && !requestedContainer) {
+      setPendingReopenWorkflow(String(customValues['current-workflow']));
+      return;
+    }
+    if (reopeningTerminalTicket && p?.container_is_dumping) {
+      setError('Undo the dumping container disposal before reopening this ticket.');
+      return;
+    }
+    const containerSelection = reopeningTerminalTicket && reopenContainerMode === 'new'
+      ? { create_new_container: true }
+      : { container_code: requestedContainer };
     const reason = await requestChangeReason('Why are you changing this ticket?');
     if (reason === null) return;
     if (p && p.custom_values?.['current-workflow'] !== 'Back to testing' && customValues['current-workflow'] === 'Back to testing') {
@@ -291,7 +348,7 @@ export default function Detail() {
       const updated = await api(`/problem-samples/${id}/`, {
         method:'PATCH',
         headers: changeReasonHeaders(reason),
-        body:JSON.stringify({custom_values:customValues, container_code:requestedContainer}),
+        body:JSON.stringify({custom_values:customValues, ...containerSelection}),
         successMessage:'Ticket saved successfully.',
         errorMessage:'Could not save ticket',
       });
@@ -393,6 +450,9 @@ export default function Detail() {
 
   const problem = p;
   const customerEmails = findCustomerEmails(table, customValues);
+  // Use saved Distributor values, just like the backend that records the sent email.
+  // Editing a Distributor without saving must not cause a different CC list in the draft.
+  const generalEmailCC = findDistributorCCRecipients(table, p.custom_values, customerEmails);
   const rowTitle = `Ticket #${problem.problem_number}`;
 
   async function sendTrackingLink() {
@@ -630,6 +690,7 @@ export default function Detail() {
                 {entry.details?.customer_requested_information && <div>{entry.details.customer_requested_information}</div>}
                 <div style={{marginTop:10}}><button type="button" className="button secondary small" onClick={() => openHistoryReply(entry)}>Reply</button></div>
               </div>}
+              {entry.action === 'customer_notification' && entry.summary === 'Sent an email to the customer' && (entry.details?.recipients?.length || entry.details?.cc?.length) ? <div className="history-customer-information">{entry.details?.recipients?.length ? <div><strong>To:</strong> {entry.details.recipients.join('; ')}</div> : null}{entry.details?.cc?.length ? <div><strong>Cc:</strong> {entry.details.cc.join('; ')}</div> : null}</div> : null}
               {entry.details?.staff_reply && <div className="history-customer-information"><strong>Staff reply:</strong><div>{entry.details.staff_reply}</div>{entry.details.customer_message && <div className="muted" style={{marginTop:6}}><strong>Replying to:</strong> {entry.details.customer_message}</div>}{entry.details.recipients?.length ? <div className="muted" style={{marginTop:4}}>Emailed to {entry.details.recipients.join('; ')}</div> : null}</div>}
               {((entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-files">
                 <strong>Files attached by customer</strong>
@@ -666,7 +727,14 @@ export default function Detail() {
     <div className="two-col">
       <div className="stack">
         <section className="panel panel-blue"><div className="panel-header">Ticket</div><div className="panel-body stack">
-          {table ? <><div className="grid"><div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value={p.problem_number} disabled readOnly aria-disabled="true" /></div><div className="field readonly-field"><label>Date Created</label><input className="input readonly-input" value={p.created_at ? new Date(p.created_at).toLocaleString() : '—'} disabled readOnly aria-disabled="true" /></div><div className="field"><label htmlFor="edit-container-id">Container ID</label><input id="edit-container-id" className="input" value={containerCode} onChange={event=>setContainerCode(event.target.value)} placeholder="e.g. PC-000123" /><div className="muted result-meta">Enter an active Container ID to assign this ticket, or clear the field to remove it from its container.</div></div>{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
+          {table ? <><div className="grid"><div className="field readonly-field"><label>Ticket ID</label><input className="input readonly-input" value={p.problem_number} disabled readOnly aria-disabled="true" /></div><div className="field readonly-field"><label>Date Created</label><input className="input readonly-input" value={p.created_at ? new Date(p.created_at).toLocaleString() : '—'} disabled readOnly aria-disabled="true" /></div>{reopeningTerminalTicket ? <div className="field">
+              <label>Container to assign</label>
+              <div className="reopen-container-summary">
+                <strong>{reopenContainerConfirmed ? (reopenContainerMode === 'new' ? 'New container (generated on save)' : reopenExistingContainer) : 'Container selection required'}</strong>
+                <button type="button" className="button secondary small" onClick={() => setPendingReopenWorkflow(String(customValues['current-workflow']))}>Change container</button>
+              </div>
+              {p.container_is_dumping && <p className="error" role="alert">Undo the dumping container disposal before reopening this ticket.</p>}
+            </div> : <div className="field"><label htmlFor="edit-container-id">Container ID</label><input id="edit-container-id" className="input" value={containerCode} onChange={event=>setContainerCode(event.target.value)} placeholder="e.g. PC-000123" /><div className="muted result-meta">Enter an active Container ID to assign this ticket, or clear the field to remove it from its container.</div></div>}{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
             ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({...p, custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
             : column.field_key === 'system-tracking-link'
               ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{p.tracking_url ? <a className="table-link tracking-link-value" href={p.tracking_url} target="_blank" rel="noreferrer">{p.tracking_url}</a> : <input className="input readonly-input" value="—" disabled readOnly aria-disabled="true" />}</div>
@@ -752,10 +820,19 @@ export default function Detail() {
 
     {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} launchedAt={historyReplyEmailDraft.launchedAt} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
 
+    {pendingReopenWorkflow && <ReopenContainerModal
+      ticketNumber={p.problem_number}
+      previousWorkflow={String(p.custom_values?.['current-workflow'] || '')}
+      nextWorkflow={pendingReopenWorkflow}
+      isInDumpingContainer={Boolean(p.container_is_dumping)}
+      onCancel={() => setPendingReopenWorkflow(null)}
+      onConfirm={confirmReopenContainer}
+    />}
+
     {changeReasonModal}
 
     {pendingEmailLaunch && <CustomerEmailModal content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
-    {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
+    {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} ccRecipients={generalEmailCC} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
     {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} showRackReminder={testingEmailDraft.mode === 'transition'} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
     {mentionEmailDraft && <MentionEmailModal emails={mentionEmailDraft.emails} onComplete={() => saveComment(mentionEmailDraft.body, mentionEmailDraft.confirmationToken).catch(() => {})} onCancel={() => setMentionEmailDraft(null)} busy={savingMentionComment} error={error} />}
   </div>;

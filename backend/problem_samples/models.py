@@ -24,15 +24,22 @@ PROBLEM_STATUS_TO_BE_BACK_TO_TESTING = 'To be back to testing'
 PROBLEM_STATUS_BACK_TO_TESTING = 'Back to testing'
 PROBLEM_STATUS_DISPOSED = 'Disposed'
 PROBLEM_STATUS_SHIPPED_BACK = 'Shipped back to client'
+# Completed workflows: moving from one of these into ANY other workflow
+# reopens a ticket and requires an explicit physical container assignment.
 TERMINAL_PROBLEM_STATUSES = [
-    PROBLEM_STATUS_TO_BE_DISPOSED,
-    PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
-    PROBLEM_STATUS_TO_BE_BACK_TO_TESTING,
     PROBLEM_STATUS_BACK_TO_TESTING,
     PROBLEM_STATUS_DISPOSED,
     PROBLEM_STATUS_SHIPPED_BACK,
 ]
-CURRENT_WORKFLOW_CHOICES = [CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, *TERMINAL_PROBLEM_STATUSES]
+# Pending action queues are NOT terminal, but are protected against automatic
+# disposal and excluded from the CS follow-up response queues.
+ROUTED_PROBLEM_STATUSES = [
+    PROBLEM_STATUS_TO_BE_DISPOSED,
+    PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
+    PROBLEM_STATUS_TO_BE_BACK_TO_TESTING,
+    *TERMINAL_PROBLEM_STATUSES,
+]
+CURRENT_WORKFLOW_CHOICES = [CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, *ROUTED_PROBLEM_STATUSES]
 # Backward-compatible name used by a few helpers.
 SYSTEM_PROBLEM_STATUSES = list(CURRENT_WORKFLOW_CHOICES)
 
@@ -367,7 +374,7 @@ def apply_intercolumn_rules_to_values(table, values):
         # terminal workflow, automatic disposal must be off. Treat that invariant
         # as part of the fixed-point calculation so rules can react to the final No.
         workflow = str(working.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
-        if workflow in TERMINAL_PROBLEM_STATUSES and not _intercolumn_values_equal(
+        if workflow in ROUTED_PROBLEM_STATUSES and not _intercolumn_values_equal(
                 working.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY), DISPOSE_AUTOMATICALLY_NO):
             working[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
             changed_keys.add(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY)
@@ -715,7 +722,7 @@ class ProblemSample(models.Model):
         """
         now = now or timezone.now()
         previous_status = self.workflow_status
-        if previous_status in TERMINAL_PROBLEM_STATUSES:
+        if previous_status in ROUTED_PROBLEM_STATUSES:
             return False
         if not self.dispose_automatically:
             return False

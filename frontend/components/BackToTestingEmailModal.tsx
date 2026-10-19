@@ -11,6 +11,13 @@ export type TestingCustomerMessage = {
   createdAt: string;
 };
 
+export type TestingEmailBatchSample = {
+  problemNumber: number;
+  tableName: string;
+  containerId: string;
+  trackingNumber: string;
+};
+
 export type TestingEmailDetails = {
   problemNumber: number; tableName: string; containerId: string;
   trackingNumber: string; problemType: string; reasonForHold: string;
@@ -20,7 +27,7 @@ export type TestingEmailDetails = {
 
 type Props = {
   details?: TestingEmailDetails;
-  problemNumbers?: number[];
+  batchSamples?: TestingEmailBatchSample[];
   showRackReminder?: boolean;
   onConfirm: (sent: boolean, body: string, recipient: string, notSentReason?: string) => void;
   onCancel: () => void;
@@ -28,7 +35,7 @@ type Props = {
   error: string;
 };
 
-export default function BackToTestingEmailModal({ details, problemNumbers, showRackReminder = true, onConfirm, onCancel, busy, error }: Props) {
+export default function BackToTestingEmailModal({ details, batchSamples, showRackReminder = true, onConfirm, onCancel, busy, error }: Props) {
   const [recipient, setRecipient] = useState('');
   const [recipientError, setRecipientError] = useState('');
   const [additional, setAdditional] = useState('');
@@ -55,14 +62,17 @@ export default function BackToTestingEmailModal({ details, problemNumbers, showR
     return () => window.clearInterval(timer);
   }, [seconds]);
 
-  const isBulk = Boolean(problemNumbers?.length);
+  const isBulk = Boolean(batchSamples?.length);
+  const count = batchSamples?.length || 0;
   const subject = isBulk
-    ? `${problemNumbers!.length} Tickets - Back to Testing`
+    ? `${count} Ticket${count === 1 ? '' : 's'} - Back to Testing`
     : `Ticket #${details?.problemNumber || 0} - Back to Testing`;
   const lines = isBulk ? [
     'Hello NA.EDM,', '',
-    `The following ${problemNumbers!.length} tickets are moving to Back to Testing. Please review their samples for retesting.`, '',
-    `Ticket IDs: ${problemNumbers!.map(number => `#${number}`).join(', ')}`,
+    `Please review these ${count} ticket${count === 1 ? '' : 's'} and their samples for retesting:`, '',
+    ...batchSamples!.map(sample =>
+      `- Ticket #${sample.problemNumber} | Table: ${sample.tableName || 'Not provided'} | Container: ${sample.containerId || 'Not provided'} | ALS #: ${sample.trackingNumber || 'Not provided'}`
+    ),
   ] : [
     'Hello NA.EDM,', '',
     `Ticket #${details?.problemNumber || 0} is moving to Back to Testing. Please review the sample for retesting.`, '',
@@ -93,7 +103,8 @@ export default function BackToTestingEmailModal({ details, problemNumbers, showR
     catch { setCopied('Could not copy automatically. Select the text and copy it manually.'); }
   }
   function proceed() {
-    if (!recipient || body.length > 10000) return;
+    // Guard against a fast double click launching two drafts for one batch.
+    if (!recipient || body.length > 10000 || countdownEndsAt.current) return;
     countdownEndsAt.current = Date.now() + 5000;
     setSeconds(5);
     invokeCustomerEmail(mailtoForCustomerEmail({ to: [recipient], cc: [], subject, body }));
@@ -101,8 +112,8 @@ export default function BackToTestingEmailModal({ details, problemNumbers, showR
   return <div className="email-confirm-overlay" role="presentation">
     <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="testing-email-title">
       <h2 id="testing-email-title">Notify NA.EDM: Back to Testing</h2>
-      {showRackReminder && <p className="rack-removal-warning" role="alert"><strong>Before moving {isBulk ? 'these tickets' : 'this ticket'} Back to testing:</strong> {rackRemovalReminder(problemNumbers?.length || 1)}</p>}
-      <p className="customer-email-company-reminder"><strong>Send this email from your ALS company email account.</strong> You can copy the address and message if your email application does not open.</p>
+      {showRackReminder && <p className="rack-removal-warning" role="alert"><strong>Before moving {isBulk ? 'these tickets' : 'this ticket'} Back to testing:</strong> {rackRemovalReminder(count || 1)}</p>}
+      <p className="customer-email-company-reminder"><strong>Send this email from your ALS company email account.</strong> {isBulk ? `One combined email will cover all ${count} selected tickets. ` : ''}You can copy the address and message if your email application does not open.</p>
       <div className="customer-email-preview-content">
         <div className="customer-email-preview-heading"><strong>Recipient</strong><button type="button" className="button secondary" onClick={() => copy(recipient, 'Address')} disabled={!recipient}>Copy address</button></div>
         <div className="customer-email-addresses">To: {recipient || 'Loading address…'}</div>

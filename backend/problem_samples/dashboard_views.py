@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from .models import (
     AutomaticDisposalExpiryEvent, ProblemContainer, ProblemHistory, ProblemSample, ProblemTable, ProblemTrackingLink,
     CURRENT_WORKFLOW_DEFAULT, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_TO_BE_DISPOSED,
-    PROBLEM_STATUS_TO_BE_SHIPPED_BACK, TERMINAL_PROBLEM_STATUSES,
+    PROBLEM_STATUS_TO_BE_SHIPPED_BACK, ROUTED_PROBLEM_STATUSES,
 )
 from .old_tickets import old_ticket_age_months, old_ticket_anniversary, old_ticket_before
 from .storage_stats import image_storage_stats
@@ -31,7 +31,7 @@ CUSTOMER_HISTORY = (
     Q(details__responded_via__in=['public_tracking_link', 'public_acknowledgement_link'])
     | Q(details__acknowledged_via__in=['public_tracking_link', 'public_verification_link'])
 )
-INELIGIBLE_WORKFLOWS = list(TERMINAL_PROBLEM_STATUSES)
+INELIGIBLE_WORKFLOWS = list(ROUTED_PROBLEM_STATUSES)
 
 
 def tracking_not_sent_tickets(queryset=None):

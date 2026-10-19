@@ -1196,3 +1196,14 @@ a.result:hover{background:#f7f9fb}
 /* Prevent accidental disposal when samples are shipped or returned to testing. */
 .rack-removal-warning{padding:11px 13px;border:1px solid #dab26a;border-left:4px solid #c68522;border-radius:5px;background:#fff7e8;color:#69430b;line-height:1.5;margin:8px 0 12px}
 .rack-removal-warning strong{color:inherit}
+
+/* Ticket reactivation: container selection is handled in a modal. */
+.reopen-container-dialog{max-height:calc(100dvh - 40px);overflow-y:auto}
+.reopen-container-options{border:1px solid #d5dce2;border-radius:6px;padding:14px 16px;display:grid;gap:12px;margin:0;min-width:0}
+.reopen-container-options legend{padding:0 6px;font-weight:700;font-size:14px}
+.reopen-container-options .check-label{display:flex;align-items:center;gap:9px;cursor:pointer}
+.reopen-container-input{margin-left:24px;min-width:0}
+.reopen-container-new-note{margin:0 0 0 24px}
+.reopen-container-summary{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.reopen-container-summary strong{overflow-wrap:anywhere}
+@media(max-width:520px){.reopen-container-dialog{padding:18px}.reopen-container-options{padding:12px}.reopen-container-input{margin-left:0}}

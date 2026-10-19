@@ -63,8 +63,17 @@ class BulkBackToTestingTests(TestCase):
             self.assertIsNotNone(sample.back_to_testing_notified_at)
             self.assertTrue(ProblemHistory.objects.filter(problem=sample, summary='Moved back to testing',
                                                            details__reason='Samples are ready').exists())
-            self.assertTrue(ProblemHistory.objects.filter(problem=sample,
-                                                           summary='Sent Back to Testing email to NA.EDM').exists())
+            workflow = ProblemHistory.objects.get(problem=sample, summary='Moved back to testing')
+            self.assertEqual(workflow.details['email_status'], 'sent')
+            self.assertEqual(workflow.details['email_batch_id'], response.data['email_batch_id'])
+        email_events = ProblemHistory.objects.filter(
+            problem__in=[self.first, self.second],
+            summary='Sent consolidated Back to Testing email to NA.EDM',
+        )
+        self.assertEqual(email_events.count(), 1)
+        self.assertEqual(email_events.get().details['ticket_count'], 2)
+        self.assertEqual(email_events.get().details['ticket_numbers'], [1, 2])
+        self.assertEqual(response.data['emails_sent_confirmed'], 1)
         self.assertEqual(len(self.client.get('/api/problem-samples/to-be-back-to-testing/').data), 0)
 
     def test_no_email_keeps_notification_pending_and_requires_reason(self):
@@ -75,8 +84,15 @@ class BulkBackToTestingTests(TestCase):
         self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
         self.assertIsNone(self.first.container_id)
         self.assertIsNone(self.first.back_to_testing_notified_at)
-        self.assertEqual(ProblemHistory.objects.get(problem=self.first,
-            summary='Back to Testing email not sent to NA.EDM').details['reason'], 'Email unknown')
+        not_sent = ProblemHistory.objects.get(problem=self.first,
+            summary='Consolidated Back to Testing email not sent to NA.EDM')
+        self.assertEqual(not_sent.details['reason'], 'Email unknown')
+        self.assertEqual(not_sent.details['ticket_count'], 2)
+        self.assertEqual(response.data['emails_sent_confirmed'], 0)
+        self.assertFalse(ProblemHistory.objects.filter(
+            problem=self.second,
+            summary__icontains='email to NA.EDM',
+        ).exists())
 
     def test_disposed_container_blocks_entire_batch(self):
         another = ProblemContainer.objects.create(created_by=self.user, disposed_at=timezone.now())
@@ -88,3 +104,35 @@ class BulkBackToTestingTests(TestCase):
         self.first.refresh_from_db()
         self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
         self.assertEqual(self.first.container_id, self.container.pk)
+
+    def test_batch_handles_tickets_with_nullable_container_and_table(self):
+        """PostgreSQL rejects FOR UPDATE applied to nullable outer-joined tables."""
+        # Two nullable foreign keys must not be joined in the locked SELECT.
+        self.first.container = None
+        self.first.table = None
+        self.first.save(update_fields=['container', 'table'])
+        self.second.container = None
+        self.second.save(update_fields=['container'])
+        response = self.client.post(
+            self.url,
+            self.payload(back_to_testing_email_sent=False,
+                         back_to_testing_not_sent_reason='Recipient unavailable'),
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.first.refresh_from_db()
+        self.second.refresh_from_db()
+        self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
+        self.assertEqual(self.second.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
+
+    def test_repeat_submission_does_not_record_another_email(self):
+        payload = self.payload(
+            back_to_testing_email_sent=True,
+            back_to_testing_email_body='Please retest both samples.',
+            email_recipient=get_edmonton_recipient().email,
+        )
+        self.assertEqual(self.client.post(self.url, payload, format='json').status_code, 200)
+        self.assertEqual(self.client.post(self.url, payload, format='json').status_code, 409)
+        self.assertEqual(ProblemHistory.objects.filter(
+            summary='Sent consolidated Back to Testing email to NA.EDM',
+        ).count(), 1)

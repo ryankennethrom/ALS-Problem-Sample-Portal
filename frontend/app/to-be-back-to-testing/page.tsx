@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import WorkflowQueueAdvancedSearch from '@/components/WorkflowQueueAdvancedSearch';
-import BackToTestingEmailModal from '@/components/BackToTestingEmailModal';
+import BackToTestingEmailModal, { type TestingEmailBatchSample } from '@/components/BackToTestingEmailModal';
 import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import { QueueAdvancedFilter, QueueMatchMode, matchesWorkflowQueueAdvanced, matchesWorkflowQueueSearch } from '@/lib/workflowQueueSearch';
@@ -50,7 +50,7 @@ export default function ToBeBackToTestingPage() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [pendingSelection, setPendingSelection] = useState<{ ids: string[]; numbers: number[]; reason: string } | null>(null);
+  const [pendingSelection, setPendingSelection] = useState<{ ids: string[]; samples: TestingEmailBatchSample[]; reason: string } | null>(null);
   const [error, setError] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState<QueueAdvancedFilter[]>([]);
   const [advancedMatch, setAdvancedMatch] = useState<QueueMatchMode>('all');
@@ -99,7 +99,16 @@ export default function ToBeBackToTestingPage() {
     const reason = await requestChangeReason(`Why are you making this change to ${selectedCount} selected ${noun}?`);
     if (reason === null) return;
     const tickets = items.filter(item => selected.has(item.id));
-    setPendingSelection({ ids: tickets.map(item => item.id), numbers: tickets.map(item => item.problem_number), reason });
+    setPendingSelection({
+      ids: tickets.map(item => item.id),
+      samples: tickets.map(item => ({
+        problemNumber: item.problem_number,
+        tableName: item.table_name || '',
+        containerId: item.container_id || '',
+        trackingNumber: rowValue(item, item.als_tracking_number, ['als-tracking-number', 'als_tracking_number']),
+      })),
+      reason,
+    });
     setError('');
   }
 
@@ -204,6 +213,6 @@ export default function ToBeBackToTestingPage() {
       </div>
     </section>
     {changeReasonModal}
-    {pendingSelection && <BackToTestingEmailModal problemNumbers={pendingSelection.numbers} onConfirm={completeSelection} onCancel={() => { setPendingSelection(null); setError(''); }} busy={updating} error={error} />}
+    {pendingSelection && <BackToTestingEmailModal batchSamples={pendingSelection.samples} onConfirm={completeSelection} onCancel={() => { setPendingSelection(null); setError(''); }} busy={updating} error={error} />}
   </div>;
 }

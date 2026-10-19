@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from accounts.models import UserProfile
 from accounts.account_utils import normalize_als_email, user_has_als_email
-from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
+from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
 from .permissions import IsTrackerAdminOrReadOnly
 from .notification_recipient import get_edmonton_recipient
 from .serializers import (
@@ -1256,8 +1256,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 seen.add(problem_id)
                 ids.append(problem_id)
 
-        samples = list(ProblemSample.objects.select_for_update().select_related('container', 'table')
-                       .prefetch_related('table__columns').filter(pk__in=ids))
+        # Lock only ProblemSample rows. Both container and table are nullable FKs:
+        # SELECT FOR UPDATE with select_related() would outer-join them, which
+        # PostgreSQL rejects (FOR UPDATE on the nullable side of an outer join).
+        # Prefetch the related rows in separate SELECTs after locking tickets.
+        samples = list(
+            ProblemSample.objects.select_for_update()
+            .filter(pk__in=ids)
+            .prefetch_related('container', 'table__columns')
+        )
         by_id = {sample.id: sample for sample in samples}
         missing = [str(problem_id) for problem_id in ids if problem_id not in by_id]
         if missing:
@@ -1290,6 +1297,11 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             not_sent_reason = _required_email_not_sent_reason(request.data.get('back_to_testing_not_sent_reason'), 'back_to_testing_not_sent_reason')
 
         now = timezone.now()
+        # One email is composed for this entire selection. Record a single email
+        # event, while each ticket retains its own workflow-change audit entry.
+        email_batch_id = str(uuid.uuid4())
+        batch_numbers = [sample.problem_number for sample in ordered]
+        batch_ids = [str(sample.id) for sample in ordered]
         modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
         for sample in ordered:
             previous_workflow = sample.workflow_status
@@ -1321,16 +1333,38 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             ProblemHistory.objects.create(
                 problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
                 summary='Moved back to testing',
-                details=_history_details({'testing_action': 'bulk_back_to_testing', 'changes': changes}, reason),
+                details=_history_details({
+                    'testing_action': 'bulk_back_to_testing',
+                    'email_batch_id': email_batch_id,
+                    'email_status': 'sent' if sent else 'not_sent',
+                    'changes': changes,
+                }, reason),
             )
-            ProblemHistory.objects.create(
-                problem=sample, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
-                summary='Sent Back to Testing email to NA.EDM' if sent else 'Back to Testing email not sent to NA.EDM',
-                details=({'recipient': recipient, 'email_body': body, 'changes': []} if sent else
-                         {'email_not_sent': 'back_to_testing', 'reason': not_sent_reason, 'changes': []}),
-            )
-        return Response({'count': len(ordered), 'problem_ids': [str(sample.id) for sample in ordered],
-                         'problem_numbers': [sample.problem_number for sample in ordered]})
+        # A *single* notification event describes the *single* consolidated
+        # message. Do not create one purported email event for each ticket.
+        ProblemHistory.objects.create(
+            problem=ordered[0], action=ProblemHistory.ACTION_UPDATED, actor=request.user,
+            summary=('Sent consolidated Back to Testing email to NA.EDM' if sent
+                     else 'Consolidated Back to Testing email not sent to NA.EDM'),
+            details={
+                'email_batch_id': email_batch_id,
+                'ticket_ids': batch_ids,
+                'ticket_numbers': batch_numbers,
+                'ticket_count': len(ordered),
+                'recipient': recipient,
+                **({'email_body': body} if sent else {
+                    'email_not_sent': 'back_to_testing', 'reason': not_sent_reason,
+                }),
+                'changes': [],
+            },
+        )
+        return Response({
+            'count': len(ordered),
+            'problem_ids': batch_ids,
+            'problem_numbers': batch_numbers,
+            'email_batch_id': email_batch_id,
+            'emails_sent_confirmed': 1 if sent else 0,
+        })
 
     @action(detail=True, methods=['post'], url_path='back-to-testing-notification')
     @transaction.atomic
@@ -1689,6 +1723,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         """Record ordinary correspondence without creating or changing a tracking link."""
         problem = self.get_object()
         recipients = _validated_email_list(request.data.get('to'))
+        # General "Email Customer" correspondence honors the same automatic
+        # Distributor CC rules as tracking-link emails.  Deduplicate against To
+        # and validate again on the server so saved history is consistent.
+        cc_recipients = _validated_email_list([
+            *_validated_email_list(request.data.get('cc')),
+            *_distributor_auto_cc(problem),
+        ])
+        to_keys = {email.casefold() for email in recipients}
+        cc_recipients = [email for email in cc_recipients if email.casefold() not in to_keys]
         subject = str(request.data.get('subject') or '').strip()
         body = str(request.data.get('body') or '').strip()
         if not recipients:
@@ -1698,7 +1741,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         history = ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION, actor=request.user,
             summary='Sent an email to the customer',
-            details={'recipients': recipients, 'subject': subject, 'delivery_method': 'mailto',
+            details={'recipients': recipients, 'cc': cc_recipients, 'subject': subject, 'delivery_method': 'mailto',
                      'confirmation': 'Staff confirmed sending a general customer email.', 'changes': []},
         )
         return Response({'id': history.id, 'summary': history.summary}, status=status.HTTP_201_CREATED)

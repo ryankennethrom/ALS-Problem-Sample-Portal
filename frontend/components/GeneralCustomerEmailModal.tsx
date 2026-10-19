@@ -5,6 +5,7 @@ import { CustomerEmailContent, invokeCustomerEmail, mailtoForCustomerEmail } fro
 
 type Props = {
   recipients: string[];
+  ccRecipients: string[];
   problemNumber: number;
   onSent: (message: CustomerEmailContent) => void;
   onCancel: () => void;
@@ -12,13 +13,13 @@ type Props = {
   error?: string;
 };
 
-export default function GeneralCustomerEmailModal({ recipients, problemNumber, onSent, onCancel, busy = false, error = '' }: Props) {
+export default function GeneralCustomerEmailModal({ recipients, ccRecipients, problemNumber, onSent, onCancel, busy = false, error = '' }: Props) {
   const [subject, setSubject] = useState(`Ticket Ticket #${problemNumber}`);
   const [body, setBody] = useState(`Hello,\n\nI'm contacting you regarding ticket ticket #${problemNumber}.\n\nRegards,\nALS`);
   const [opened, setOpened] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const countdownEndsAt = useRef(0);
-  const message: CustomerEmailContent = { to: recipients, cc: [], subject: subject.trim(), body: body.trim() };
+  const message: CustomerEmailContent = { to: recipients, cc: ccRecipients, subject: subject.trim(), body: body.trim() };
 
   useEffect(() => {
     if (!opened || seconds === 0) return;
@@ -39,7 +40,7 @@ export default function GeneralCustomerEmailModal({ recipients, problemNumber, o
       <h2 id="general-email-title">Email Customer</h2>
       <p className="customer-email-company-reminder"><strong>Send this message from your ALS company email account.</strong> This email does not include or activate a tracking link.</p>
       <div className="customer-email-preview-content">
-        <div className="customer-email-addresses"><strong>To:</strong> {recipients.join('; ')}</div>
+        <div className="customer-email-addresses"><strong>To:</strong> {recipients.join('; ')}{ccRecipients.length > 0 && <><br/><strong>Cc (Distributor rules):</strong> {ccRecipients.join('; ')}</>}</div>
         <div className="field"><label htmlFor="general-email-subject">Subject</label><input id="general-email-subject" className="input" maxLength={500} required value={subject} onChange={event => { setSubject(event.target.value); setOpened(false); }} disabled={busy} /></div>
         <div className="field"><label htmlFor="general-email-body">Message</label><textarea id="general-email-body" className="textarea customer-email-body" maxLength={10000} required value={body} onChange={event => { setBody(event.target.value); setOpened(false); }} disabled={busy} /></div>
       </div>

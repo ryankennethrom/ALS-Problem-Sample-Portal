@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
-from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, resolve_problem_type, FORM_MASK_STATES, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
+from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, resolve_problem_type, FORM_MASK_STATES, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
 
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
 
@@ -874,6 +874,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     container_id = serializers.CharField(source='container.container_id', read_only=True)
     container_is_dumping = serializers.BooleanField(source='container.is_dumping', read_only=True)
     container_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    create_new_container = serializers.BooleanField(write_only=True, required=False, default=False)
     pt_days = serializers.IntegerField(source='table.pt_days', read_only=True)
     expires_at = serializers.SerializerMethodField()
     expiration_status = serializers.SerializerMethodField()
@@ -922,6 +923,13 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         instance = self.instance
         container_code = attrs.pop('container_code', None)
+        create_new_container = attrs.pop('create_new_container', False)
+        if create_new_container and container_code not in (None, ''):
+            raise serializers.ValidationError({
+                'container_code': 'Choose either an existing Container ID or create a new container, not both.'
+            })
+        if create_new_container and instance is None:
+            raise serializers.ValidationError({'create_new_container': 'This option is only for reopening existing tickets.'})
         if instance is None:
             if container_code:
                 container = ProblemContainer.resolve_identifier(container_code)
@@ -930,7 +938,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
-        elif container_code:
+        elif container_code and not create_new_container:
             container = ProblemContainer.resolve_identifier(container_code)
             if not container:
                 raise serializers.ValidationError({'container_code': 'Container not found.'})
@@ -944,7 +952,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                 if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
-        elif instance is not None and container_code == '' and instance.container_id:
+        elif not create_new_container and instance is not None and container_code == '' and instance.container_id:
             if instance.container and instance.container.disposed_at:
                 raise serializers.ValidationError({'container_code': 'Undo container disposal before removing a ticket from it.'})
             attrs['container'] = None
@@ -1089,6 +1097,28 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         workflow_value = str(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or '').strip()
         if workflow_value not in CURRENT_WORKFLOW_CHOICES:
             errors[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = 'Choose a valid Current Workflow.'
+
+        # Only COMPLETED terminal workflows require an explicit physical
+        # container when reopened. Pending "To be..." workflows are not terminal.
+        # Never silently reuse the prior container (which may have been reused).
+        reactivating = bool(
+            instance and instance.workflow_status in TERMINAL_PROBLEM_STATUSES
+            and workflow_value not in TERMINAL_PROBLEM_STATUSES
+        )
+        if create_new_container and not reactivating:
+            errors['create_new_container'] = 'A new container can only be created when reopening a terminal ticket.'
+        if reactivating:
+            if instance.container_id and instance.container and (instance.container.is_dumping or instance.container.disposed_at):
+                errors['container_code'] = 'Undo the dumping container disposal before reopening this ticket.'
+            elif not create_new_container and not str(container_code or '').strip():
+                errors['container_code'] = (
+                    'Choose an existing Container ID or create a new container '
+                    'before changing a terminal workflow to a non-terminal workflow.'
+                )
+            if create_new_container and not errors:
+                # Delayed until update(): all field validation must pass before
+                # a new container is created, and the view wraps save in atomic().
+                attrs['create_new_container'] = True
         # The API must enforce this role restriction even if a client sends a
         # crafted PATCH/PUT, or completes a previously prepared ticket. Existing
         # Back to testing tickets can still be edited without changing workflow.
@@ -1106,7 +1136,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         # Routed/terminal workflows always stop automatic disposal. This keeps
         # disposal/shipping/testing actions authoritative even if a stale client
         # submits Dispose Automatically = Yes in the same request.
-        if workflow_value in TERMINAL_PROBLEM_STATUSES:
+        if workflow_value in ROUTED_PROBLEM_STATUSES:
             merged[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = DISPOSE_AUTOMATICALLY_NO
         if workflow_value in {PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_BACK_TO_TESTING}:
             if instance and instance.container_id and instance.container and instance.container.disposed_at:
@@ -1127,6 +1157,15 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         attrs['custom_values'] = merged
         attrs['current_workflow'] = workflow_value
         return attrs
+
+    def update(self, instance, validated_data):
+        create_new_container = validated_data.pop('create_new_container', False)
+        if create_new_container:
+            actor = getattr(self.context.get('request'), 'user', None)
+            validated_data['container'] = ProblemContainer.objects.create(
+                created_by=actor if actor and actor.is_authenticated else None,
+            )
+        return super().update(instance, validated_data)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import (CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_SHIPPED_BACK, ProblemHistory, ProblemSample, ProblemTrackingLink)
+from .models import (CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_SHIPPED_BACK, ProblemColumn, ProblemHistory, ProblemSample, ProblemTrackingLink)
 from .views import get_default_table
 
 
@@ -71,6 +71,42 @@ class TrackingLinkControlsTests(TestCase):
         self.assertEqual(self.client.post(self.base + 'customer-message-sent/', {
             'to': ['invalid'], 'subject': 'Hi', 'body': 'Hello',
         }, format='json').status_code, 400)
+
+    def test_general_email_automatically_includes_distributor_cc_and_logs_it(self):
+        ProblemColumn.objects.create(
+            table=self.ticket.table, name='Distributor', field_key='distributor',
+            column_type=ProblemColumn.TYPE_DISTRIBUTOR,
+            distributor_cc_rules=[
+                {'match_type': 'wildcard', 'pattern': 'ACME*', 'cc_emails': ['shipping@example.com', 'customer@example.com']},
+                {'match_type': 'contains', 'pattern': 'SUPPLIES', 'cc_emails': ['SHIPPING@example.com', 'regional@example.com']},
+            ],
+        )
+        self.ticket.custom_values = {'distributor': 'Acme Supplies'}
+        self.ticket.save(update_fields=['custom_values'])
+        result = self.client.post(self.base + 'customer-message-sent/', {
+            'to': ['customer@example.com'], 'cc': ['regional@example.com', 'manual@example.com'],
+            'subject': 'Sample status update', 'body': 'Here is an update.',
+        }, format='json')
+        self.assertEqual(result.status_code, 201, result.data)
+        entry = self.ticket.history.get(summary='Sent an email to the customer')
+        self.assertEqual(entry.details['cc'], ['regional@example.com', 'manual@example.com', 'shipping@example.com'])
+        self.assertEqual(entry.details['recipients'], ['customer@example.com'])
+        self.assertFalse(ProblemTrackingLink.objects.filter(ticket=self.ticket).exists())
+
+    def test_general_email_without_matching_distributor_has_no_automatic_cc(self):
+        ProblemColumn.objects.create(
+            table=self.ticket.table, name='Distributor', field_key='distributor',
+            column_type=ProblemColumn.TYPE_DISTRIBUTOR,
+            distributor_cc_rules=[{'match_type': 'exact', 'pattern': 'ACME', 'cc_emails': ['cc@example.com']}],
+        )
+        self.ticket.custom_values = {'distributor': 'Other Company'}
+        self.ticket.save(update_fields=['custom_values'])
+        result = self.client.post(self.base + 'customer-message-sent/', {
+            'to': ['customer@example.com'], 'subject': 'Sample status', 'body': 'An update.',
+        }, format='json')
+        self.assertEqual(result.status_code, 201, result.data)
+        entry = self.ticket.history.get(summary='Sent an email to the customer')
+        self.assertEqual(entry.details['cc'], [])
 
     def test_general_email_leaves_existing_tracking_link_and_countdown_unchanged(self):
         token = self.prepare()
