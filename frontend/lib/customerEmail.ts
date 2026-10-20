@@ -53,7 +53,7 @@ function allProblemDetails(context: CustomerEmailContext): ProblemDetail[] {
         fieldKey: column.field_key,
       };
     })
-    .filter(detail => detail.value && detail.value !== '—')
+    .filter(detail => detail.value.trim() !== '' && detail.value !== '—')
     .sort((a, b) => a.position - b.position);
 }
 
@@ -147,19 +147,9 @@ Thank you for submitting your samples to ALS for fluid analysis. We are writing 
 {{multiple_contacts_notice}}
 
 Please review the following details regarding the affected sample(s) and the reason for the sample processing hold:
-{{problem_details}}
-
-{{problem_type_questions}}
-
-{{additional_information}}
-
-Please review and update this ticket using the secure Ticket Tracking Link below, or contact our Customer Service team at {{na_edm_email}} for assistance:
-
-TICKET TRACKING LINK
+{{sample_initial_information}}
 
 {{tracking_link}}
-
-The Ticket Tracking page also shows the available ticket details, images, and files.
 
 {{automatic_disposal_notice}}
 
@@ -238,14 +228,6 @@ export function buildCustomerEmailContent(
       .map(detail => detail.fieldKey),
   );
   const extraDetails = includedDetails.filter(detail => !coreFieldKeys.has(detail.fieldKey));
-  const questionPrompts = (context.problemTypePrompts || []).filter(prompt =>
-    typeof prompt?.message === 'string' && prompt.message.trim(),
-  );
-  const problemTypeQuestions = questionPrompts.length
-    ? ['Information requested from the customer:', ...questionPrompts.map(prompt =>
-      `${prompt.column}: ${prompt.choice}\n${prompt.message.trim()}`)].join('\n\n')
-    : '';
-
   const additionalInformation = extraDetails.length
     ? ['Additional information:', ...extraDetails.map(detail => `${detail.label}: ${detail.value}`)].join('\n')
     : '';
@@ -276,7 +258,12 @@ export function buildCustomerEmailContent(
     reason_for_hold: reasonForHold?.value || 'Please contact ALS Customer Service for details',
     date_received: dateReceived?.value || 'Not provided',
     problem_details: problemDetailLines.join('\n'),
-    problem_type_questions: problemTypeQuestions,
+    // Only fields explicitly marked 'Include in customer email' are shown.
+    // Empty fields are already filtered out and the order follows table columns.
+    sample_initial_information: includedDetails.map(detail => `${detail.label}: ${detail.value}`).join('\n'),
+    // Backwards compatibility for saved templates that still reference this
+    // old token: Problem Type instructions belong in the customer chat only.
+    problem_type_questions: '',
     additional_information: additionalInformation,
     multiple_contacts_notice: multipleContactsNotice,
     tracking_link: context.trackingUrl || '',
@@ -284,20 +271,9 @@ export function buildCustomerEmailContent(
   };
 
   const subject = renderTemplate(template.subject_template, values);
-  // Older/custom templates may not have the new placeholder. Insert the
-  // questions near ticket details or the tracking link instead of after
-  // the email signature; fall back to an appended section if neither exists.
-  let bodyTemplate = template.body_template;
-  if (problemTypeQuestions && !/{{\s*problem_type_questions\s*}}/.test(bodyTemplate)) {
-    if (/{{\s*problem_details\s*}}/.test(bodyTemplate)) {
-      bodyTemplate = bodyTemplate.replace(/{{\s*problem_details\s*}}/, '{{problem_details}}\n\n{{problem_type_questions}}');
-    } else if (/{{\s*tracking_link\s*}}/.test(bodyTemplate)) {
-      bodyTemplate = bodyTemplate.replace(/{{\s*tracking_link\s*}}/, '{{problem_type_questions}}\n\n{{tracking_link}}');
-    } else {
-      bodyTemplate += '\n\n{{problem_type_questions}}';
-    }
-  }
-  const body = renderTemplate(bodyTemplate, values);
+  // Never inject Problem Type customer-chat questions into tracking emails.
+  // Legacy templates containing {{problem_type_questions}} render it empty.
+  const body = renderTemplate(template.body_template, values);
   return { to: toRecipients, cc: ccRecipients, subject, body };
 }
 
@@ -322,11 +298,78 @@ export async function buildCustomerMailto(email: string | string[], context: Cus
   return (await prepareCustomerEmail(email, context)).mailto;
 }
 
+// Keep handler URLs short: browser protocol-handler redirects can also reject
+// excessively long mailto URLs. This is a conservative limit, not a standard.
+export const OUTLOOK_WEB_COMPOSE_URL_LIMIT = 1500;
+export const OUTLOOK_EMAIL_FALLBACK_EVENT = 'als-outlook-email-manual-compose';
+
+export type OutlookWebDraft = CustomerEmailContent & {
+  link: string;
+  mailtoLink: string;
+  fullLinkLength: number;
+  manualBody: boolean;
+  headersPrefilled: boolean;
+};
+
+/**
+ * Prefer mailto so the user's configured email handler (Outlook on the web)
+ * can receive To, Cc, Subject and Body. A normal website cannot register
+ * Outlook as the handler on the user's behalf. The browser must be configured.
+ */
+export function outlookWebDraftForMailto(mailto: string): OutlookWebDraft {
+  const source = new URL(mailto);
+  if (source.protocol !== 'mailto:') throw new Error('Expected an email draft link.');
+  const to = decodeURIComponent(source.pathname).split(',').map(value => value.trim()).filter(Boolean);
+  const cc = (source.searchParams.get('cc') || '').split(',').map(value => value.trim()).filter(Boolean);
+  const subject = source.searchParams.get('subject') || '';
+  const body = source.searchParams.get('body') || '';
+
+  // Only remove fields from the LAUNCHED link when the full link exceeds
+  // the threshold. The dialog always retains every field for manual copying.
+  const compactLink = (includeCc: boolean, includeSubject: boolean, includeBody: boolean) => {
+    const query: string[] = [];
+    if (includeCc && cc.length) query.push(`cc=${encodeURIComponent(cc.join(','))}`);
+    if (includeSubject && subject) query.push(`subject=${encodeURIComponent(subject)}`);
+    if (includeBody && body) query.push(`body=${encodeURIComponent(body)}`);
+    return `mailto:${to.join(',')}${query.length ? `?${query.join('&')}` : ''}`;
+  };
+  let link = mailto;
+  const manualBody = mailto.length > OUTLOOK_WEB_COMPOSE_URL_LIMIT;
+  let headersPrefilled = true;
+  if (manualBody) {
+    link = compactLink(true, true, false);
+    if (link.length > OUTLOOK_WEB_COMPOSE_URL_LIMIT) {
+      headersPrefilled = false;
+      link = compactLink(true, false, false);
+    }
+    if (link.length > OUTLOOK_WEB_COMPOSE_URL_LIMIT) link = compactLink(false, false, false);
+    if (link.length > OUTLOOK_WEB_COMPOSE_URL_LIMIT) link = 'mailto:';
+  }
+  return {
+    to, cc, subject, body,
+    mailtoLink: mailto,
+    link,
+    fullLinkLength: mailto.length,
+    manualBody,
+    headersPrefilled,
+  };
+}
+
+/** Launches the registered mailto handler; with Outlook Webmail registered, CC
+ * and all other fields can be passed without a Microsoft deep-link URL. */
 export function invokeCustomerEmail(mailto: string): void {
-  const link = document.createElement('a');
-  link.href = mailto;
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  const draft = outlookWebDraftForMailto(mailto);
+  // Warn BEFORE launching a shortened draft so nobody mistakes the partial
+  // email for a complete one. Short drafts open directly even with Cc.
+  if (!draft.manualBody) {
+    const link = document.createElement('a');
+    link.href = draft.link;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  // Always keep a full copy in the tracker. Browsers and mail clients can
+  // ignore mailto fields, or may not have Outlook registered as the handler.
+  window.dispatchEvent(new CustomEvent<OutlookWebDraft>(OUTLOOK_EMAIL_FALLBACK_EVENT, { detail: draft }));
 }

@@ -163,7 +163,7 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
           <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
         </div>
       </> : <>
-        <p className={styles.help}>Review this snapshot before opening your email application. The tracker does not send it automatically.</p>
+        <p className={styles.help}>Review this snapshot before opening Outlook webmail. The tracker does not send it automatically.</p>
         <div className={styles.preview}>
           <div><strong>To:</strong> {draft.recipients.join(', ')}</div>
           <div><strong>Selected:</strong> {draft.mentions.join(', ')}</div>
@@ -174,7 +174,7 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
         </div>
         {opened && <p className={styles.success} role="status">Your mail app was opened with this draft. Please send it there to finish.</p>}
         <div className={styles.actions}>
-          <button type="button" className="button" onClick={openEmail}>{opened ? 'Open email app again' : 'Open email app to send'}</button>
+          <button type="button" className="button" onClick={openEmail}>{opened ? 'Open email draft again' : 'Open email draft to send'}</button>
           <button type="button" className="button secondary" onClick={() => { setDraft(null); setOpened(false); }}>Edit recipients or message</button>
           <button type="button" className="button secondary" onClick={onClose}>Close</button>
         </div>

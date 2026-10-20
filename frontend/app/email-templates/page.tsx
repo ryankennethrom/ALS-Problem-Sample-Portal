@@ -132,7 +132,8 @@ export default function EmailTemplatesPage() {
         <div className="panel" style={{margin:0}}>
           <div className="panel-header">Available Placeholders</div>
           <div className="panel-body">
-            <div className="muted result-meta" style={{marginBottom:10}}>Placeholders are replaced with values from the ticket when the tracking-link email is opened. <strong>{'{{tracking_link}}'}</strong> is required for this template.</div>
+            <div className="muted result-meta" style={{marginBottom:10}}>Placeholders are replaced with values from the ticket when the tracking-link email is opened. <strong>{'{{tracking_link}}'}</strong> is required and inserts only the tracking URL, with no label or description.</div>
+            <div className="muted result-meta" style={{marginBottom:10}}><strong>{'{{sample_initial_information}}'}</strong> lists the ticket fields marked “Include in customer email” in table order. Fields with no value are omitted entirely.</div>
             <div style={{display:'flex', flexWrap:'wrap', gap:8}}>
               {template.allowed_placeholders.map(name => <code key={name} style={{padding:'5px 8px', border:'1px solid var(--border)', borderRadius:6}}>{`{{${name}}}`}{template.required_placeholders.includes(name) ? ' *' : ''}</code>)}
             </div>

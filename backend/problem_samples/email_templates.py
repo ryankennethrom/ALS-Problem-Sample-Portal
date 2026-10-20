@@ -10,17 +10,9 @@ Thank you for submitting your samples to ALS for fluid analysis. We are writing 
 {{multiple_contacts_notice}}
 
 Please review the following details regarding the affected sample(s) and the reason for the sample processing hold:
-{{problem_details}}
-
-{{additional_information}}
-
-Please review and update this ticket using the secure Ticket Tracking Link below, or contact our Customer Service team at {{na_edm_email}} for assistance:
-
-TICKET TRACKING LINK
+{{sample_initial_information}}
 
 {{tracking_link}}
-
-The Ticket Tracking page also shows the available ticket details, images, and files.
 
 {{automatic_disposal_notice}}
 
@@ -41,6 +33,8 @@ ALLOWED_CUSTOMER_NOTIFICATION_PLACEHOLDERS = [
     'reason_for_hold',
     'date_received',
     'problem_details',
+    'sample_initial_information',
+    'problem_type_questions',  # Deprecated; accepted for saved custom templates, renders blank.
     'additional_information',
     'multiple_contacts_notice',
     'tracking_link',

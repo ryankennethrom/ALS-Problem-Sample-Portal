@@ -113,7 +113,7 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
     <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="testing-email-title">
       <h2 id="testing-email-title">Notify NA.EDM: Back to Testing</h2>
       {showRackReminder && <p className="rack-removal-warning" role="alert"><strong>Before moving {isBulk ? 'these tickets' : 'this ticket'} Back to testing:</strong> {rackRemovalReminder(count || 1)}</p>}
-      <p className="customer-email-company-reminder"><strong>Send this email from your ALS company email account.</strong> {isBulk ? `One combined email will cover all ${count} selected tickets. ` : ''}You can copy the address and message if your email application does not open.</p>
+      <p className="customer-email-company-reminder"><strong>Send this email from your ALS company email account.</strong> {isBulk ? `One combined email will cover all ${count} selected tickets. ` : ''}You can copy the address and message if Outlook webmail does not open.</p>
       <div className="customer-email-preview-content">
         <div className="customer-email-preview-heading"><strong>Recipient</strong><button type="button" className="button secondary" onClick={() => copy(recipient, 'Address')} disabled={!recipient}>Copy address</button></div>
         <div className="customer-email-addresses">To: {recipient || 'Loading address…'}</div>

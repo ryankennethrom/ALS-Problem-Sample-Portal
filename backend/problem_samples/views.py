@@ -864,7 +864,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 )
             problem.transition_to_disposal_if_due(now=timezone.now())
             if sent is True:
-                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'mailto', prepared_token=prepared.tracking_token)
+                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'outlook_web', prepared_token=prepared.tracking_token)
                 if recorded.status_code >= 400:
                     raise DRFValidationError(recorded.data)
             else:
@@ -1741,7 +1741,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         history = ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION, actor=request.user,
             summary='Sent an email to the customer',
-            details={'recipients': recipients, 'cc': cc_recipients, 'subject': subject, 'delivery_method': 'mailto',
+            details={'recipients': recipients, 'cc': cc_recipients, 'subject': subject, 'delivery_method': 'outlook_web',
                      'confirmation': 'Staff confirmed sending a general customer email.', 'changes': []},
         )
         return Response({'id': history.id, 'summary': history.summary}, status=status.HTTP_201_CREATED)
@@ -1797,7 +1797,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
 
     def _record_customer_notification_sent(self, request, problem, supplied_token, delivery_method, prepared_token=None):
-        if delivery_method not in {'mailto', 'eml'}:
+        if delivery_method not in {'mailto', 'eml', 'outlook_web'}:
             delivery_method = ''
 
         # A new ticket tracking link does not exist in the database until this
@@ -2038,7 +2038,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'recipients': recipients,
                 'subject': email['subject'],
                 'tracking_url': email['direct_url'],
-                'delivery_method': 'mailto',
+                'delivery_method': 'outlook_web',
                 'confirmation': 'Staff confirmed the reply email was sent.',
                 'changes': changes,
             },

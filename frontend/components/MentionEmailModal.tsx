@@ -71,7 +71,7 @@ export default function MentionEmailModal({
       {error && <p className="error" role="alert">{error}</p>}
       {opened && <p className="customer-email-send-prompt" role="status">Send this email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
       <div className="email-confirm-actions">
-        <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email app again' : 'Open email app'}</button>
+        <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email draft again' : 'Open email draft'}</button>
         {opened && seconds === 0 && <button type="button" className="button" onClick={onComplete} disabled={busy}>{busy ? 'Saving…' : 'I sent this email — Save Follow Up'}</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>

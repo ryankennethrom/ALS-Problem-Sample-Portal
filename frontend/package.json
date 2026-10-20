@@ -6,7 +6,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:container-fit": "node --test tests/container-fit-confirmation.test.cjs tests/create-ticket-container-fit-table.test.cjs"
+    "test:container-fit": "node --test tests/container-fit-confirmation.test.cjs tests/create-ticket-container-fit-table.test.cjs",
+    "test:outlook-email": "node --test tests/outlook-webmail.test.cjs",
+    "test:sample-initial-information": "node --test tests/sample-initial-information.test.cjs",
+    "test:tracking-link-only": "node --test tests/tracking-link-only.test.cjs"
   },
   "dependencies": {
     "next": "^16.0.0",

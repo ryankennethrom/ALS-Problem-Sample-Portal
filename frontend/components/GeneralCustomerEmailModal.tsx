@@ -47,7 +47,7 @@ export default function GeneralCustomerEmailModal({ recipients, ccRecipients, pr
       {error && <p className="error" role="alert">{error}</p>}
       {opened && <p className="customer-email-send-prompt" role="status">Send the email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
       <div className="email-confirm-actions">
-        <button type="button" className="button" onClick={openEmail} disabled={busy || !message.subject || !message.body}>{opened ? 'Open email app again' : 'Open email app'}</button>
+        <button type="button" className="button" onClick={openEmail} disabled={busy || !message.subject || !message.body}>{opened ? 'Open email draft again' : 'Open email draft'}</button>
         {opened && seconds === 0 && <button type="button" className="button" onClick={() => onSent(message)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>

@@ -97,7 +97,7 @@ export default function SendSystemEmailsPage() {
   return <main className={styles.page}>
     <div className={styles.titleRow}>
       <div><h1 className="page-heading">Send System Emails</h1>
-        <p className={styles.help}>Review monthly Distributor reports before sending them with your email application. No system email is sent automatically.</p>
+        <p className={styles.help}>Review monthly Distributor reports before sending them with Outlook webmail. No system email is sent automatically.</p>
       </div>
       <div className={styles.actions}>
         <button type="button" className="button secondary" disabled={busy || loading} onClick={() => void load()}>Refresh</button>
@@ -132,13 +132,13 @@ export default function SendSystemEmailsPage() {
           <h2 id="system-email-dialog-title">Review Distributor monthly report</h2>
           <button type="button" className="button secondary" onClick={() => {setSelected(null);setOpened(false);}}>Close</button>
         </div>
-        <p className={styles.help}>Opening an email draft does not send it. Only confirm below after actually sending it in your email application.</p>
+        <p className={styles.help}>Opening an email draft does not send it. Only confirm below after actually sending it in Outlook webmail.</p>
         <div className={styles.field}><label htmlFor="system-email-to">To</label><input id="system-email-to" className="input" readOnly value={selected.to_emails?.join(', ') || ''}/></div>
         <div className={styles.field}><label htmlFor="system-email-subject">Subject</label><input id="system-email-subject" className="input" readOnly value={selected.subject}/></div>
         <div className={styles.field}><label htmlFor="system-email-body">Message</label><textarea id="system-email-body" rows={14} className="textarea" readOnly value={selected.body || ''}/></div>
-        {opened && <p className={styles.success} role="status">Draft opened in your email app. Did you actually send it?</p>}
+        {opened && <p className={styles.success} role="status">Draft opened in Outlook webmail. Did you actually send it?</p>}
         <div className={styles.actions}>
-          {!opened ? <button type="button" className="button" onClick={openMailApp}>Open email app to send</button> : <>
+          {!opened ? <button type="button" className="button" onClick={openMailApp}>Open Outlook webmail to send</button> : <>
             <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>
             <button type="button" className="button secondary" disabled={busy} onClick={() => setOpened(false)}>I didn’t send it</button>
           </>}

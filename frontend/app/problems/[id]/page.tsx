@@ -265,7 +265,7 @@ export default function Detail() {
       });
       const launchedAt = Date.now();
       // Submit immediately attempts to open the generated message in the staff
-      // member's configured email application. The preview remains available
+      // member's Outlook webmail. The preview remains available
       // so they can retry if the browser/OS blocks the first launch.
       invokeCustomerEmail(mailtoForCustomerEmail({
         to: preview.email.to, cc: preview.email.cc || [], subject: preview.email.subject, body: preview.email.body,
@@ -565,7 +565,7 @@ export default function Detail() {
       await api(`/problem-samples/${id}/customer-notification-sent/`, {
         method:'POST',
         body:JSON.stringify({
-          delivery_method: 'mailto',
+          delivery_method: 'outlook_web',
           tracking_token: pendingEmailLaunch.trackingToken,
         }),
         successMessage:'Tracking link sent. The automatic-disposal countdown has started when applicable.',
