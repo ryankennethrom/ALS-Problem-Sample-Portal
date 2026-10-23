@@ -87,6 +87,10 @@ TRANSIENT_MODEL_EXCLUDES = (
 DUMP_LABELS = (
     'auth.user',
     'auth.group',
+    # Lab rows must be present in every full/database fixture before any
+    # profiles, tickets or containers that reference them. Listing just
+    # accounts.userprofile does not make dumpdata include accounts.lab.
+    'accounts.lab',
     'accounts.userprofile',
     'customers',
     'problem_samples',
@@ -174,6 +178,78 @@ def scan_media() -> list[MediaEntry]:
     return entries
 
 
+
+def validate_lab_references_in_fixture(fixture_path):
+    """Reject incomplete Multi-Lab fixtures *before* clearing any live data.
+
+    The backup uses Django's JSON fixture format (not a pg_dump).  Django's
+    ``dumpdata`` model list is explicit, so a fixture can contain valid ticket
+    and profile rows but omit the Lab rows their foreign keys depend on.
+    Checking the raw data first makes this failure non-destructive and gives
+    an actionable error for archives produced before the fix.
+    """
+    from django.apps import apps
+
+    try:
+        if hasattr(fixture_path, 'read'):
+            fixture_path.seek(0)
+            records = json.load(fixture_path)
+            fixture_path.seek(0)
+        else:
+            with open(fixture_path, 'r', encoding='utf-8') as source:
+                records = json.load(source)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BackupError('The database fixture is unreadable or is not valid JSON.') from exc
+
+    if not isinstance(records, list):
+        raise BackupError('The database fixture must contain a list of records.')
+
+    lab_ids = set()
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get('fields'), dict):
+            raise BackupError('The database fixture contains an invalid record.')
+        if str(record.get('model', '')).lower() == 'accounts.lab':
+            pk = record.get('pk')
+            if pk is None or str(pk) in lab_ids:
+                raise BackupError('The database fixture contains invalid or duplicate lab IDs.')
+            lab_ids.add(str(pk))
+
+    if not lab_ids:
+        raise BackupError(
+            'This backup is missing accounts.lab records. Older versions of the backup ' 
+            'generator omitted labs, making their Full Backups impossible to restore '
+            'directly. Download a fresh backup after updating the backend, or have this '
+            'archive repaired using the source lab configuration. No live data was changed.'
+        )
+
+    # Inspect all current models for ForeignKeys to Lab.  This also covers new
+    # lab-owned models if the application gains additional features later.
+    lab_model = apps.get_model('accounts', 'Lab')
+    lab_fields_by_model = {}
+    for model in apps.get_models():
+        fields = [
+            field.name for field in model._meta.fields
+            if getattr(field, 'many_to_one', False) and field.related_model == lab_model
+        ]
+        if fields:
+            lab_fields_by_model[model._meta.label_lower] = fields
+
+    for record in records:
+        model_label = str(record.get('model') or '').lower()
+        for field_name in lab_fields_by_model.get(model_label, []):
+            referenced = record['fields'].get(field_name)
+            if referenced is None or referenced == '':
+                continue
+            if str(referenced) not in lab_ids:
+                raise BackupError(
+                    f'The backup contains {model_label} records referencing Lab ID '
+                    f'{referenced}, but that lab is not included in the backup. '
+                    'No live data was changed.'
+                )
+
+    return len(lab_ids)
+
+
 def _database_fixture_file():
     """Return a seekable temporary file containing the durable Django fixture."""
     tmp = tempfile.SpooledTemporaryFile(max_size=DATABASE_SPOOL_MEMORY_BYTES, mode='w+b')
@@ -199,6 +275,10 @@ def _database_fixture_file():
         if size > MAX_DATABASE_FIXTURE_BYTES:
             tmp.close()
             raise BackupError('The tracker data backup is unexpectedly large and was not generated.')
+        tmp.seek(0)
+        # Never publish a backup that would later fail to restore because a
+        # required lab row was accidentally omitted from the dumpdata list.
+        validate_lab_references_in_fixture(tmp)
         tmp.seek(0)
         return tmp, size
     except Exception:
@@ -432,6 +512,10 @@ def restore_database(uploaded, inspected: InspectedArchive):
     _require_matching_schema(inspected.manifest)
     fixture_path = _copy_member_to_named_temp(uploaded, DATABASE_MEMBER, '.json')
     try:
+        # Validate all lab references before flushing the destination.  Some
+        # backups made shortly after Multi-Lab launched omitted accounts.lab
+        # despite containing profiles and tickets referring to it.
+        validate_lab_references_in_fixture(fixture_path)
         # On PostgreSQL, TRUNCATE/fixture loading remains within this outer
         # transaction. A failed fixture therefore rolls back to the pre-restore
         # database rather than leaving a half-loaded tracker.

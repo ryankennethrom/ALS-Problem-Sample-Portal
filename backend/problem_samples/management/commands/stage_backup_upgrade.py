@@ -20,6 +20,7 @@ from django.db.migrations.recorder import MigrationRecorder
 
 from problem_samples.backup_restore import DUMP_LABELS, TRANSIENT_MODEL_EXCLUDES
 from problem_samples.backup_upgrade import STAGING_ENV_NAME, _database_sql_name, _schema_sql_name
+from problem_samples.historical_user_fixture import normalize_historical_user_fixture
 
 
 @contextlib.contextmanager
@@ -59,7 +60,22 @@ def _safe_upgrade_failure(phase, exc):
         location = f'{Path(frame.filename).name}:{frame.lineno}'
     else:
         location = 'unknown'
-    return f'{phase}: {type(exc).__name__} at {location}'
+    # The Django DeserializationError often wraps the actual failure type
+    # (such as AttributeError from historical UserManager). Report only the
+    # exception class and code location, never the exception message, which
+    # can contain full fixture values, passwords, emails, or database URLs.
+    causes = []
+    seen = {id(exc)}
+    current = exc
+    while len(causes) < 4:
+        nxt = current.__cause__ or current.__context__
+        if nxt is None or id(nxt) in seen:
+            break
+        seen.add(id(nxt))
+        causes.append(type(nxt).__name__)
+        current = nxt
+    suffix = ('; caused by ' + ' -> '.join(causes)) if causes else ''
+    return f'{phase}: {type(exc).__name__} at {location}{suffix}'
 
 
 class Command(BaseCommand):
@@ -111,11 +127,26 @@ class Command(BaseCommand):
             old_apps = executor.loader.project_state(old_targets).apps
             emit_post_migrate_signal(verbosity=0, interactive=False, db='default', apps=old_apps)
 
+            # Natural foreign keys in older backups reference auth.User by
+            # username. Migration-state User models can lack attributes used by
+            # Django's natural-key managers. Rewrite ONLY auth.User relations
+            # to deterministic numeric primary keys in a temporary copy.
+            # This avoids manager lookups against incomplete historical models.
+            phase = 'normalize historical auth.User foreign keys'
+            normalized_fixture = Path(opts['output']).with_name('historical-users-normalized.json')
+            normalization = normalize_historical_user_fixture(
+                opts['fixture'], normalized_fixture, old_apps,
+            )
+            self.stdout.write(
+                'Normalized historical user keys: '
+                f"{normalization['users_assigned_ids']} user IDs, "
+                f"{normalization['user_relations_normalized']} relationships."
+            )
             # Only in this isolated subprocess, deserialize old fixture records
             # against the historical models instead of today's schema.
             phase = 'load historical JSON fixture'
             with historical_fixture_model_lookup(old_apps):
-                call_command('loaddata', opts['fixture'], verbosity=0)
+                call_command('loaddata', str(normalized_fixture), verbosity=0)
 
             preserved_models = [
                 ('auth', 'User'), ('accounts', 'UserProfile'),
