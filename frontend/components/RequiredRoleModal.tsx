@@ -60,7 +60,7 @@ export default function RequiredRoleModal({
         <div className="required-role-badge">Account setup required</div>
         <h2 id="required-role-title">Choose your role to continue</h2>
         <p id="required-role-description" className="required-role-copy">
-          Your new account needs a role before you can use the Edmonton Ticket Tracker.
+          Your new account needs a role before you can use the ALS Ticket Tracker.
           Choose the option that best matches your work.
         </p>
 

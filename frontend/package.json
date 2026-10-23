@@ -9,7 +9,10 @@
     "test:container-fit": "node --test tests/container-fit-confirmation.test.cjs tests/create-ticket-container-fit-table.test.cjs",
     "test:outlook-email": "node --test tests/outlook-webmail.test.cjs",
     "test:sample-initial-information": "node --test tests/sample-initial-information.test.cjs",
-    "test:tracking-link-only": "node --test tests/tracking-link-only.test.cjs"
+    "test:tracking-link-only": "node --test tests/tracking-link-only.test.cjs",
+    "test:manual-distributor-reports": "node --test tests/manual-distributor-monthly-report.test.cjs",
+    "test:account-permissions": "node --test tests/account-admin-managed.test.cjs",
+    "test:lab-management": "node --test tests/lab-management.test.cjs"
   },
   "dependencies": {
     "next": "^16.0.0",

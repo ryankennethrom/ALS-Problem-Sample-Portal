@@ -15,6 +15,7 @@ type SystemEmail = {
   period_start: string;
   period_end: string;
   matched_ticket_count: number;
+  generation_mode: 'scheduled' | 'manual';
   recipient_count: number;
   subject: string;
   created_at: string;
@@ -49,6 +50,11 @@ export default function SendSystemEmailsPage() {
     }
   }
   useEffect(() => { void load(showAll); }, [showAll]);
+
+  useEffect(() => {
+    const emailId = new URLSearchParams(window.location.search).get('email');
+    if (emailId && /^[a-f0-9-]{36}$/i.test(emailId)) void preview(emailId);
+  }, []);
 
   async function preview(id: string) {
     setBusy(true); setError(''); setOpened(false); setSuccess('');
@@ -97,7 +103,7 @@ export default function SendSystemEmailsPage() {
   return <main className={styles.page}>
     <div className={styles.titleRow}>
       <div><h1 className="page-heading">Send System Emails</h1>
-        <p className={styles.help}>Review monthly Distributor reports before sending them with Outlook webmail. No system email is sent automatically.</p>
+        <p className={styles.help}>Review scheduled and on-demand Distributor reports before sending them with your email application. No system email is sent automatically.</p>
       </div>
       <div className={styles.actions}>
         <button type="button" className="button secondary" disabled={busy || loading} onClick={() => void load()}>Refresh</button>
@@ -118,7 +124,7 @@ export default function SendSystemEmailsPage() {
         {emails.map(mail => <article key={mail.id} className={styles.mailCard}>
           <div className={styles.mailDetails}>
             <strong>{mail.subject}</strong>
-            <div className={styles.meta}>{mail.table} · Distributor pattern: {mail.distributor_pattern} · {mail.period_start.slice(0,7)}</div>
+            <div className={styles.meta}>{mail.table} · Distributor pattern: {mail.distributor_pattern} · {mail.period_start.slice(0,7)} · {mail.generation_mode === 'manual' ? 'Manual month-to-date' : 'Scheduled monthly'}</div>
             <div className={styles.meta}>{mail.matched_ticket_count} matching ticket(s) · {mail.recipient_count} recipient(s) · {mail.status === 'sent' ? 'Sent' : 'Pending'}</div>
           </div>
           {mail.status === 'pending' && <button type="button" className="button" disabled={busy} onClick={() => void preview(mail.id)}>Review and send</button>}

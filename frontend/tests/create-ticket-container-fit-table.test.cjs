@@ -54,13 +54,16 @@ function mount() {
         scheduled.push(fn);
       }
     },
+    useRef(initial) { const index = hookIndex++; if (!(index in hooks)) hooks[index] = {current:initial}; return hooks[index]; },
     useMemo(fn) { hookIndex++; return fn(); },
   };
   const api = async (url, opts = {}) => {
     apiCalls.push({ url, opts });
     if (url === '/problem-tables/') return tables;
     if (url === '/problem-containers/') return [{ container_id: 'PC-101' }];
+    if (url === '/ticket-creation-timing/start/') return {id:'new-session'};
     if (url === '/problem-samples/prepare-new/') return { id: 'prepared', problem_number: 17, tracking_url: 'https://example.com/track' };
+    if (url === '/problem-samples/create-prepared/') return {id:'created-ticket'};
     if (url === '/problem-containers/' && opts.method === 'POST') return { container_id: 'PC-200' };
     throw Error('Unexpected API ' + url);
   };
@@ -78,7 +81,7 @@ function mount() {
     '@/components/CameraCapture': () => {},
     '@/components/CreateTicketContainerFitModal': { default: modal },
   };
-  const sandbox = { exports: {}, module: { exports: {} }, require(name) { assert.ok(mocks[name], 'Unexpected import: ' + name); return mocks[name]; } };
+  const sandbox = { exports: {}, module: { exports: {} }, FormData, require(name) { assert.ok(mocks[name], 'Unexpected import: ' + name); return mocks[name]; } };
   vm.runInNewContext(formSource, sandbox);
   const Component = sandbox.exports.default;
   let tree;
@@ -153,4 +156,22 @@ test('Physical fit confirmation provides exactly three visible actions', () => {
 
 test('Sidebar Create Ticket opens the form with the dropdown directly', () => {
   assert.match(shellSource, /<Link href="\/problems\/new" className=\{`side-link/);
+});
+
+
+test('Creation timing starts once on Create Ticket click and completes with email confirmation', async () => {
+  const app = mount(); await flush(); app.render();
+  app.selectContainer('PC-101'); app.render();
+  app.clickButton('Create Ticket'); await flush();
+  assert.equal(app.apiCalls.filter(call => call.url === '/ticket-creation-timing/start/').length, 1);
+  await app.submit(); app.render();
+  app.fitModal().props.onFits(); await flush(); app.render();
+  const customerModal = app.find(n => n && typeof n.props?.onDidNotSend === 'function');
+  assert.ok(customerModal, 'Prepared ticket must require final email confirmation');
+  await customerModal.props.onDidNotSend('Email address unavailable');
+  const completion = app.apiCalls.find(call => call.url === '/problem-samples/create-prepared/');
+  assert.ok(completion, 'Only confirmation should create a real ticket');
+  assert.equal(completion.opts.body.get('creation_timing_id'), 'new-session');
+  assert.equal(completion.opts.body.get('sent'), 'false');
+  assert.equal(app.apiCalls.filter(call => call.url === '/ticket-creation-timing/start/').length, 1);
 });

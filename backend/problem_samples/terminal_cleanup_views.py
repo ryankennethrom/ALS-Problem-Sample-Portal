@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.views import is_tracker_admin
+from .labs import active_lab
 from .models import (
     OldTicketDefinition,
     ProblemSample,
@@ -36,13 +37,13 @@ class OldTicketDefinitionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not is_tracker_admin(request.user):
+        if not is_tracker_admin(request.user) or active_lab(request) is not None:
             return Response({'detail': 'Administrator access required.'}, status=403)
         months = old_ticket_age_months()
         return Response({'age_months': months, 'default_end_date': old_ticket_end_date(months).isoformat()})
 
     def put(self, request):
-        if not is_tracker_admin(request.user):
+        if not is_tracker_admin(request.user) or active_lab(request) is not None:
             return Response({'detail': 'Administrator access required.'}, status=403)
         months = request.data.get('age_months')
         if isinstance(months, bool) or not isinstance(months, int) or not 1 <= months <= 1200:
@@ -93,7 +94,7 @@ class TerminalTicketCleanupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if not is_tracker_admin(request.user):
+        if not is_tracker_admin(request.user) or active_lab(request) is not None:
             return Response({'detail': 'Administrator access required.'}, status=403)
         start_text = request.query_params.get('start_date') or ''
         end_text = request.query_params.get('end_date') or _default_end_date().isoformat()
@@ -116,7 +117,7 @@ class TerminalTicketCleanupView(APIView):
         })
 
     def post(self, request):
-        if not is_tracker_admin(request.user):
+        if not is_tracker_admin(request.user) or active_lab(request) is not None:
             return Response({'detail': 'Administrator access required.'}, status=403)
         start_text = request.data.get('start_date') or ''
         end_text = request.data.get('end_date')

@@ -1,6 +1,6 @@
 # Outlook Webmail as the browser's mailto handler
 
-This version of ALS Problem Sample Tracker uses ordinary `mailto:` links for
+This version of ALS Ticket Tracker uses ordinary `mailto:` links for
 staff-generated emails. To, Cc, Subject, and Body are included in the link when
 the encoded link is short enough. The application **does not** send the email.
 

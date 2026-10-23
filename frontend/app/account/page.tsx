@@ -20,11 +20,7 @@ type User = {
 
 export default function AccountPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<Role>('lab_technician');
-  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
-  const [saved, setSaved] = useState('');
-  const [saving, setSaving] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -35,33 +31,8 @@ export default function AccountPage() {
   useEffect(() => {
     api('/auth/me/').then((u: User) => {
       setUser(u);
-      if (u.role) setRole(u.role);
-      setEmail(u.email || '');
     }).catch(e => setError(e instanceof Error ? e.message : 'Failed to load account'));
   }, []);
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    setError('');
-    setSaved('');
-    setSaving(true);
-    try {
-      const updated: User = await api('/auth/me/', {
-        method: 'PATCH',
-        body: JSON.stringify({ role, email: email.trim().toLowerCase() }),
-        successMessage: 'Account details updated successfully.',
-        errorMessage: 'Could not update account details',
-      });
-      setUser(updated);
-      setRole(updated.role || 'lab_technician');
-      setEmail(updated.email || '');
-      setSaved('Account details updated.');
-    } catch(e) {
-      setError(e instanceof Error ? e.message : 'Failed to update role');
-    } finally {
-      setSaving(false);
-    }
-  }
 
   async function changePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -104,24 +75,17 @@ export default function AccountPage() {
     <h1 className="page-heading">My Account</h1>
     <section className="panel panel-blue" style={{maxWidth: 680}}>
       <div className="panel-header">Account Details</div>
-      <form className="panel-body stack" onSubmit={save}>
-        <div className="field"><label>Username</label><input className="input" value={user?.username || ''} disabled /></div>
-        <div className="field"><label>First Name</label><input className="input" value={user?.first_name || ''} disabled /></div>
-        <div className="field"><label>Last Name</label><input className="input" value={user?.last_name || ''} disabled /></div>
-        <div className="field"><label htmlFor="account-email">ALS Email</label><input id="account-email" className="input" type="email" required placeholder="first.last@alsglobal.com" value={email} onChange={e => setEmail(e.target.value)} /><div className="muted result-meta">Required for staff mentions. Only @alsglobal.com addresses are accepted.</div></div>
-        <div className="field"><label>Administrator</label><input className="input" value={user?.is_admin ? 'Yes' : 'No'} disabled /></div>
-        <div className="field">
-          <label>Workflow Role</label>
-          <select className="select" value={role} onChange={e => setRole(e.target.value as Role)}>
-            <option value="lab_technician">Lab</option>
-            <option value="customer_service">Customer Service</option>
-          </select>
-        </div>
-        <div className="muted result-meta">The workflow role controls Group-field membership. Administrator access is a separate security permission.</div>
+      <div className="panel-body stack">
+        <div className="field"><label>Username</label><input className="input" value={user?.username || ''} readOnly /></div>
+        <div className="field"><label>First Name</label><input className="input" value={user?.first_name || ''} readOnly /></div>
+        <div className="field"><label>Last Name</label><input className="input" value={user?.last_name || ''} readOnly /></div>
+        <div className="field"><label>ALS Email</label><input className="input" value={user?.email || 'Not assigned'} readOnly /></div>
+        <div className="field"><label>Workflow Role</label><input className="input" value={user?.role_label || 'Not assigned'} readOnly /></div>
+        <div className="field"><label>Administrator</label><input className="input" value={user?.is_admin ? 'Yes' : 'No'} readOnly /></div>
+        <div className="muted result-meta">Only administrators can change workflow roles and ALS email addresses. {user?.is_admin ? 'Use Staff Accounts to manage these settings.' : 'Contact your administrator if your account details need updating.'}</div>
+        {(user?.needs_email || user?.needs_role) && <div className="error">Your account is missing required details. Contact an administrator to assign your role and ALS email before using the tracker.</div>}
         {error && <div className="error">{error}</div>}
-        {saved && <div className="success">{saved}</div>}
-        <div><button className="button" disabled={saving}>{saving ? 'Saving…' : 'Save Account Details'}</button></div>
-      </form>
+      </div>
     </section>
 
     <section className="panel panel-blue" style={{maxWidth: 680, marginTop: 18}}>

@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
+from accounts.models import Lab
 
 
 # Current Workflow is the authoritative system routing field. Its values are
@@ -145,6 +146,7 @@ class ProblemColumn(models.Model):
     TYPE_BRAND = 'brand'
     TYPE_INTERCOLUMN_CONTROLLER = 'intercolumn_controller'
     TYPE_PROBLEM_TYPE = 'problem_type'
+    TYPE_LAB = 'lab'
 
     GROUP_LAB_TECHNICIAN = 'lab_technician'
     GROUP_CUSTOMER_SERVICE = 'customer_service'
@@ -177,6 +179,7 @@ class ProblemColumn(models.Model):
         (TYPE_RECENT_ROW_MODIFIER, 'Recent Row Modifier'),
         (TYPE_INTERCOLUMN_CONTROLLER, 'Intercolumn Value Controller'),
         (TYPE_PROBLEM_TYPE, 'Problem Type'),
+        (TYPE_LAB, 'Lab'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -389,6 +392,8 @@ def apply_intercolumn_rules_to_values(table, values):
 class ProblemContainer(models.Model):
     """Physical/logical container used to group problem samples."""
     id = models.BigAutoField(primary_key=True)
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='containers', db_index=True)
+    lab_number = models.PositiveBigIntegerField(null=True, blank=True)
     created_by = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name='problem_containers_created'
     )
@@ -419,15 +424,21 @@ class ProblemContainer(models.Model):
 
     class Meta:
         ordering = ['-id']
+        constraints = [models.UniqueConstraint(fields=['lab', 'lab_number'], name='unique_container_number_per_lab')]
 
     @property
     def container_id(self):
-        return f'PC-{self.id:06d}'
+        return f'{self.lab.code} PC-{self.lab_number:05d}' if self.lab_id and self.lab_number else f'PC-{self.id:06d}'
 
     @classmethod
     def resolve_identifier(cls, value):
         text = str(value or '').strip().upper()
         if not text:
+            return None
+        lab_code = None
+        if ' PC-' in text:
+            lab_code, text = text.split(' PC-', 1)
+        if lab_code and not Lab.objects.filter(code__iexact=lab_code).exists():
             return None
         if text.startswith('PC-'):
             text = text[3:]
@@ -436,7 +447,11 @@ class ProblemContainer(models.Model):
         text = text.strip().lstrip('#')
         if not text.isdigit():
             return None
-        return cls.objects.filter(pk=int(text)).first()
+        if lab_code:
+            return cls.objects.filter(lab__code__iexact=lab_code, lab_number=int(text)).first()
+        # Legacy unprefixed IDs are only safe to interpret for Edmonton.
+        edmonton = Lab.objects.filter(code='EDM').first()
+        return cls.objects.filter(lab=edmonton, lab_number=int(text)).first() if edmonton else cls.objects.filter(pk=int(text)).first()
 
     def __str__(self):
         return self.container_id
@@ -446,6 +461,7 @@ class PreparedProblemSample(models.Model):
     """A reserved ID and tracking link; no problem sample exists until staff decides."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     table = models.ForeignKey(ProblemTable, on_delete=models.CASCADE)
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='prepared_tickets')
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     problem_number = models.PositiveBigIntegerField()
     tracking_token = models.CharField(max_length=128)
@@ -455,7 +471,26 @@ class PreparedProblemSample(models.Model):
     completed_problem = models.ForeignKey('ProblemSample', null=True, blank=True, on_delete=models.SET_NULL)
 
 
+class TicketCreationTiming(models.Model):
+    """Server-timed Create Ticket attempts; only completed attempts enter reports.
+
+    A completed attempt survives subsequent ticket deletion, preserving historical
+    staff effort without preserving the deleted ticket's contents.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='ticket_creation_timings')
+    staff = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name='ticket_creation_timings')
+    staff_label = models.CharField(max_length=200)
+    started_at = models.DateTimeField(default=timezone.now, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    duration_ms = models.PositiveBigIntegerField(null=True, blank=True)
+    completed_ticket = models.OneToOneField('ProblemSample', null=True, blank=True, on_delete=models.SET_NULL,
+                                            related_name='creation_timing')
+    email_sent = models.BooleanField(null=True, blank=True)
+
+
 class ProblemSample(models.Model):
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='tickets', db_index=True)
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     table = models.ForeignKey(ProblemTable, null=True, blank=True, on_delete=models.CASCADE, related_name='problem_samples')
     problem_number = models.PositiveBigIntegerField(editable=False, db_index=True)
@@ -961,6 +996,18 @@ class EmailTemplate(models.Model):
         return self.name
 
 
+class LabEmailTemplate(models.Model):
+    lab = models.ForeignKey(Lab, on_delete=models.CASCADE, related_name='email_templates')
+    key = models.CharField(max_length=80)
+    subject_template = models.CharField(max_length=500)
+    body_template = models.TextField()
+    updated_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['lab', 'key'], name='unique_lab_email_template')]
+
+
 class ProblemHistory(models.Model):
     ACTION_CREATED = 'created'
     ACTION_UPDATED = 'updated'
@@ -1007,11 +1054,17 @@ class SystemEmail(models.Model):
     TYPE_DISTRIBUTOR_MONTHLY = 'distributor_monthly'
     STATUS_PENDING = 'pending'
     STATUS_SENT = 'sent'
+    GENERATION_SCHEDULED = 'scheduled'
+    GENERATION_MANUAL = 'manual'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email_type = models.CharField(max_length=40, default=TYPE_DISTRIBUTOR_MONTHLY)
     source_column = models.ForeignKey(ProblemColumn, on_delete=models.CASCADE, related_name='system_emails')
     rule_identifier = models.UUIDField()
+    generation_mode = models.CharField(max_length=12, default=GENERATION_SCHEDULED)
+    # An individual button click can be safely retried without queuing twice.
+    request_identifier = models.UUIDField(null=True, blank=True, unique=True)
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='system_emails')
     period_start = models.DateField()
     period_end = models.DateField()  # exclusive
     distributor_pattern = models.CharField(max_length=160)
@@ -1026,4 +1079,8 @@ class SystemEmail(models.Model):
 
     class Meta:
         ordering = ['-period_start', '-created_at']
-        constraints = [models.UniqueConstraint(fields=['source_column', 'rule_identifier', 'period_start'], name='unique_monthly_email_per_rule_period')]
+        constraints = [models.UniqueConstraint(
+            fields=['lab', 'source_column', 'rule_identifier', 'period_start'],
+            condition=models.Q(generation_mode='scheduled'),
+            name='unique_scheduled_monthly_email_per_rule_period',
+        )]

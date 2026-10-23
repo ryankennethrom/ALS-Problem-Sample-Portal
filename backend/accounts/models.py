@@ -5,6 +5,24 @@ from django.utils import timezone
 from django.contrib.auth.models import User
 
 
+class Lab(models.Model):
+    """Physical ALS laboratory; its code prefixes independent container numbers."""
+    name = models.CharField(max_length=100, unique=True)
+    code = models.CharField(max_length=12, unique=True)
+    next_container_number = models.PositiveBigIntegerField(default=1)
+    # Group mentions may use role members or explicit per-lab notification addresses.
+    lab_notification_mode = models.CharField(max_length=12, default='addresses')
+    lab_notification_emails = models.JSONField(default=list, blank=True)
+    customer_service_notification_mode = models.CharField(max_length=12, default='staff')
+    customer_service_notification_emails = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class UserProfile(models.Model):
     ROLE_LAB_TECHNICIAN = 'lab_technician'
     ROLE_CUSTOMER_SERVICE = 'customer_service'
@@ -16,6 +34,7 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='tracker_profile')
     role = models.CharField(max_length=40, choices=ROLE_CHOICES, blank=True)
     is_admin = models.BooleanField(default=False)
+    lab = models.ForeignKey(Lab, null=True, blank=True, on_delete=models.PROTECT, related_name='staff_profiles')
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
 

@@ -4,7 +4,7 @@ import ToastProvider from '@/components/ToastProvider';
 import OutlookEmailManualCompose from '@/components/OutlookEmailManualCompose';
 
 export const metadata = {
-  title: 'Edmonton Ticket Tracker',
+  title: 'ALS Ticket Tracker',
   description: 'Internal ticket tracker',
 };
 

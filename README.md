@@ -2,7 +2,7 @@
 
 - The Django backend now uses **PostgreSQL by default** locally and in deployment. `DATABASE_URL` remains configurable for hosted PostgreSQL services. The previous `db.sqlite3` file is not deleted, and a one-time SQLite-to-PostgreSQL transfer procedure is documented below.
 
-# Edmonton Problem Sample Tracker MVP
+# ALS Ticket Tracker
 
 A Next.js + Django/DRF internal tracker for laboratory problem samples.
 
@@ -541,7 +541,7 @@ The Dashboard is tracker-wide across all problem-sample tables. "Opened" means t
 
 ## Finished ticket deletion
 
-Admin > Delete Old Tickets previews and deletes tickets whose **Current Workflow** is `Disposed` or `Shipped back to client` within an inclusive creation-date range. The default range has no lower bound and ends on the day before the configured-age anniversary of today's Edmonton date; this excludes tickets younger than the configured age. The administrator can select another start and end date, preview the count by workflow, and type `DELETE <count>` before confirming. The API checks administrator access and the exact previewed set inside a transaction; if matches changed, it refuses deletion and requires another preview. Deleting a ticket cascades to its tracking link and ticket-related records. Tickets waiting for disposal, shipping, or testing are excluded.
+Admin > Delete Old & Finished Tickets previews and deletes tickets whose **Current Workflow** is `Disposed` or `Shipped back to client` within an inclusive creation-date range. The default range has no lower bound and ends on the day before the configured-age anniversary of today's Edmonton date; this excludes tickets younger than the configured age. The administrator can select another start and end date, preview the count by workflow, and type `DELETE <count>` before confirming. The API checks administrator access and the exact previewed set inside a transaction; if matches changed, it refuses deletion and requires another preview. Deleting a ticket cascades to its tracking link and ticket-related records. Tickets waiting for disposal, shipping, or testing are excluded.
 
 The administrator can define the **Old Tickets** age in whole calendar months (1–1200) on that page. Migration `0064_old_ticket_definition` initializes it to 24 months. The dashboard's **Old Tickets** card counts tickets in every table and workflow whose creation date is before the month-anniversary date in the Edmonton timezone. The cleanup tool's default end date is the preceding day, so its default deletion preview uses the same age cutoff; its preview still includes only finished workflows. A custom cleanup date range changes that one deletion preview and does not change the saved Old Tickets definition.
 

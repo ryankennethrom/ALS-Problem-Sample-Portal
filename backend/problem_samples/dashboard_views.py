@@ -15,6 +15,7 @@ from .models import (
 )
 from .old_tickets import old_ticket_age_months, old_ticket_anniversary, old_ticket_before
 from .storage_stats import image_storage_stats
+from .labs import active_lab, scope_tickets, scope_containers
 
 WINDOWS = {
     'day': timedelta(days=1),
@@ -162,26 +163,28 @@ def _series(queryset, datetime_field, start_at, end_at, bucket):
     return points
 
 
-def action_required_snapshot(now=None):
+def action_required_snapshot(now=None, lab=None):
     """One authoritative all-table snapshot shared by dashboard and email drafts."""
     if now is None:
         now = timezone.now()
-    counts = ProblemSample.objects.aggregate(
+    base_tickets = ProblemSample.objects.filter(lab=lab) if lab else ProblemSample.objects.all()
+    base_containers = ProblemContainer.objects.filter(lab=lab) if lab else ProblemContainer.objects.all()
+    counts = base_tickets.aggregate(
         to_be_shipped=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_SHIPPED_BACK)),
         to_be_back_to_testing=Count('id', filter=Q(current_workflow=PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)),
     )
     counts = {key: int(value or 0) for key, value in counts.items()}
-    counts['tracking_not_sent'] = tracking_not_sent_tickets().count()
-    counts['customer_service_other'] = customer_service_other_tickets().count()
+    counts['tracking_not_sent'] = tracking_not_sent_tickets(base_tickets).count()
+    counts['customer_service_other'] = customer_service_other_tickets(base_tickets).count()
     age_months = old_ticket_age_months()
-    counts['old_tickets'] = ProblemSample.objects.filter(
+    counts['old_tickets'] = base_tickets.filter(
         created_at__lt=old_ticket_before(age_months)
     ).count()
     # Identical to Disposal -> Ready to Dispose: at least one ticket and all
     # tickets are ready/disposed, excluding dumping and disposed containers.
     ready_workflows = [PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_DISPOSED]
     counts['containers_ready_to_dispose'] = (
-        ProblemContainer.objects.filter(disposed_at__isnull=True)
+        base_containers.filter(disposed_at__isnull=True)
         .annotate(
             dashboard_sample_count=Count('problem_samples'),
             dashboard_blocking_count=Count(
@@ -197,10 +200,10 @@ def action_required_snapshot(now=None):
     today_start = timezone.make_aware(datetime.combine(local_today, time.min), tz)
     tomorrow_start = timezone.make_aware(datetime.combine(local_today + timedelta(days=1), time.min), tz)
     counts['tracking_emails_today'] = ProblemTrackingLink.objects.filter(
-        date_created__gte=today_start,
+        **({'ticket__lab': lab} if lab else {}), date_created__gte=today_start,
         date_created__lt=tomorrow_start,
     ).count()
-    counts['customer_responded'] = _customer_responded_tickets().count()
+    counts['customer_responded'] = _customer_responded_tickets(base_tickets).count()
     return counts
 
 
@@ -224,7 +227,8 @@ class DashboardView(APIView):
 
         table_id = str(request.query_params.get('table') or '').strip()
         selected_table = None
-        opened_tickets = ProblemSample.objects.all()
+        lab = active_lab(request)
+        opened_tickets = scope_tickets(request, ProblemSample.objects.all())
         if table_id:
             try:
                 selected_table = ProblemTable.objects.get(pk=table_id)
@@ -240,7 +244,7 @@ class DashboardView(APIView):
             year=Count('id', filter=Q(created_at__gte=now - WINDOWS['year'])),
         )
         counts = {key: int(value or 0) for key, value in opened_counts.items()}
-        counts.update(action_required_snapshot(now))
+        counts.update(action_required_snapshot(now, lab))
         age_months = old_ticket_age_months()
         counts['custom'] = None
         custom_payload = None
@@ -271,7 +275,7 @@ class DashboardView(APIView):
 
         points = _series(opened_tickets, 'created_at', chart_start, chart_end, bucket)
         automatic_disposal_points = _series(
-            AutomaticDisposalExpiryEvent.objects.all(),
+            AutomaticDisposalExpiryEvent.objects.filter(ticket__lab=lab) if lab else AutomaticDisposalExpiryEvent.objects.all(),
             'effective_at',
             chart_start,
             chart_end,
@@ -335,7 +339,7 @@ class ActionRequiredEmailPreviewView(APIView):
                 seen.add(handle.lower())
                 handles.append(f'@{handle}')
 
-        users, unavailable, groups, direct_ids = _resolve_mentions(' '.join(handles))
+        users, unavailable, groups, direct_ids = _resolve_mentions(' '.join(handles), active_lab(request, require_specific=True))
         if unavailable:
             return Response({'detail': 'These users have no ALS email: ' + ', '.join(
                 '@' + _mention_handle(user) for user in unavailable)}, status=400)
@@ -346,7 +350,7 @@ class ActionRequiredEmailPreviewView(APIView):
         unrecognized = [handle for handle in handles if handle.lower() not in recognized]
         if unrecognized:
             return Response({'detail': 'Unknown or inactive recipient: ' + ', '.join(unrecognized)}, status=400)
-        addresses = _mention_delivery_addresses(users, groups, direct_ids)
+        addresses = _mention_delivery_addresses(users, groups, direct_ids, active_lab(request, require_specific=True))
         if not addresses:
             return Response({'detail': 'No eligible email addresses found for the recipients.'}, status=400)
 
@@ -356,7 +360,7 @@ class ActionRequiredEmailPreviewView(APIView):
         note = note.strip()
         now = timezone.now()
         timestamp = timezone.localtime(now).strftime('%b %d, %Y at %I:%M %p %Z')
-        counts = action_required_snapshot(now)
+        counts = action_required_snapshot(now, active_lab(request))
         frontend = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
         def queue_link(path):
             return f'{frontend}{path}' if frontend else path
@@ -372,7 +376,7 @@ class ActionRequiredEmailPreviewView(APIView):
         author = request.user.get_full_name().strip() or _mention_handle(request.user)
         lines = [
             'Hello,', '',
-            f'{author} is sharing the current Action Required status from the ALS Edmonton Ticket Tracker.',
+            f'{author} is sharing the current Action Required status from the ALS Ticket Tracker.',
             f'Snapshot: {timestamp} (all ticket tables)', '',
         ]
         if note:
@@ -382,7 +386,7 @@ class ActionRequiredEmailPreviewView(APIView):
             lines.extend([f'- {label}: {counts[key]}', f'  {queue_link(path)}'])
         lines.extend(['', 'Open the Dashboard:', queue_link('/dashboard'), '',
                       'Counts reflect the time this draft was generated and may change.', '',
-                      'Regards,', author, 'ALS Edmonton Ticket Tracker'])
+                      'Regards,', author, 'ALS Ticket Tracker'])
         return Response({
             'recipients': addresses,
             'mentions': _mention_labels(users, groups, direct_ids),
@@ -397,7 +401,7 @@ class DashboardStorageView(APIView):
     """Actual image/media storage telemetry for the staff dashboard."""
 
     def get(self, request):
-        return Response(image_storage_stats())
+        return Response(image_storage_stats(active_lab(request)))
 
 
 class DashboardOpenedTicketsView(APIView):
@@ -420,10 +424,10 @@ class DashboardOpenedTicketsView(APIView):
                 )
             except ValueError as exc:
                 return Response({'detail': str(exc)}, status=400)
-            tickets = ProblemSample.objects.filter(created_at__gte=start_at, created_at__lt=end_at)
+            tickets = scope_tickets(request, ProblemSample.objects.filter(created_at__gte=start_at, created_at__lt=end_at))
             range_label = f'{start_date.isoformat()} to {end_date.isoformat()}'
         else:
-            tickets = ProblemSample.objects.filter(created_at__gte=now - WINDOWS[selected])
+            tickets = scope_tickets(request, ProblemSample.objects.filter(created_at__gte=now - WINDOWS[selected]))
             range_label = {
                 'day': 'Last 24 hours',
                 'week': 'Last 7 days',
@@ -479,7 +483,7 @@ class CustomerRespondedTicketsView(APIView):
         if page < 1:
             return Response({'detail': 'Invalid page.'}, status=400)
 
-        tickets = _customer_responded_tickets().select_related('table')
+        tickets = _customer_responded_tickets(scope_tickets(request, ProblemSample.objects.all())).select_related('table')
         if table_id:
             tickets = tickets.filter(table_id=table_id)
         query = str(request.query_params.get('q') or '').strip()[:100]

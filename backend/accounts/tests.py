@@ -40,6 +40,8 @@ class AdminCreatedAccountTests(TestCase):
         response = self.client.post('/api/auth/accounts/', {
             'first_name': 'Jane',
             'last_name': 'Smith',
+            'email': 'jane.smith@alsglobal.com',
+            'role': 'customer_service',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data['username'], 'jane.smith')
@@ -49,14 +51,15 @@ class AdminCreatedAccountTests(TestCase):
         created = User.objects.get(username='jane.smith')
         self.assertEqual(created.first_name, 'Jane')
         self.assertEqual(created.last_name, 'Smith')
-        self.assertEqual(created.email, '')
+        self.assertEqual(created.email, 'jane.smith@alsglobal.com')
+        self.assertEqual(created.tracker_profile.role, UserProfile.ROLE_CUSTOMER_SERVICE)
         self.assertTrue(created.check_password(generated_password))
         self.assertFalse(created.tracker_profile.is_admin)
 
         self.client.credentials()
         user_login = self._login('jane.smith', generated_password)
-        self.assertTrue(user_login['user']['needs_role'])
-        self.assertTrue(user_login['user']['needs_email'])
+        self.assertFalse(user_login['user']['needs_role'])
+        self.assertFalse(user_login['user']['needs_email'])
         self.assertFalse(user_login['user']['is_admin'])
 
     def test_duplicate_name_gets_numeric_suffix(self):
@@ -66,6 +69,8 @@ class AdminCreatedAccountTests(TestCase):
         response = self.client.post('/api/auth/accounts/', {
             'first_name': 'Jane',
             'last_name': 'Smith',
+            'email': 'jane.smith@alsglobal.com',
+            'role': 'customer_service',
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data['username'], 'jane.smith2')
@@ -323,21 +328,107 @@ class RequiredAlsEmailTests(TestCase):
         self.assertEqual(blocked.status_code, 403)
         self.assertIn('Set your ALS email', blocked.data['detail'])
 
-    def test_user_can_set_unique_als_email_then_continue(self):
-        invalid = self.client.patch('/api/auth/me/', {'email': 'person@example.com'}, format='json')
-        self.assertEqual(invalid.status_code, 400)
-
-        saved = self.client.patch('/api/auth/me/', {'email': 'missing.email@alsglobal.com'}, format='json')
-        self.assertEqual(saved.status_code, 200, saved.data)
-        self.assertFalse(saved.data['needs_email'])
+    def test_staff_cannot_self_assign_email_or_role(self):
+        email = self.client.patch('/api/auth/me/', {'email': 'missing.email@alsglobal.com'}, format='json')
+        role = self.client.patch('/api/auth/me/', {'role': 'lab_technician'}, format='json')
+        both = self.client.patch('/api/auth/me/', {
+            'email': 'missing.email@alsglobal.com', 'role': 'lab_technician',
+        }, format='json')
+        self.assertEqual(email.status_code, 403)
+        self.assertEqual(role.status_code, 403)
+        self.assertEqual(both.status_code, 403)
         self.user.refresh_from_db()
-        self.assertEqual(self.user.email, 'missing.email@alsglobal.com')
+        self.assertEqual(self.user.email, '')
+        self.assertEqual(self.user.tracker_profile.role, UserProfile.ROLE_CUSTOMER_SERVICE)
 
-        allowed = self.client.get('/api/problem-tables/')
-        self.assertEqual(allowed.status_code, 200)
+    def test_missing_email_user_can_change_password_and_see_account(self):
+        own = self.client.get('/api/auth/me/')
+        password = self.client.post('/api/auth/me/password/', {
+            'current_password': 'UserPassword123!',
+            'new_password': 'AnotherPassword789!',
+            'confirm_password': 'AnotherPassword789!',
+        }, format='json')
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(password.status_code, 200, password.data)
 
-    def test_duplicate_als_email_is_rejected(self):
-        User.objects.create_user(username='existing', email='existing@alsglobal.com')
-        response = self.client.patch('/api/auth/me/', {'email': 'EXISTING@alsglobal.com'}, format='json')
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('already assigned', response.data['detail'])
+
+class AdminManagedAccountDetailsTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            username='admin', password='AdminPassword123!', email='admin@alsglobal.com'
+        )
+        UserProfile.objects.create(user=self.admin, is_admin=True)
+        self.staff = User.objects.create_user(
+            username='staff', password='StaffPassword123!', email='staff@alsglobal.com'
+        )
+        UserProfile.objects.create(user=self.staff, role=UserProfile.ROLE_LAB_TECHNICIAN)
+
+    def login(self, username, password):
+        response = self.client.post('/api/auth/login/', {
+            'username': username, 'password': password,
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['token']}")
+
+    def test_admin_can_edit_account_email_and_role(self):
+        self.login('admin', 'AdminPassword123!')
+        response = self.client.patch(f'/api/auth/accounts/{self.staff.id}/profile/', {
+            'email': 'updated.staff@alsglobal.com', 'role': 'customer_service'
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.staff.refresh_from_db()
+        self.staff.tracker_profile.refresh_from_db()
+        self.assertEqual(self.staff.email, 'updated.staff@alsglobal.com')
+        self.assertEqual(self.staff.tracker_profile.role, UserProfile.ROLE_CUSTOMER_SERVICE)
+
+    def test_staff_cannot_edit_any_profile_or_self_via_me(self):
+        self.login('staff', 'StaffPassword123!')
+        response = self.client.patch(f'/api/auth/accounts/{self.admin.id}/profile/', {
+            'email': 'something@alsglobal.com', 'role': 'customer_service'
+        }, format='json')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.client.patch('/api/auth/me/', {'role': 'customer_service'}, format='json').status_code, 403)
+
+    def test_admin_rejects_invalid_duplicate_email_or_role(self):
+        self.login('admin', 'AdminPassword123!')
+        endpoint = f'/api/auth/accounts/{self.staff.id}/profile/'
+        cases = [
+            {'email': 'not-als@example.com', 'role': 'customer_service'},
+            {'email': 'ADMIN@alsglobal.com', 'role': 'customer_service'},
+            {'email': 'updated.staff@alsglobal.com', 'role': 'invalid'},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                response = self.client.patch(endpoint, case, format='json')
+                self.assertEqual(response.status_code, 400)
+        self.staff.refresh_from_db()
+        self.assertEqual(self.staff.email, 'staff@alsglobal.com')
+
+    def test_new_accounts_require_email_and_role(self):
+        self.login('admin', 'AdminPassword123!')
+        base = {'first_name': 'New', 'last_name': 'Staff'}
+        for invalid in [
+            base,
+            {**base, 'email': 'new@alsglobal.com'},
+            {**base, 'role': 'lab_technician'},
+            {**base, 'role': 'lab_technician', 'email': 'outsider@gmail.com'},
+            {**base, 'role': 'lab_technician', 'email': 'STAFF@alsglobal.com'},
+        ]:
+            with self.subTest(data=invalid):
+                response = self.client.post('/api/auth/accounts/', invalid, format='json')
+                self.assertEqual(response.status_code, 400)
+        self.assertFalse(User.objects.filter(username='new.staff').exists())
+
+    def test_admin_without_email_can_provision_their_own_account(self):
+        self.admin.email = ''
+        self.admin.save(update_fields=['email'])
+        self.login('admin', 'AdminPassword123!')
+        listing = self.client.get('/api/auth/accounts/')
+        self.assertEqual(listing.status_code, 200)
+        updated = self.client.patch(f'/api/auth/accounts/{self.admin.id}/profile/', {
+            'email': 'admin@alsglobal.com', 'role': 'lab_technician'
+        }, format='json')
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.email, 'admin@alsglobal.com')

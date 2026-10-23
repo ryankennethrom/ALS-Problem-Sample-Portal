@@ -21,7 +21,8 @@ export type ColumnType =
   | 'recent_row_modifier'
   | 'brand'
   | 'intercolumn_controller'
-  | 'problem_type';
+  | 'problem_type'
+  | 'lab';
 
 export type GroupRole = 'lab_technician' | 'customer_service';
 

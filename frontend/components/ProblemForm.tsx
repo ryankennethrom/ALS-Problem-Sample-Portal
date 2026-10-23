@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { applyIntercolumnRules, CustomValues, initialValue, ProblemTable, resolveProblemTypeMask, MaskFieldState } from '@/lib/problemTables';
@@ -35,6 +35,22 @@ export default function ProblemForm() {
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [pendingCreation, setPendingCreation] = useState<PendingTicketCreation | null>(null);
+  // A server timestamp is recorded on the first Create Ticket click, including
+  // time spent on the physical container check and customer email preview.
+  // Only a successfully finalized ticket is included in the admin totals.
+  const timingStartRef = useRef<Promise<string> | null>(null);
+  function ensureCreationTimer(): Promise<string> {
+    if (!timingStartRef.current) {
+      timingStartRef.current = api('/ticket-creation-timing/start/', {
+        method: 'POST', body: JSON.stringify({}),
+      }).then(result => String(result.id)).catch(error => {
+        timingStartRef.current = null;
+        throw error;
+      });
+    }
+    return timingStartRef.current;
+  }
+
 
   useEffect(() => {
     api('/problem-tables/').then((data) => {
@@ -103,6 +119,8 @@ export default function ProblemForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (saving || pendingCreation) return;
+    // Keyboard Enter submits also start at the initial Create Ticket action.
+    void ensureCreationTimer().catch(() => {});
     setError('');
     if (!table) {
       setError('No ticket table is available.');
@@ -135,6 +153,13 @@ export default function ProblemForm() {
     if (!table) { setError('No ticket table is available.'); return; }
     setSaving(true);
     let preparedId = '';
+    try {
+      await ensureCreationTimer();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not start ticket creation timer');
+      setSaving(false);
+      return;
+    }
     try {
       const prepared = await api('/problem-samples/prepare-new/', {
         method: 'POST',
@@ -188,6 +213,7 @@ export default function ProblemForm() {
     setError('');
     try {
       const payload = new FormData();
+      payload.append('creation_timing_id', await ensureCreationTimer());
       payload.append('id', pendingCreation.preparedId);
       payload.append('sent', String(sent));
       if (!sent) payload.append('not_sent_reason', notSentReason || 'User chose not to send the tracking-link email during ticket creation.');
@@ -201,6 +227,7 @@ export default function ProblemForm() {
       });
       // All selected files are validated and saved with the ticket at finalization.
       setPendingCreation(null);
+      timingStartRef.current = null;
       router.push(`/problems/${result.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not create ticket');
@@ -220,6 +247,7 @@ export default function ProblemForm() {
         errorMessage: 'Could not cancel ticket creation',
       });
       setPendingCreation(null);
+      timingStartRef.current = null;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not cancel ticket creation');
     } finally {
@@ -308,7 +336,7 @@ export default function ProblemForm() {
     </section>}
 
     {error && <div className="error">{error}</div>}
-    {table ? <div><button className="button" disabled={saving || Boolean(pendingCreation)}>{saving ? 'Preparing…' : 'Create Ticket'}</button></div> : null}
+    {table ? <div><button className="button" onClick={() => { void ensureCreationTimer().catch(() => {}); }} disabled={saving || Boolean(pendingCreation)}>{saving ? 'Preparing…' : 'Create Ticket'}</button></div> : null}
   </form>
   {showFitConfirmation && containerMode === 'existing' && <CreateTicketContainerFitModal
     containerId={containerId.trim()}

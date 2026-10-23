@@ -3,14 +3,12 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { api, clearToken, getToken } from '@/lib/api';
+import { api, clearToken, getToken, activeLabCode, setActiveLabCode } from '@/lib/api';
 import { accountSetupUrl, currentReturnPath, loginUrl, requestedReturnPath } from '@/lib/authRedirect';
 import { ProblemTable } from '@/lib/problemTables';
-import RequiredRoleModal from '@/components/RequiredRoleModal';
-import RequiredEmailModal from '@/components/RequiredEmailModal';
 import { CurrentUserContext } from '@/components/CurrentUserContext';
 
-type User = { id: number; username: string; email: string; first_name: string; last_name: string; name: string; role: string; role_label: string; needs_role: boolean; needs_email: boolean; is_admin: boolean };
+type User = { needs_lab: boolean; lab_id: number | null; lab_code: string; lab_name: string; id: number; username: string; email: string; first_name: string; last_name: string; name: string; role: string; role_label: string; needs_role: boolean; needs_email: boolean; is_admin: boolean };
 type IconName = 'dashboard' | 'samples' | 'customers' | 'logout' | 'table' | 'settings' | 'account' | 'chevron' | 'container' | 'shipping' | 'flask' | 'clock' | 'create' | 'mail' | 'mention';
 
 function Icon({ name }: { name: IconName }) {
@@ -45,9 +43,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const mobileDrawerRef = useRef<HTMLInputElement>(null);
   const [user, setUser] = useState<User | null>(null);
   const [tables, setTables] = useState<ProblemTable[]>([]);
+  const [labs, setLabs] = useState<Array<{id:number;name:string;code:string}>>([]);
+  const [selectedLabCode, setSelectedLabCode] = useState('');
   const [problemSamplesOpen, setProblemSamplesOpen] = useState(pathname === '/problem-samples');
   const [disposalOpen, setDisposalOpen] = useState(false);
   const [mentionUnread, setMentionUnread] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => {
+      api('/auth/labs/').then(result => {
+        setLabs(Array.isArray(result) ? result : []);
+      }).catch(() => {});
+    };
+    window.addEventListener('tracker-labs-updated', refresh);
+    return () => window.removeEventListener('tracker-labs-updated', refresh);
+  }, []);
 
   function closeMobileDrawer() {
     if (mobileDrawerRef.current) mobileDrawerRef.current.checked = false;
@@ -101,8 +111,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [mobileOpen, narrowScreen]);
 
   useEffect(() => {
-    if ((pathname.startsWith('/tables') || pathname === '/backup-restore') && user && !user.is_admin) router.replace('/dashboard');
+    if ((pathname.startsWith('/tables') || pathname === '/backup-restore' || pathname === '/admin/ticket-creation-time') && user && !user.is_admin) router.replace('/dashboard');
   }, [pathname, user, router]);
+
+  useEffect(() => {
+    if (user?.is_admin && selectedLabCode !== 'ALL' && (pathname === '/tables' || pathname === '/backup-restore' || pathname === '/terminal-ticket-cleanup')) router.replace('/dashboard');
+  }, [pathname, selectedLabCode, user?.is_admin, router]);
 
   useEffect(() => {
     if (pathname === '/problem-samples') setProblemSamplesOpen(true);
@@ -117,8 +131,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
     api('/auth/me/').then((u:User) => {
       setUser(u);
-      if (u.needs_email) return;
-      if (u.needs_role && pathname !== '/account') router.push(accountSetupUrl(currentReturnPath()));
+      if (u.needs_lab) {
+        if (pathname !== '/lab-setup') router.replace('/lab-setup');
+        return;
+      }
+      const code = activeLabCode() || u.lab_code;
+      setSelectedLabCode(code);
+      if (!activeLabCode()) setActiveLabCode(code);
+      api('/auth/labs/').then(data => setLabs(Array.isArray(data) ? data : [])).catch(() => {});
+      if (u.needs_email || u.needs_role) {
+        const setupPath = u.is_admin ? '/accounts' : '/account';
+        if (pathname !== setupPath) router.replace(setupPath);
+        return;
+      }
       api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
     }).catch(() => {
       clearToken();
@@ -128,7 +153,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname, router]);
 
   useEffect(() => {
-    if (!user || user.needs_email || !getToken()) return;
+    if (!user || user.needs_email || user.needs_lab || !getToken()) return;
     let cancelled = false;
     async function refreshMentions() {
       try {
@@ -168,7 +193,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             mobileDrawerRef.current?.click();
           }
         }}>×</label>
-      <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">E</span><span className="brand-label">Edmonton Ticket Tracker</span></Link>
+      <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">A</span><span className="brand-label">ALS Ticket Tracker</span></Link>
+      <div className="sidebar-lab-select">
+        <label htmlFor="active-lab" className="sidebar-lab-label">Active Lab</label>
+        <div className="sidebar-lab-control">
+          <span className="sidebar-lab-symbol" aria-hidden="true">⌂</span>
+          <select id="active-lab" className="sidebar-lab-dropdown" aria-label="Select active lab"
+            value={selectedLabCode || user?.lab_code || ''}
+            onChange={event => { const code=event.target.value; setActiveLabCode(code); setSelectedLabCode(code); window.location.assign('/dashboard'); }}>
+            {user?.is_admin && <option value="ALL">Lab: All</option>}
+            {labs.map(lab => <option key={lab.code} value={lab.code}>Lab: {lab.name}</option>)}
+          </select>
+          <span className="sidebar-lab-chevron" aria-hidden="true">▾</span>
+        </div>
+      </div>
       <Link href="/account" className="user-panel user-panel-link" onClick={closeMobileDrawer}><div className="avatar">{(user?.name || user?.username || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.is_admin ? 'Administrator' : (user?.role_label || 'Choose role')}</div><div className="user-email">{user?.username ? `@${user.username}` : 'Sign in required'}</div></div></Link>
       <nav className="side-nav" aria-label="Main navigation" onClickCapture={(event) => {
         if ((event.target as HTMLElement).closest('a')) closeMobileDrawer();
@@ -261,24 +299,30 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         {user?.is_admin && (<>
           <div className="side-section-label">Admin</div>
-          <Link href="/tables" className={`side-link ${pathname.startsWith('/tables')?'active':''}`}>
+          {selectedLabCode === 'ALL' && <Link href="/tables" className={`side-link ${pathname.startsWith('/tables')?'active':''}`}>
             <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Manage Tables</span>
-          </Link>
+          </Link>}
           <Link href="/customers" className={`side-link ${pathname==='/customers'?'active':''}`}>
             <span className="side-icon"><Icon name="customers"/></span><span className="side-label">Customers</span>
           </Link>
           <Link href="/accounts" className={`side-link ${pathname==='/accounts'?'active':''}`}>
             <span className="side-icon"><Icon name="account"/></span><span className="side-label">Staff Accounts</span>
           </Link>
+          <Link href="/admin/ticket-creation-time" className={`side-link ${pathname==='/admin/ticket-creation-time'?'active':''}`}>
+            <span className="side-icon"><Icon name="clock"/></span><span className="side-label">Ticket Creation Time</span>
+          </Link>
+          <Link href="/lab-settings" className={`side-link ${pathname==='/lab-settings'?'active':''}`}>
+            <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Lab Settings</span>
+          </Link>
           <Link href="/email-templates" className={`side-link ${pathname==='/email-templates'?'active':''}`}>
             <span className="side-icon"><Icon name="mail"/></span><span className="side-label">Email Templates</span>
           </Link>
-          <Link href="/terminal-ticket-cleanup" className={`side-link ${pathname==='/terminal-ticket-cleanup'?'active':''}`}>
-            <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Delete Old Tickets</span>
-          </Link>
-          <Link href="/backup-restore" className={`side-link ${pathname==='/backup-restore'?'active':''}`}>
+          {selectedLabCode === 'ALL' && <Link href="/terminal-ticket-cleanup" className={`side-link ${pathname==='/terminal-ticket-cleanup'?'active':''}`}>
+            <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Delete Old & Finished Tickets</span>
+          </Link>}
+          {selectedLabCode === 'ALL' && <Link href="/backup-restore" className={`side-link ${pathname==='/backup-restore'?'active':''}`}>
             <span className="side-icon"><Icon name="settings"/></span><span className="side-label">Backup &amp; Restore</span>
-          </Link>
+          </Link>}
         </>)}
 
         <div className="side-section-label">Settings</div>
@@ -286,10 +330,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/account" className={`side-link ${pathname==='/account'?'active':''}`}>
           <span className="side-icon"><Icon name="account"/></span><span className="side-label">My Account</span>
         </Link>
+      </nav>
+      <div className="sidebar-footer">
         <button type="button" className="side-link side-button" onClick={logout}>
           <span className="side-icon logout-icon"><Icon name="logout"/></span><span className="side-label">Logout</span>
         </button>
-      </nav>
+      </div>
     </aside>
     <div className="main-column"><header className="admin-topbar">
       <label ref={menuToggleRef} htmlFor="mobile-sidebar-switch" className="menu-toggle mobile-menu-toggle" role="button" tabIndex={0}
@@ -301,27 +347,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           }
         }}><span></span><span></span><span></span></label>
       <button className="menu-toggle desktop-menu-toggle" type="button" aria-controls="main-sidebar" aria-expanded={!collapsed} aria-label="Toggle sidebar" onClick={() => setCollapsed(value => !value)}><span></span><span></span><span></span></button>
-      <div className="topbar-title">Edmonton Ticket Tracker</div></header><main className="page-content">
+      <div className="topbar-title">ALS Ticket Tracker</div></header><main className="page-content">
       <CurrentUserContext.Provider value={user}>
         {!user
           ? <div className="muted">Checking session…</div>
+          : user.needs_lab ? (pathname === '/lab-setup' ? children : <div className="muted">Choose your lab to continue.</div>)
           : user.needs_email
-            ? <div className="muted">Set your ALS email to continue.</div>
-            : (pathname.startsWith('/tables') || pathname === '/backup-restore') && !user.is_admin
+            ? (user.is_admin && pathname === '/accounts' ? children : pathname === '/account' ? children : <div className="muted">Ask an administrator to assign your ALS email before continuing.</div>)
+            : user.needs_role && pathname !== (user.is_admin ? '/accounts' : '/account')
+              ? <div className="muted">Ask an administrator to assign your workflow role before continuing.</div>
+            : (pathname.startsWith('/tables') || pathname === '/backup-restore' || pathname === '/admin/ticket-creation-time') && !user.is_admin
               ? <div className="muted">Administrator access is required.</div>
               : children}
       </CurrentUserContext.Provider>
     </main></div>
-    {user?.needs_email && <RequiredEmailModal user={user} onSaved={updated => {
-      setUser(updated);
-      if (!updated.needs_email) api('/problem-tables/').then(d => setTables(Array.isArray(d) ? d : (d.results || []))).catch(()=>{});
-      const destination = requestedReturnPath();
-      if (!updated.needs_email && !updated.needs_role && pathname === '/account' && destination) window.location.replace(destination);
-    }} onLogout={logout} />}
-    {user && !user.needs_email && user.needs_role && <RequiredRoleModal user={user} onSaved={updated => {
-      setUser(updated as User);
-      const destination = requestedReturnPath();
-      if (!updated.needs_role && pathname === '/account' && destination) window.location.replace(destination);
-    }} />}
   </div>;
 }

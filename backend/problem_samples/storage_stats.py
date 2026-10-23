@@ -28,7 +28,7 @@ def _safe_disk_usage(path: Path):
         return None
 
 
-def image_storage_stats() -> dict:
+def image_storage_stats(lab=None) -> dict:
     media_root = Path(settings.MEDIA_ROOT)
     image_root = media_root / 'problem-images'
 
@@ -44,12 +44,18 @@ def image_storage_stats() -> dict:
                 continue
             files[relative] = int(size)
 
+    image_query = ProblemImage.objects.exclude(image='')
+    if lab is not None:
+        image_query = image_query.filter(problem__lab=lab)
     db_names = {
         str(name).replace('\\', '/') for name in
-        ProblemImage.objects.exclude(image='').values_list('image', flat=True)
+        image_query.values_list('image', flat=True)
         if name
     }
 
+    # Per-lab statistics only include files linked to that lab's ticket records.
+    if lab is not None:
+        files = {name: size for name, size in files.items() if name in db_names}
     total_image_bytes = sum(files.values())
     file_count = len(files)
     average_image_bytes = round(total_image_bytes / file_count) if file_count else 0

@@ -46,6 +46,18 @@ DATABASES = {
         conn_health_checks=True,
     )
 }
+
+# Internal isolated-backup-upgrade worker ONLY. Never set this on the web service.
+if os.environ.get('ALS_UPGRADE_STAGING_DATABASE'):
+    DATABASES['default']['NAME'] = os.environ['ALS_UPGRADE_STAGING_DATABASE']
+elif os.environ.get('ALS_UPGRADE_STAGING_SCHEMA'):
+    # Only the internal restoration worker supplies a random, private schema.
+    # No fallback to public: a missed table must fail, never hit live tables.
+    _upgrade_schema = os.environ['ALS_UPGRADE_STAGING_SCHEMA']
+    if not _upgrade_schema.startswith('als_tracker_upgrade_'):
+        raise RuntimeError('Invalid staging schema override.')
+    _upgrade_options = DATABASES['default'].setdefault('OPTIONS', {})
+    _upgrade_options['options'] = (_upgrade_options.get('options', '') + ' -c search_path=' + _upgrade_schema).strip()
 AUTH_PASSWORD_VALIDATORS=[]
 LANGUAGE_CODE='en-us'
 TIME_ZONE='America/Edmonton'
@@ -55,11 +67,14 @@ STATIC_URL='static/'
 STATIC_ROOT=BASE_DIR/'staticfiles'
 MEDIA_URL='/media/'
 MEDIA_ROOT=Path(os.getenv('MEDIA_ROOT') or os.getenv('RAILWAY_VOLUME_MOUNT_PATH') or (BASE_DIR / 'media'))
+if os.environ.get('ALS_UPGRADE_STAGING_DATABASE') or os.environ.get('ALS_UPGRADE_STAGING_SCHEMA'):
+    # Staging migrations must never touch the production media volume.
+    MEDIA_ROOT = Path(os.getenv('ALS_UPGRADE_STAGE_MEDIA_ROOT') or '/tmp/als-upgrade-stage-media')
 DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS=[x.strip() for x in os.getenv('CORS_ALLOWED_ORIGINS','http://localhost:3000').split(',') if x.strip()]
 CORS_ALLOW_CREDENTIALS=False
-CORS_ALLOW_HEADERS=(*default_headers, 'x-change-reason')
+CORS_ALLOW_HEADERS=(*default_headers, 'x-change-reason', 'x-active-lab')
 
 REST_FRAMEWORK={
     'DEFAULT_AUTHENTICATION_CLASSES':['accounts.authentication.BearerSessionAuthentication'],

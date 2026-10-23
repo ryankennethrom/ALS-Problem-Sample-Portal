@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 
 type CurrentUser = { is_admin: boolean };
@@ -32,14 +33,14 @@ export default function EmailTemplatesPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([api('/auth/me/'), api('/email-templates/customer-notification/'), api('/email-templates/edmonton-recipient/')])
+    Promise.all([api('/auth/me/'), api('/email-templates/customer-notification/'), api('/auth/labs/notifications/')])
       .then(([me, data, address]: [CurrentUser, Template, EdmontonRecipient]) => {
         if (!me.is_admin) { router.replace('/'); return; }
         setTemplate(data);
         setSubject(data.subject_template);
         setBody(data.body_template);
         setRecipient(address);
-        setRecipientEmail(address.email);
+        setRecipientEmail((address as unknown as {lab_notification_emails:string[]}).lab_notification_emails?.join(', ') || '');
       })
       .catch(e => setError(e instanceof Error ? e.message : 'Could not load email templates'))
       .finally(() => setLoading(false));
@@ -103,18 +104,10 @@ export default function EmailTemplatesPage() {
 
     {error && <div className="card error" style={{marginBottom:16}}>{error}</div>}
 
-    <form className="panel panel-blue" onSubmit={saveRecipient} style={{marginBottom:16}}>
-      <div className="panel-header"><strong>NA.EDM recipient</strong></div>
-      <div className="panel-body stack">
-        <p className="muted">Used for the Back to Testing notification and included as a recipient when creating a ticket and emailing the customer.</p>
-        <div className="field">
-          <label htmlFor="edmonton-recipient">Email address <span className="required-marker" aria-hidden="true"> *</span></label>
-          <input id="edmonton-recipient" type="email" className="input" required maxLength={254} value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} />
-        </div>
-        {recipient?.updated_at && recipient.updated_by && <div className="muted result-meta">Last saved {new Date(recipient.updated_at).toLocaleString()} by {recipient.updated_by}.</div>}
-        <div><button className="button" type="submit" disabled={savingRecipient}>{savingRecipient ? 'Saving…' : 'Save NA.EDM Address'}</button></div>
-      </div>
-    </form>
+    <div className="panel" style={{padding:16,marginBottom:16}}>
+      <strong>Lab notification addresses</strong><p className="muted">Configure @Lab and @CustomerService addresses for the selected lab under Lab Settings.</p>
+      <Link className="button secondary" href="/lab-settings">Manage Lab Notifications</Link>
+    </div>
 
     <form className="panel panel-blue" onSubmit={save}>
       <div className="panel-header"><strong>{template.name}</strong></div>

@@ -42,6 +42,7 @@ function DefaultValueField({
   idSuffix = 'new',
   groupRole = 'lab_technician',
   dependencyConfigured = false,
+  label = 'Default value',
 }: {
   type: ColumnType;
   choices: string[];
@@ -50,9 +51,9 @@ function DefaultValueField({
   idSuffix?: string;
   groupRole?: GroupRole;
   dependencyConfigured?: boolean;
+  label?: string;
 }) {
-  const id = `default-${idSuffix}`;
-  if (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') return null;
+  const id = `column-value-${idSuffix}`;
   const [groupUsers, setGroupUsers] = useState<GroupUser[]>([]);
 
   useEffect(() => {
@@ -62,19 +63,20 @@ function DefaultValueField({
       .catch(() => setGroupUsers([]));
   }, [type, groupRole]);
 
+  if (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') return null;
   if (type === 'distributor') {
-    return <DistributorAutocomplete id={id} label="Default value" value={value} onChange={onChange as (value: string) => void} placeholder="Optional default distributor…" />;
+    return <DistributorAutocomplete id={id} label={label} value={value} onChange={onChange as (value: string) => void} placeholder="Optional distributor…" />;
   }
   if (type === 'brand') {
-    return <BrandAutocomplete id={id} label="Default value" value={value} onChange={onChange as (value: string) => void} placeholder="Optional default brand…" />;
+    return <BrandAutocomplete id={id} label={label} value={value} onChange={onChange as (value: string) => void} placeholder="Optional brand…" />;
   }
   if (type === 'end_user') {
-    return <EndUserAutocomplete id={id} label="Default value" value={value} onChange={onChange as (value: string) => void} placeholder="Optional default end user…" />;
+    return <EndUserAutocomplete id={id} label={label} value={value} onChange={onChange as (value: string) => void} placeholder="Optional end user…" />;
   }
 
   if (type === 'client_email') {
     if (dependencyConfigured) return null;
-    return <ClientEmailAutocomplete id={id} label="Default value" value={value} onChange={onChange as (value: string[]) => void} placeholder="Fuzzy-search default client emails…" />;
+    return <ClientEmailAutocomplete id={id} label={label} value={value} onChange={onChange as (value: string[]) => void} placeholder="Fuzzy-search client emails…" />;
   }
 
   if (type === 'fixed') {
@@ -82,26 +84,26 @@ function DefaultValueField({
   }
 
   if (type === 'long_text') {
-    return <div className="field"><label htmlFor={id}>Default value</label><textarea id={id} className="textarea" value={String(value ?? '')} onChange={e => onChange(e.target.value)} placeholder="Optional" /></div>;
+    return <div className="field"><label htmlFor={id}>{label}</label><textarea id={id} className="textarea" value={String(value ?? '')} onChange={e => onChange(e.target.value)} placeholder="Optional" /></div>;
   }
 
   if (type === 'choice' || type === 'problem_type') {
-    return <div className="field"><label htmlFor={id}>Default value</label><select id={id} className="select" value={String(value ?? '')} onChange={e => onChange(e.target.value)}><option value="">-- No default --</option>{choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}</select></div>;
+    return <div className="field"><label htmlFor={id}>{label}</label><select id={id} className="select" value={String(value ?? '')} onChange={e => onChange(e.target.value)}><option value="">-- None --</option>{choices.map(choice => <option key={choice} value={choice}>{choice}</option>)}</select></div>;
   }
 
   if (type === 'multi_choice') {
     const selected = Array.isArray(value) ? value.map(String) : [];
-    return <fieldset className="field choice-fieldset"><legend>Default value</legend><div className="choice-list">{choices.length === 0 && <span className="muted">Add choices above first.</span>}{choices.map(choice => <label className="check-label" key={choice}><input type="checkbox" checked={selected.includes(choice)} onChange={e => onChange(e.target.checked ? [...selected, choice] : selected.filter(item => item !== choice))} /><span>{choice}</span></label>)}</div></fieldset>;
+    return <fieldset className="field choice-fieldset"><legend>{label}</legend><div className="choice-list">{choices.length === 0 && <span className="muted">Add choices above first.</span>}{choices.map(choice => <label className="check-label" key={choice}><input type="checkbox" checked={selected.includes(choice)} onChange={e => onChange(e.target.checked ? [...selected, choice] : selected.filter(item => item !== choice))} /><span>{choice}</span></label>)}</div></fieldset>;
   }
 
   if (type === 'group') {
     const current = value == null ? '' : String(value);
-    return <div className="field"><label htmlFor={id}>Default value</label><select id={id} className="select" value={current} onChange={e => onChange(e.target.value)}><option value="">-- No default --</option>{groupUsers.map(user => <option key={user.id} value={user.email}>{user.name && user.name.toLowerCase() !== user.email.toLowerCase() ? `${user.name} (${user.email})` : user.email}</option>)}</select></div>;
+    return <div className="field"><label htmlFor={id}>{label}</label><select id={id} className="select" value={current} onChange={e => onChange(e.target.value)}><option value="">-- None --</option>{groupUsers.map(user => <option key={user.id} value={user.email}>{user.name && user.name.toLowerCase() !== user.email.toLowerCase() ? `${user.name} (${user.email})` : user.email}</option>)}</select></div>;
   }
 
   if (type === 'boolean') {
     const current = value === true ? 'true' : value === false ? 'false' : '';
-    return <div className="field"><label htmlFor={id}>Default value</label><select id={id} className="select" value={current} onChange={e => onChange(e.target.value === '' ? null : e.target.value === 'true')}><option value="">-- No default --</option><option value="true">Yes</option><option value="false">No</option></select></div>;
+    return <div className="field"><label htmlFor={id}>{label}</label><select id={id} className="select" value={current} onChange={e => onChange(e.target.value === '' ? null : e.target.value === 'true')}><option value="">-- None --</option><option value="true">Yes</option><option value="false">No</option></select></div>;
   }
 
   const inputType = type === 'number' ? 'number'
@@ -113,7 +115,7 @@ function DefaultValueField({
     : type === 'url' ? 'url'
     : 'text';
 
-  return <div className="field"><label htmlFor={id}>Default value</label><input id={id} className="input" type={inputType} step={type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} placeholder={['text', 'email', 'phone', 'url'].includes(type) ? 'Optional' : undefined} /></div>;
+  return <div className="field"><label htmlFor={id}>{label}</label><input id={id} className="input" type={inputType} step={type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} placeholder={['text', 'email', 'phone', 'url'].includes(type) ? 'Optional' : undefined} /></div>;
 }
 
 function ClientEmailDependencyPriority({
@@ -348,12 +350,43 @@ function MaskRulesEditor({
   </div>;
 }
 
-function DistributorCCRulesEditor({ rules, onChange }: {
+function DistributorCCRulesEditor({ rules, onChange, columnId, savedRules }: {
   rules: DistributorCCRule[];
   onChange: (rules: DistributorCCRule[]) => void;
+  columnId?: string;
+  savedRules?: DistributorCCRule[];
 }) {
+  const router = useRouter();
+  const [sendingRule, setSendingRule] = useState<string | null>(null);
+  const [reportError, setReportError] = useState('');
   const update = (index: number, changes: Partial<DistributorCCRule>) =>
     onChange(rules.map((rule, i) => i === index ? { ...rule, ...changes } : rule));
+
+  const isSaved = (rule: DistributorCCRule) => {
+    if (!columnId || !rule.id) return false;
+    const saved = (savedRules || []).find(item => item.id === rule.id);
+    return Boolean(saved && saved.send_monthly_reports &&
+      saved.match_type === rule.match_type && saved.pattern === rule.pattern &&
+      JSON.stringify(saved.cc_emails || []) === JSON.stringify((rule.cc_emails || []).filter(Boolean)));
+  };
+
+  async function sendNow(rule: DistributorCCRule) {
+    if (!columnId || !rule.id || !isSaved(rule) || sendingRule) return;
+    setReportError('');
+    setSendingRule(rule.id);
+    try {
+      const result: {email_id: string} = await api('/system-emails/queue-now/', {
+        method: 'POST',
+        body: JSON.stringify({column_id: columnId, rule_id: rule.id, request_id: crypto.randomUUID()}),
+        errorMessage: 'Could not prepare monthly report',
+      });
+      router.push(`/send-system-emails?email=${encodeURIComponent(result.email_id)}`);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Could not prepare monthly report.');
+    } finally {
+      setSendingRule(null);
+    }
+  }
 
   return <div className="field" style={{gridColumn:'1 / -1'}}>
     <label>Distributor CC recipients and monthly reports</label>
@@ -390,8 +423,15 @@ function DistributorCCRulesEditor({ rules, onChange }: {
           <input type="checkbox" checked={Boolean(rule.send_monthly_reports)} onChange={e => update(i, {send_monthly_reports: e.target.checked})} />
           <strong>Send Monthly Reports</strong>
         </label>
-        {rule.send_monthly_reports && <div className="muted result-meta">On the 1st of each month, queue one report for the prior calendar month. Staff review it in Send System Emails before sending.</div>}
+        {rule.send_monthly_reports && <div className="stack" style={{gap:8}}>
+          <div className="muted result-meta">On the 1st of each month, queue one report for the prior calendar month. To send immediately, prepare a month-to-date report (from the 1st through today), then review and send it in Send System Emails.</div>
+          <div><button type="button" className="button secondary" disabled={!isSaved(rule) || Boolean(sendingRule)} onClick={() => void sendNow(rule)}>
+            {sendingRule === rule.id ? 'Preparing report…' : 'Send Monthly Report Now'}
+          </button></div>
+          {!isSaved(rule) && <div className="muted result-meta">Save this Distributor column and its CC rules before generating a report.</div>}
+        </div>}
       </div>)}
+      {reportError && <p className="error" role="alert">{reportError}</p>}
       {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {match_type:'contains', pattern:'', cc_emails:[], send_monthly_reports:false}])}>+ Add CC rule</button></div>}
     </div>
   </div>;
@@ -475,7 +515,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       {type === 'problem_type' && <MaskRulesEditor choices={choiceList} rules={maskRules} onChange={setMaskRules} columns={allColumns} excludeId={column.id} />}
-      {type === 'distributor' && <DistributorCCRulesEditor rules={distributorCCRules} onChange={setDistributorCCRules} />}
+      {type === 'distributor' && <DistributorCCRulesEditor rules={distributorCCRules} onChange={setDistributorCCRules} columnId={column.id} savedRules={column.distributor_cc_rules || []} />}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer email</label></div>
     </div>
@@ -497,6 +537,7 @@ export default function TableSettings() {
   const [colType, setColType] = useState<ColumnType>('text');
   const [choices, setChoices] = useState('');
   const [defaultValue, setDefaultValue] = useState<unknown>('');
+  const [fillExistingWith, setFillExistingWith] = useState<unknown>('');
   const [colGroupRole, setColGroupRole] = useState<GroupRole>('lab_technician');
   const [colDependencyIds, setColDependencyIds] = useState<string[]>([]);
   const [colIntercolumnRules, setColIntercolumnRules] = useState<IntercolumnRule[]>([]);
@@ -541,12 +582,14 @@ export default function TableSettings() {
         form_mask_rules: colType === 'problem_type' ? Object.fromEntries(Object.entries(colMaskRules).filter(([choice]) => choiceList.includes(choice))) : {},
         distributor_cc_rules: colType === 'distributor' ? colDistributorCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
         default_value: (colType === 'row_creator' || colType === 'recent_row_modifier' || colType === 'date_today') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
+        fill_existing_with: ['fixed', 'row_creator', 'recent_row_modifier', 'date_today'].includes(colType) ? null : normalizeDefault(colType, fillExistingWith),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
       setColName('');
       setColDescription('');
       setColType('text');
       setChoices('');
       setDefaultValue('');
+      setFillExistingWith('');
       setColGroupRole('lab_technician');
       setColDependencyIds([]);
       setColIntercolumnRules([]);
@@ -599,6 +642,7 @@ export default function TableSettings() {
   function changeNewColumnType(next: ColumnType) {
     setColType(next);
     setDefaultValue(blankDefault(next));
+    setFillExistingWith(blankDefault(next));
     setRequired(next === 'fixed');
     if (next === 'group') setColGroupRole('lab_technician');
     setColDependencyIds([]);
@@ -676,13 +720,17 @@ export default function TableSettings() {
             <div className="field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={colDescription} onChange={e=>setColDescription(e.target.value)} placeholder="Explain what this column means. Leave blank to hide the (i) icon." /></div>
             <div className="field"><label>Column type</label><select className="select" value={colType} onChange={e=>changeNewColumnType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
             {(colType === 'choice' || colType === 'multi_choice' || colType === 'problem_type') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
-            {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
-            {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); }} columns={table.columns} />}
+            {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); setFillExistingWith(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
+            {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); setFillExistingWith(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             {colType === 'problem_type' && <MaskRulesEditor choices={newChoiceList} rules={colMaskRules} onChange={setColMaskRules} columns={table.columns} />}
             {colType === 'distributor' && <DistributorCCRulesEditor rules={colDistributorCCRules} onChange={setColDistributorCCRules} />}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
-            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'When the column is added, this value fills the column for existing rows and pre-fills it for future tickets.'}</div>
+            {!['fixed', 'row_creator', 'recent_row_modifier', 'date_today'].includes(colType) && <>
+              <DefaultValueField type={colType} choices={newChoiceList} value={fillExistingWith} onChange={setFillExistingWith} label="Fill existing with" idSuffix="fill-existing-new" groupRole={colGroupRole} dependencyConfigured={false} />
+              <div className="muted result-meta">Optional: fill this column on tickets already in this table, once when the column is added. This does not prefill future tickets. For required columns with existing tickets, a value is required here.</div>
+            </>}
+            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'Default value prefills future tickets only. Fill existing with populates existing tickets once when this column is added.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer email</label>

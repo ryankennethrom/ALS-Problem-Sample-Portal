@@ -282,7 +282,7 @@ export default function Dashboard() {
           <div className={styles.value}>{loading&&!data?'…':format(data?.counts.old_tickets)}</div>
           <div className={styles.note}>Created before {data?.old_ticket_definition.created_before || 'the configured age'} · all tables and workflows</div>
         </div>
-        {currentUser?.is_admin && <Link href="/terminal-ticket-cleanup" className={styles.seeAll}>Delete old tickets &gt;</Link>}
+        {currentUser?.is_admin && <Link href="/terminal-ticket-cleanup" className={styles.seeAll}>Delete Old &amp; Finished Tickets &gt;</Link>}
       </section>
     </section>
 

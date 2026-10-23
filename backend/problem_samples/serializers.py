@@ -11,6 +11,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
+from .labs import active_lab, create_container
 from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, resolve_problem_type, FORM_MASK_STATES, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
 
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
@@ -24,6 +25,9 @@ def _mention_handle(username):
 
 
 class ProblemColumnSerializer(serializers.ModelSerializer):
+    # A create-only instruction, not a persisted column setting. This value
+    # backfills the current tickets once and is never used for future tickets.
+    fill_existing_with = serializers.JSONField(required=False, allow_null=True, write_only=True)
     column_type_label = serializers.CharField(source='get_column_type_display', read_only=True)
     group_users = serializers.SerializerMethodField()
     depends_on_column_name = serializers.SerializerMethodField()
@@ -34,7 +38,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         model = ProblemColumn
         fields = [
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
-            'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'group_role', 'group_users',
+            'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'fill_existing_with', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
             'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'form_mask_rules', 'distributor_cc_rules', 'position', 'is_system',
             'created_at', 'modified_at',
@@ -62,7 +66,10 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
     def get_group_users(self, obj):
         if obj.column_type != ProblemColumn.TYPE_GROUP or not obj.group_role:
             return []
-        profiles = (UserProfile.objects.filter(role=obj.group_role, user__is_active=True)
+        from .labs import active_lab
+        req = self.context.get('request')
+        lab = active_lab(req) if req else None
+        profiles = (UserProfile.objects.filter(role=obj.group_role, user__is_active=True, **({'lab': lab} if lab else {}))
                     .select_related('user').order_by('user__first_name', 'user__last_name', 'user__username'))
         return [
             {
@@ -80,6 +87,8 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Built-in columns cannot be edited.')
         proposed_name = attrs.get('name', getattr(self.instance, 'name', ''))
         reserved = slugify(proposed_name)
+        if reserved == 'lab':
+            raise serializers.ValidationError({'name': 'Lab is a built-in column.'})
         if reserved == 'problem-id':
             raise serializers.ValidationError({'name': 'Ticket ID is reserved as a built-in column.'})
         if reserved in {'current-workflow'}:
@@ -404,21 +413,49 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             except serializers.ValidationError as exc:
                 raise serializers.ValidationError({'default_value': exc.detail})
 
+        # "Fill existing with" is only available while creating a column. It
+        # never becomes its default_value and is not a persistent model field.
+        existing_fill = attrs.get('fill_existing_with')
+        if self.instance is not None and 'fill_existing_with' in attrs:
+            raise serializers.ValidationError({
+                'fill_existing_with': 'This option is only available when adding a new column.'
+            })
+        automatic_types = {
+            ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_DATE_TODAY,
+            ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER,
+        }
+        if column_type in automatic_types and not _is_empty(existing_fill):
+            raise serializers.ValidationError({
+                'fill_existing_with': 'This column type fills existing tickets automatically.'
+            })
+        if _is_empty(existing_fill):
+            if self.instance is None:
+                attrs['fill_existing_with'] = None
+        elif column_type not in automatic_types:
+            try:
+                attrs['fill_existing_with'] = _validate_custom_value(
+                    SimpleNamespace(
+                        column_type=column_type, choices=attrs.get('choices', []),
+                        group_role=attrs.get('group_role', ''), depends_on_column=depends_on_column,
+                        client_email_dependencies=attrs.get('client_email_dependencies', []), table=table,
+                    ), existing_fill,
+                )
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({'fill_existing_with': exc.detail})
+
         if column_type == ProblemColumn.TYPE_FIXED and attrs.get('default_value') is None:
             raise serializers.ValidationError({'default_value': 'A Fixed Value column requires a fixed value.'})
 
-        # A required column added to a table that already has rows needs a
-        # default so those existing rows remain valid after the column is added.
+        # Existing tickets need their own initial value when a new column is
+        # required. A future-ticket default must not implicitly backfill them.
         required = attrs.get('required', getattr(self.instance, 'required', False))
         if (self.instance is None and table and required and table.problem_samples.exists()
-                and attrs.get('default_value') is None
-                and column_type not in {ProblemColumn.TYPE_ROW_CREATOR, ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}):
-            if column_type == ProblemColumn.TYPE_CLIENT_EMAIL and dependency_columns:
-                raise serializers.ValidationError({
-                    'required': 'Add a dependent Client Email column as optional first, populate existing rows, then mark it required.'
-                })
+                and attrs.get('fill_existing_with') is None
+                and column_type not in {ProblemColumn.TYPE_FIXED, ProblemColumn.TYPE_ROW_CREATOR,
+                                        ProblemColumn.TYPE_RECENT_ROW_MODIFIER, ProblemColumn.TYPE_DATE_TODAY}):
             raise serializers.ValidationError({
-                'default_value': 'A default value is required when adding a required column to a table that already contains rows.'
+                'fill_existing_with': 'Existing tickets require a value for this required column. '
+                                      'Set Fill existing with separately from the future-ticket default.'
             })
         if (self.instance is not None and column_type == ProblemColumn.TYPE_GROUP and table and required
                 and table.problem_samples.exists() and group_role != self.instance.group_role
@@ -451,11 +488,15 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         while ProblemColumn.objects.filter(table=table, field_key=key).exists():
             key = f'{base}-{suffix}'
             suffix += 1
+        # Remove this write-only instruction before calling Model.objects.create.
+        existing_fill = validated_data.pop('fill_existing_with', None)
         validated_data['field_key'] = key
         if 'position' not in validated_data:
             last = table.columns.order_by('-position').values_list('position', flat=True).first()
             validated_data['position'] = (last or 0) + 1
-        return super().create(validated_data)
+        column = super().create(validated_data)
+        column._fill_existing_with = existing_fill
+        return column
 
 
 class ProblemTableSerializer(serializers.ModelSerializer):
@@ -592,7 +633,7 @@ class ProblemContainerSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemContainer
         fields = [
-            'id', 'container_id', 'sample_count', 'expired_count', 'active_count',
+            'id', 'container_id', 'lab', 'lab_number', 'sample_count', 'expired_count', 'active_count',
             'unnotified_count', 'all_expired', 'ready_to_dispose', 'status', 'samples',
             'created_by_email', 'created_at', 'disposed_at', 'disposed_by_email',
             'is_dumping', 'source_container_id', 'dumped_sample_ids',
@@ -717,7 +758,7 @@ def _active_client_email_company(column, row_values):
     return None, '', populated
 
 
-def _validate_custom_value(column, value):
+def _validate_custom_value(column, value, *, lab=None):
     if _is_empty(value):
         return value
 
@@ -733,6 +774,8 @@ def _validate_custom_value(column, value):
         profile = (UserProfile.objects.filter(
             role=getattr(column, 'group_role', ''),
             user__is_active=True,
+            # Group assignments may not cross physical labs. Other checks use request context.
+            **({'lab': lab} if lab else {'lab__isnull': False}),
             user__email__iexact=email,
         ).select_related('user').first())
         if not profile:
@@ -846,6 +889,8 @@ def _validate_custom_value(column, value):
 
 class ShippingProblemSampleSerializer(serializers.ModelSerializer):
     table_name = serializers.CharField(source='table.name', read_only=True)
+    lab_name = serializers.CharField(source='lab.name', read_only=True)
+    lab_code = serializers.CharField(source='lab.code', read_only=True)
     container_id = serializers.CharField(source='container.container_id', read_only=True)
     workflow_status = serializers.SerializerMethodField()
     pt_days = serializers.IntegerField(source='table.pt_days', read_only=True)
@@ -857,7 +902,7 @@ class ShippingProblemSampleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemSample
         fields = [
-            'id', 'problem_number', 'table', 'table_name', 'container_id', 'workflow_status',
+            'id', 'problem_number', 'table', 'table_name', 'lab', 'lab_name', 'lab_code', 'container_id', 'workflow_status',
             'brand', 'distributor', 'end_user', 'als_tracking_number', 'courier',
             'courier_tracking_number', 'custom_values', 'pt_days', 'customer_notified_at',
             'days_until_automatic_disposal', 'tracking_url', 'tracking_link_expiry', 'back_to_testing_notified_at', 'container_disposed', 'created_at', 'modified_at',
@@ -892,6 +937,8 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     modified_by_email = serializers.EmailField(source='modified_by.email', read_only=True)
     table_name = serializers.CharField(source='table.name', read_only=True)
     search_score = serializers.FloatField(read_only=True, required=False)
+    lab_name = serializers.CharField(source='lab.name', read_only=True)
+    lab_code = serializers.CharField(source='lab.code', read_only=True)
     container_id = serializers.CharField(source='container.container_id', read_only=True)
     container_is_dumping = serializers.BooleanField(source='container.is_dumping', read_only=True)
     container_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -909,7 +956,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemSample
         fields = '__all__'
-        read_only_fields = ['problem_number', 'container', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
+        read_only_fields = ['problem_number', 'container', 'lab', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
 
     def get_expires_at(self, obj):
         return obj.expires_at
@@ -943,6 +990,12 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         instance = self.instance
+        request = self.context.get('request')
+        selected_lab = active_lab(request, require_specific=True) if request else None
+        if selected_lab:
+            if instance and instance.lab_id != selected_lab.pk:
+                raise serializers.ValidationError({'lab': 'This ticket must belong to the selected lab.'})
+            attrs['lab'] = selected_lab
         container_code = attrs.pop('container_code', None)
         create_new_container = attrs.pop('create_new_container', False)
         if create_new_container and container_code not in (None, ''):
@@ -954,15 +1007,15 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         if instance is None:
             if container_code:
                 container = ProblemContainer.resolve_identifier(container_code)
-                if not container:
-                    raise serializers.ValidationError({'container_code': 'Container not found.'})
+                if not container or (selected_lab and container.lab_id != selected_lab.pk):
+                    raise serializers.ValidationError({'container_code': 'Container not found in the selected lab.'})
                 if container.disposed_at or container.is_dumping:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be assigned to a disposed container. Undo that container disposal first.'})
                 attrs['container'] = container
         elif container_code and not create_new_container:
             container = ProblemContainer.resolve_identifier(container_code)
-            if not container:
-                raise serializers.ValidationError({'container_code': 'Container not found.'})
+            if not container or (selected_lab and container.lab_id != selected_lab.pk):
+                raise serializers.ValidationError({'container_code': 'Container not found in the selected lab.'})
             if instance.container_id and instance.container_id != container.pk:
                 if instance.container and instance.container.disposed_at:
                     raise serializers.ValidationError({'container_code': 'A ticket cannot be moved out of a disposed container. Undo that container disposal first.'})
@@ -999,12 +1052,14 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
         columns = {
             c.field_key: c for c in table.columns.all()
-            if not c.is_system or c.field_key in {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY}
+            if not c.is_system or c.field_key in {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, 'system-lab'}
         }
         # Ticket ID is always server-generated. Current Workflow and Dispose
         # Automatically are the built-in routing controls. Ignore the removed
         # legacy Status key from stale clients or historical rows.
         merged.pop('problem-id', None)
+        if selected_lab:
+            merged['system-lab'] = selected_lab.name
         merged.pop('status', None)
         if _is_empty(merged.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY)):
             merged[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = (instance.workflow_status if instance else CURRENT_WORKFLOW_DEFAULT)
@@ -1102,7 +1157,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
                     # Client Email validation needs access to the dependency value from this row.
                     column._row_values = merged
                     try:
-                        merged[key] = _validate_custom_value(column, merged[key])
+                        merged[key] = _validate_custom_value(column, merged[key], lab=selected_lab)
                     finally:
                         if hasattr(column, '_row_values'):
                             delattr(column, '_row_values')
@@ -1190,8 +1245,8 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         create_new_container = validated_data.pop('create_new_container', False)
         if create_new_container:
             actor = getattr(self.context.get('request'), 'user', None)
-            validated_data['container'] = ProblemContainer.objects.create(
-                created_by=actor if actor and actor.is_authenticated else None,
+            validated_data['container'] = create_container(
+                instance.lab, created_by=actor if actor and actor.is_authenticated else None,
             )
         return super().update(instance, validated_data)
 
@@ -1199,6 +1254,7 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         data = super().to_representation(instance)
         values = dict(data.get('custom_values') or {})
         values['problem-id'] = instance.problem_number
+        values['system-lab'] = instance.lab.name if instance.lab_id else ''
         values.pop('status', None)
         values[SYSTEM_CURRENT_WORKFLOW_FIELD_KEY] = instance.workflow_status
         values[SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY] = str(values.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY) or DISPOSE_AUTOMATICALLY_NO)

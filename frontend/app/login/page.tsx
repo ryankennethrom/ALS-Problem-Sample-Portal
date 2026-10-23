@@ -10,6 +10,7 @@ type LoginUser = {
   name: string;
   needs_role: boolean;
   needs_email: boolean;
+  is_admin: boolean;
 };
 
 type LoginResponse = {
@@ -45,7 +46,7 @@ export default function Login() {
       const destination = requestedReturnPath();
       window.location.replace(
         data.user.needs_email || data.user.needs_role
-          ? accountSetupUrl(destination)
+          ? (data.user.is_admin ? '/accounts' : accountSetupUrl(destination))
           : (destination || '/dashboard')
       );
     } catch (e) {
@@ -59,7 +60,7 @@ export default function Login() {
     <section className="login-card" aria-labelledby="login-title">
       <div className="login-brand-area">
         <img className="login-logo" src="/als-logo.png" alt="ALS" />
-        <h1 id="login-title">Edmonton Ticket<br />Tracker</h1>
+        <h1 id="login-title">ALS Ticket<br />Tracker</h1>
       </div>
 
       <div className="login-divider" />

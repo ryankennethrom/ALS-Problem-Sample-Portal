@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from django.contrib.auth.models import User
 from django.core import signing
 from django.http import StreamingHttpResponse
@@ -11,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.views import is_tracker_admin
+from .labs import active_lab
 from .backup_restore import (
     BackupError,
     backup_filename,
@@ -22,11 +25,15 @@ from .backup_restore import (
     restore_media,
     stream_backup_archive,
 )
+from .backup_upgrade import upgrade_full_backup, upgrade_plan, staging_isolation_mode
+
+logger = logging.getLogger(__name__)
 
 DOWNLOAD_TOKEN_SALT = 'tracker-manual-backup-download-v1'
 DOWNLOAD_TOKEN_MAX_AGE_SECONDS = 300
 VALID_KINDS = {'database', 'media', 'full'}
 RESTORE_CONFIRMATIONS = {
+    'upgrade': 'UPGRADE AND RESTORE FULL BACKUP',
     'database': 'RESTORE DATABASE',
     'media': 'RESTORE MEDIA',
     'full': 'RESTORE FULL BACKUP',
@@ -34,7 +41,7 @@ RESTORE_CONFIRMATIONS = {
 
 
 def _admin_required(request):
-    return bool(request.user and request.user.is_authenticated and is_tracker_admin(request.user))
+    return bool(request.user and request.user.is_authenticated and is_tracker_admin(request.user) and active_lab(request) is None)
 
 
 class BackupRestoreStatusView(APIView):
@@ -95,6 +102,29 @@ class BackupDownloadView(APIView):
         return response
 
 
+class BackupUpgradeInspectView(APIView):
+    """Read-only compatibility preview; no staging DB or live data touched."""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        if not _admin_required(request):
+            return Response({'detail': 'Administrator access required in Lab: All.'}, status=403)
+        uploaded = request.FILES.get('backup')
+        if uploaded is None:
+            return Response({'detail': 'Choose a Full Backup file.'}, status=400)
+        try:
+            inspected = inspect_backup_archive(uploaded, expected_kind='full')
+            plan = upgrade_plan(inspected.manifest)
+            return Response({**plan, 'staging_isolation_mode': staging_isolation_mode(),
+                             'can_create_staging_database': staging_isolation_mode() != 'unavailable',
+                             'backup_created_at': inspected.manifest.get('created_at'),
+                             'safety_warning': 'Use a maintenance window and download a fresh Full Backup first. '
+                                               'Media changes cannot be rolled back automatically.'})
+        except BackupError as exc:
+            return Response({'detail': str(exc)}, status=400)
+
+
 class BackupRestoreView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -103,8 +133,8 @@ class BackupRestoreView(APIView):
         if not _admin_required(request):
             return Response({'detail': 'Administrator access required.'}, status=403)
         kind = str(request.data.get('kind') or '').strip().lower()
-        if kind not in VALID_KINDS:
-            return Response({'detail': 'Choose database, media, or full restore.'}, status=400)
+        if kind not in (VALID_KINDS | {'upgrade'}):
+            return Response({'detail': 'Choose database, media, full, or upgrade restore.'}, status=400)
         required = RESTORE_CONFIRMATIONS[kind]
         if request.data.get('confirmation') != required:
             return Response({'detail': f'Type {required} to confirm.'}, status=400)
@@ -116,6 +146,7 @@ class BackupRestoreView(APIView):
             with backup_restore_lock(exclusive=True, blocking=False):
                 return self._restore_locked(request, kind, uploaded)
         except BackupError as exc:
+            logger.warning('Backup restore rejected (kind=%s): %s', kind, exc)
             return Response({'detail': str(exc)}, status=400)
 
     def _restore_locked(self, request, kind, uploaded):
@@ -123,6 +154,7 @@ class BackupRestoreView(APIView):
             inspected = inspect_backup_archive(uploaded)
             archive_kind = inspected.manifest.get('kind')
             allowed_archive_kinds = {
+                'upgrade': {'full'},
                 'database': {'database', 'full'},
                 'media': {'media', 'full'},
                 'full': {'full'},
@@ -130,7 +162,9 @@ class BackupRestoreView(APIView):
             if archive_kind not in allowed_archive_kinds:
                 return Response({'detail': f'This {archive_kind} backup cannot be used for a {kind} restore.'}, status=400)
             result = {'kind': kind, 'backup_kind': archive_kind, 'backup_created_at': inspected.manifest.get('created_at')}
-            if kind == 'database':
+            if kind == 'upgrade':
+                result.update(upgrade_full_backup(uploaded, inspected))
+            elif kind == 'database':
                 restore_database(uploaded, inspected)
                 result.update({'database_restored': True, 'requires_relogin': True})
             elif kind == 'media':
@@ -147,4 +181,5 @@ class BackupRestoreView(APIView):
                 result.update({'database_restored': True, 'media_restored': True, 'requires_relogin': True})
             return Response(result)
         except BackupError as exc:
+            logger.warning('Backup restore rejected after inspection (kind=%s): %s', kind, exc)
             return Response({'detail': str(exc)}, status=400)

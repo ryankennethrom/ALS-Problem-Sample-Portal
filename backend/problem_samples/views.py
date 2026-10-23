@@ -27,9 +27,10 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from accounts.models import UserProfile
 from accounts.account_utils import normalize_als_email, user_has_als_email
-from .models import ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
+from .models import TicketCreationTiming, ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
 from .permissions import IsTrackerAdminOrReadOnly
-from .notification_recipient import get_edmonton_recipient
+from .labs import active_lab, scope_tickets, scope_containers, require_lab_matches, create_container
+from .notification_recipient import get_edmonton_recipient, addresses_for_lab
 from .serializers import (
     ProblemSampleSerializer, ShippingProblemSampleSerializer, CommentSerializer, ImageSerializer, AttachmentSerializer, ProblemTableSerializer, ProblemColumnSerializer, ProblemContainerSerializer,
 )
@@ -45,10 +46,13 @@ MAX_CUSTOMER_RESPONSE_BYTES = 50 * 1024 * 1024
 
 
 def _confirmed_testing_recipient(request):
-    configured = get_edmonton_recipient().email
+    lab = active_lab(request, require_specific=True)
+    configured = ', '.join(addresses_for_lab(lab, UserProfile.ROLE_LAB_TECHNICIAN))
+    if not configured:
+        raise DRFValidationError({'email_recipient': 'Configure Lab notification addresses first.'})
     supplied = request.data.get('email_recipient')
     if not isinstance(supplied, str) or supplied.strip().casefold() != configured.casefold():
-        raise DRFValidationError({'email_recipient': 'The NA.EDM address has changed. Reopen the email preview before confirming.'})
+        raise DRFValidationError({'email_recipient': 'The Lab notification recipients have changed. Reopen the email preview before confirming.'})
     return configured
 ALLOWED_IMAGE_FORMATS = {'JPEG', 'PNG', 'GIF', 'WEBP'}
 MENTION_RE = re.compile(r'(?<![A-Za-z0-9_@])@([A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)', re.IGNORECASE)
@@ -78,26 +82,28 @@ def _extract_mention_handles(body):
     return handles
 
 
-def _lookup_mention_user(handle):
+def _lookup_mention_user(handle, lab):
     user = User.objects.filter(username__iexact=handle, is_active=True).first()
     if user is None:
         user = User.objects.filter(
             username__iexact=f'{handle}{MENTION_EMAIL_SUFFIX}',
             is_active=True,
         ).first()
+    if user and getattr(getattr(user, 'tracker_profile', None), 'lab_id', None) != lab.pk:
+        return None
     return user
 
 
-def _eligible_role_users(role):
+def _eligible_role_users(role, lab):
     profiles = (
-        UserProfile.objects.filter(role=role, user__is_active=True)
+        UserProfile.objects.filter(role=role, lab=lab, user__is_active=True)
         .select_related('user')
         .order_by('user__first_name', 'user__last_name', 'user__username')
     )
     return [profile.user for profile in profiles if user_has_als_email(profile.user)]
 
 
-def _resolve_mentions(body):
+def _resolve_mentions(body, lab):
     """Resolve individual and role-group mentions.
 
     Returns (users, unavailable_direct_users, groups, direct_user_ids). Group
@@ -113,17 +119,17 @@ def _resolve_mentions(body):
         if handle == MENTION_GROUP_LAB:
             if MENTION_GROUP_LAB not in groups:
                 groups.append(MENTION_GROUP_LAB)
-            for user in _eligible_role_users(UserProfile.ROLE_LAB_TECHNICIAN):
+            for user in _eligible_role_users(UserProfile.ROLE_LAB_TECHNICIAN, lab):
                 resolved_by_id[user.id] = user
             continue
         if handle == MENTION_GROUP_CUSTOMER_SERVICE:
             if MENTION_GROUP_CUSTOMER_SERVICE not in groups:
                 groups.append(MENTION_GROUP_CUSTOMER_SERVICE)
-            for user in _eligible_role_users(UserProfile.ROLE_CUSTOMER_SERVICE):
+            for user in _eligible_role_users(UserProfile.ROLE_CUSTOMER_SERVICE, lab):
                 resolved_by_id[user.id] = user
             continue
 
-        user = _lookup_mention_user(handle)
+        user = _lookup_mention_user(handle, lab)
         if user is None:
             continue
         if not user_has_als_email(user):
@@ -135,11 +141,11 @@ def _resolve_mentions(body):
     return list(resolved_by_id.values()), unavailable, groups, direct_user_ids
 
 
-def _mentioned_users_from_body(body):
-    return _resolve_mentions(body)[0]
+def _mentioned_users_from_body(body, lab):
+    return _resolve_mentions(body, lab)[0]
 
 
-def _mention_delivery_addresses(users, groups, direct_user_ids):
+def _mention_delivery_addresses(users, groups, direct_user_ids, lab):
     """Return one deduplicated To list for the single outbound mention email."""
     addresses = []
     seen = set()
@@ -151,18 +157,12 @@ def _mention_delivery_addresses(users, groups, direct_user_ids):
             seen.add(key)
             addresses.append(raw)
 
-    # @Lab is intentionally routed through the shared Edmonton mailbox rather
-    # than sending one copy to every Lab staff address.
     if MENTION_GROUP_LAB in groups:
-        add(LAB_GROUP_EMAIL)
-
-    # @CustomerService is one email addressed to all eligible Customer Service
-    # staff members' stored ALS addresses.
+        for address in addresses_for_lab(lab, UserProfile.ROLE_LAB_TECHNICIAN):
+            add(address)
     if MENTION_GROUP_CUSTOMER_SERVICE in groups:
-        for user in users:
-            profile = getattr(user, 'tracker_profile', None)
-            if profile and profile.role == UserProfile.ROLE_CUSTOMER_SERVICE:
-                add(normalize_als_email(user.email))
+        for address in addresses_for_lab(lab, UserProfile.ROLE_CUSTOMER_SERVICE):
+            add(address)
 
     # Explicit individual mentions are also included in that same email.
     for user in users:
@@ -189,7 +189,7 @@ def _mention_notified_email(user, groups, direct_user_ids):
         return normalize_als_email(user.email)
     profile = getattr(user, 'tracker_profile', None)
     if MENTION_GROUP_LAB in groups and profile and profile.role == UserProfile.ROLE_LAB_TECHNICIAN:
-        return LAB_GROUP_EMAIL
+        return ', '.join(addresses_for_lab(profile.lab, UserProfile.ROLE_LAB_TECHNICIAN))
     return normalize_als_email(user.email)
 
 
@@ -198,7 +198,7 @@ def _mention_email(problem, mentioned_by, users, groups, direct_user_ids, body):
     direct_url = f'{frontend}/problems/{problem.id}#follow-ups' if frontend else f'/problems/{problem.id}#follow-ups'
     author_name = mentioned_by.get_full_name().strip() or _mention_handle(mentioned_by)
     table_name = problem.table.name if problem.table_id else 'Tickets'
-    recipients = _mention_delivery_addresses(users, groups, direct_user_ids)
+    recipients = _mention_delivery_addresses(users, groups, direct_user_ids, problem.lab)
     labels = _mention_labels(users, groups, direct_user_ids)
     subject = f'Mention on Ticket #{problem.problem_number}'
     message = (
@@ -206,7 +206,7 @@ def _mention_email(problem, mentioned_by, users, groups, direct_user_ids, body):
         f'{author_name} mentioned {", ".join(labels)} on Ticket #{problem.problem_number} in {table_name}.\n\n'
         f'Message:\n{(body or "").strip()}\n\n'
         f'Open the ticket directly:\n{direct_url}\n\n'
-        'Regards,\nALS Edmonton Ticket Tracker'
+        'Regards,\nALS Ticket Tracker'
     )
     return {
         # email is retained as a display/backward-compatibility field. New UI
@@ -233,7 +233,7 @@ def _mention_confirmation_payload(problem, author, body, users, groups, direct_u
         'direct_user_ids': sorted(direct_user_ids),
         'delivery_emails': [
             address.casefold()
-            for address in _mention_delivery_addresses(users, groups, direct_user_ids)
+            for address in _mention_delivery_addresses(users, groups, direct_user_ids, problem.lab)
         ],
     }
 
@@ -251,21 +251,21 @@ def _mention_user_payload(user):
     }
 
 
-def _mention_group_payloads(query=''):
+def _mention_group_payloads(query='', lab=None):
     query = str(query or '').strip().lower()
     groups = [
         {
             'id': 'group:lab',
             'username': 'Lab',
             'name': 'Lab',
-            'role_label': f'All Lab users · email {LAB_GROUP_EMAIL}',
+            'role_label': 'Lab notification recipients for this lab',
             'kind': 'group',
         },
         {
             'id': 'group:customer-service',
             'username': 'CustomerService',
             'name': 'Customer Service',
-            'role_label': 'All Customer Service users with ALS email',
+            'role_label': 'Customer Service recipients for this lab',
             'kind': 'group',
         },
     ]
@@ -373,7 +373,8 @@ def _distributor_auto_cc(problem):
     recipients = []
     seen = set()
     for column in problem.table.columns.filter(column_type=ProblemColumn.TYPE_DISTRIBUTOR):
-        value = str(values.get(column.field_key, column.default_value) or '').strip().casefold()
+        # Older tickets without this field must not inherit the future-ticket default.
+        value = str(values.get(column.field_key) or '').strip().casefold()
         if not value:
             continue
         for rule in column.distributor_cc_rules or []:
@@ -708,6 +709,11 @@ def ensure_builtin_columns(table):
     ensure_dispose_automatically_column(table)
     ensure_days_until_automatic_disposal_column(table)
     ensure_tracking_link_columns(table)
+    ProblemColumn.objects.update_or_create(table=table, field_key='system-lab', defaults={
+        'name': 'Lab', 'column_type': ProblemColumn.TYPE_LAB, 'is_system': True,
+        'required': True, 'searchable': True, 'include_in_customer_notification': False,
+        'default_value': None, 'position': 6,
+    })
 
 
 def get_default_table():
@@ -740,6 +746,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
     def prepare_new(self, request):
         serializer = ProblemSampleSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
+        active_lab(request, require_specific=True)
         table = serializer.validated_data.get('table') or get_default_table()
         mask = resolve_problem_type(table, serializer.validated_data.get('custom_values') or {})
         problem_type_prompts = selected_problem_type_prompts(table, serializer.validated_data.get('custom_values') or {})
@@ -759,7 +766,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             table.next_problem_id = number + 1
             table.save(update_fields=['next_problem_id', 'modified_at'])
             prepared = PreparedProblemSample.objects.create(
-                table=table, created_by=request.user, problem_number=number,
+                table=table, lab=active_lab(request, require_specific=True), created_by=request.user, problem_number=number,
                 tracking_token=generate_acknowledgement_token(), payload=dict(request.data),
                 problem_type_prompts=problem_type_prompts,
             )
@@ -778,7 +785,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         except (TypeError, ValueError, AttributeError):
             return Response({'detail': 'Choose a valid preparation.'}, status=status.HTTP_400_BAD_REQUEST)
         prepared = PreparedProblemSample.objects.filter(pk=prepared_id, created_by=request.user, completed_problem__isnull=True).first()
-        if prepared:
+        if prepared and prepared.lab_id == active_lab(request, require_specific=True).pk:
             prepared.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -788,6 +795,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             prepared_id = uuid.UUID(str(request.data.get('id')))
         except (TypeError, ValueError, AttributeError):
             return Response({'detail': 'Prepare the customer information first.'}, status=status.HTTP_400_BAD_REQUEST)
+        # Capture receipt time before validating/uploads/DB writes. Reported time
+        # is elapsed wall-clock time, not a measure of active typing or focus.
+        completed_at = timezone.now()
         raw_sent = request.data.get('sent')
         sent = raw_sent if isinstance(raw_sent, bool) else {'true': True, 'false': False}.get(raw_sent)
         if not isinstance(sent, bool):
@@ -798,8 +808,22 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             prepared = PreparedProblemSample.objects.select_for_update().filter(pk=prepared_id, created_by=request.user).first()
             if not prepared:
                 return Response({'detail': 'This preparation was cancelled or is no longer available.'}, status=status.HTTP_404_NOT_FOUND)
+            if prepared.lab_id != active_lab(request, require_specific=True).pk:
+                return Response({'detail': 'This prepared ticket belongs to a different lab.'}, status=403)
             if prepared.completed_problem_id:
                 return Response({'id': str(prepared.completed_problem_id)})
+            raw_timing_id = str(request.data.get('creation_timing_id') or '').strip()
+            timing = None
+            if raw_timing_id:
+                try:
+                    timing_id = uuid.UUID(raw_timing_id)
+                except (ValueError, TypeError, AttributeError):
+                    raise DRFValidationError({'creation_timing_id': 'Invalid creation timing identifier.'})
+                timing = TicketCreationTiming.objects.select_for_update().filter(
+                    pk=timing_id, staff=request.user, completed_at__isnull=True,
+                ).first()
+                if not timing:
+                    raise DRFValidationError({'creation_timing_id': 'This timing session is not available for this account.'})
             serializer = ProblemSampleSerializer(data=prepared.payload, context={'request': request})
             serializer.is_valid(raise_exception=True)
             mask = resolve_problem_type(prepared.table, serializer.validated_data.get('custom_values') or {})
@@ -829,8 +853,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 error = _validate_uploaded_file(uploaded)
                 if error:
                     raise DRFValidationError({'attachments': f'{uploaded.name}: {error}'})
+            selected_lab = active_lab(request, require_specific=True)
             problem = serializer.save(
-                table=prepared.table, problem_number=prepared.problem_number,
+                lab=selected_lab, table=prepared.table, problem_number=prepared.problem_number,
                 created_by=request.user, modified_by=request.user,
                 problem_type_prompts=prepared.problem_type_prompts,
             )
@@ -873,6 +898,12 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 # do not create or refresh any tracking-link/expiry state. A future send
                 # attempt will prepare a fresh token.
                 pass
+            if timing is not None:
+                timing.completed_ticket = problem
+                timing.completed_at = completed_at
+                timing.duration_ms = max(0, int((completed_at - timing.started_at).total_seconds() * 1000))
+                timing.email_sent = sent
+                timing.save(update_fields=['completed_ticket', 'completed_at', 'duration_ms', 'email_sent'])
             prepared.completed_problem = problem
             prepared.save(update_fields=['completed_problem'])
         return Response({'id': str(problem.pk)}, status=status.HTTP_201_CREATED)
@@ -890,6 +921,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('comments__mentions__mentioned_user', 'images__uploaded_by', 'attachments__uploaded_by', 'history__actor', 'table__columns')
                     .order_by('-problem_number'))
+        queryset = scope_tickets(self.request, queryset)
         table_id = self.request.query_params.get('table')
         if table_id:
             queryset = queryset.filter(table_id=table_id)
@@ -915,6 +947,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         return queryset
 
     def perform_create(self, serializer):
+        selected_lab = active_lab(self.request, require_specific=True)
         requested = serializer.validated_data.get('table') or get_default_table()
         with transaction.atomic():
             table = ProblemTable.objects.select_for_update().get(pk=requested.pk)
@@ -923,7 +956,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             table.next_problem_id = problem_number + 1
             table.save(update_fields=['next_problem_id', 'modified_at'])
             problem = serializer.save(
-                table=table, problem_number=problem_number,
+                lab=selected_lab, table=table, problem_number=problem_number,
                 created_by=self.request.user, modified_by=self.request.user,
             )
             lifecycle_fields = problem.apply_acknowledgement_status_transition('', previous_dispose_automatically=False, changed_at=timezone.now())
@@ -939,6 +972,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_update(self, serializer):
+        require_lab_matches(self.request, serializer.instance.lab)
         reason = _change_reason(self.request)
         instance = serializer.instance
         before_custom = dict(instance.custom_values or {})
@@ -1066,6 +1100,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         queryset = (ProblemSample.objects.select_related('created_by', 'modified_by', 'table', 'container', 'tracking_link_record')
                     .prefetch_related('table__columns')
                     .filter(table=table))
+        queryset = scope_tickets(request, queryset)
         if tracking_not_sent:
             from .dashboard_views import tracking_not_sent_tickets
             queryset = tracking_not_sent_tickets(queryset)
@@ -1134,7 +1169,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 problem_ids.append(problem_id)
 
         samples = list(
-            ProblemSample.objects.select_for_update()
+            scope_tickets(request, ProblemSample.objects.select_for_update())
             .prefetch_related('table__columns', 'container')
             .filter(pk__in=problem_ids)
         )
@@ -1261,7 +1296,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         # PostgreSQL rejects (FOR UPDATE on the nullable side of an outer join).
         # Prefetch the related rows in separate SELECTs after locking tickets.
         samples = list(
-            ProblemSample.objects.select_for_update()
+            scope_tickets(request, ProblemSample.objects.select_for_update())
             .filter(pk__in=ids)
             .prefetch_related('container', 'table__columns')
         )
@@ -1442,7 +1477,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 problem_ids.append(problem_id)
 
         samples = list(
-            ProblemSample.objects.select_for_update()
+            scope_tickets(request, ProblemSample.objects.select_for_update())
             .prefetch_related('table__columns', 'container')
             .filter(pk__in=problem_ids)
         )
@@ -2060,7 +2095,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if len(body) > 10000:
             return Response({'detail': 'Comment must be 10,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body)
+        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body, problem.lab)
         if unavailable:
             handles = ', '.join(f'@{_mention_handle(user)}' for user in unavailable)
             return Response(
@@ -2071,7 +2106,8 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         # @CustomerService only represents staff accounts that can actually be
         # mentioned. If none have ALS email yet, do not silently save a dead
         # group mention.
-        if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+        if (MENTION_GROUP_CUSTOMER_SERVICE in groups and
+                problem.lab.customer_service_notification_mode == 'staff'):
             customer_service_users = [
                 user for user in mentioned_users
                 if getattr(getattr(user, 'tracker_profile', None), 'role', '') == UserProfile.ROLE_CUSTOMER_SERVICE
@@ -2082,7 +2118,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids)
+        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids, problem.lab)
         if not recipients:
             return Response({'requires_email': False, 'emails': [], 'confirmation_token': ''})
 
@@ -2109,14 +2145,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if len(body) > 10000:
             return Response({'detail': 'Comment must be 10,000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body)
+        mentioned_users, unavailable, groups, direct_user_ids = _resolve_mentions(body, problem.lab)
         if unavailable:
             handles = ', '.join(f'@{_mention_handle(user)}' for user in unavailable)
             return Response(
                 {'detail': f'{handles} cannot be mentioned until their ALS email is set.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if MENTION_GROUP_CUSTOMER_SERVICE in groups:
+        if (MENTION_GROUP_CUSTOMER_SERVICE in groups and
+                problem.lab.customer_service_notification_mode == 'staff'):
             customer_service_users = [
                 user for user in mentioned_users
                 if getattr(getattr(user, 'tracker_profile', None), 'role', '') == UserProfile.ROLE_CUSTOMER_SERVICE
@@ -2127,7 +2164,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids)
+        recipients = _mention_delivery_addresses(mentioned_users, groups, direct_user_ids, problem.lab)
         requires_email = bool(recipients)
         if requires_email:
             token = str(request.data.get('mention_email_confirmation_token') or '').strip()
@@ -2203,19 +2240,26 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         candidates = users.order_by('first_name', 'last_name', 'username')[:60]
         valid_users = [user for user in candidates if user_has_als_email(user)][:20]
         return Response(
-            _mention_group_payloads(query)
+            _mention_group_payloads(query, active_lab(request, require_specific=True))
             + [_mention_user_payload(user) for user in valid_users]
         )
 
     @action(detail=False, methods=['get'], url_path='mentions')
     def mention_inbox(self, request):
+        # The sidebar polls mentions while administrators are in Lab: All.
+        # That is a valid read-only context; only ticket writes require a
+        # specific lab. Staff can never select ALL via active_lab().
+        selected_lab = active_lab(request)
         mentions = ProblemMention.objects.filter(mentioned_user=request.user)
+        if selected_lab is not None:
+            mentions = mentions.filter(problem__lab=selected_lab)
+        unread_count = mentions.filter(read_at__isnull=True).count()
         if str(request.query_params.get('summary') or '').lower() in {'1', 'true', 'yes'}:
-            return Response({'unread_count': mentions.filter(read_at__isnull=True).count()})
+            return Response({'unread_count': unread_count})
         mentions = (mentions.select_related('problem__table', 'comment', 'mentioned_by')
                     .order_by('-created_at', '-id')[:200])
         return Response({
-            'unread_count': ProblemMention.objects.filter(mentioned_user=request.user, read_at__isnull=True).count(),
+            'unread_count': unread_count,
             'results': [
                 {
                     'id': mention.id,
@@ -2254,6 +2298,10 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 .prefetch_related('problem_samples__table')
                 .order_by('-id'))
     serializer_class = ProblemContainerSerializer
+
+    def get_queryset(self):
+        return scope_containers(self.request, super().get_queryset())
+
     http_method_names = ['get', 'post', 'head', 'options']
 
     def perform_create(self, serializer):
@@ -2262,7 +2310,8 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         return None
 
     def create(self, request, *args, **kwargs):
-        container = ProblemContainer.objects.create(created_by=request.user)
+        selected_lab = active_lab(request, require_specific=True)
+        container = create_container(selected_lab, created_by=request.user)
         return Response(
             self.get_serializer(container).data,
             status=status.HTTP_201_CREATED,
@@ -2272,6 +2321,8 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     def lookup(self, request):
         identifier = request.query_params.get('container_id') or request.query_params.get('id') or ''
         container = ProblemContainer.resolve_identifier(identifier)
+        if container and not scope_containers(request, ProblemContainer.objects.filter(pk=container.pk)).exists():
+            container = None
         if not container:
             return Response({'detail': 'Container not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response(self.get_serializer(container).data)
@@ -2284,7 +2335,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
         holds the rollback snapshot and the original source ID.
         """
         now = timezone.now()
-        dump = ProblemContainer.objects.create(
+        dump = create_container(container.lab,
             created_by=request.user, is_dumping=True, source_container=container,
             disposed_at=now, disposed_by=request.user,
             dumped_sample_ids=[str(sample.pk) for sample in samples],
@@ -2351,7 +2402,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='dispose')
     @transaction.atomic
     def dispose(self, request, pk=None):
-        container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        container = scope_containers(request, ProblemContainer.objects.select_for_update()).get(pk=pk)
         if container.is_dumping:
             return Response({'detail': 'Dumping containers cannot be disposed again or reused.'}, status=status.HTTP_409_CONFLICT)
         if container.disposed_at:
@@ -2382,7 +2433,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        container = scope_containers(request, ProblemContainer.objects.select_for_update()).get(pk=pk)
         if container.is_dumping:
             return Response({'detail': 'Dumping containers cannot be disposed again or reused.'}, status=status.HTTP_409_CONFLICT)
         if container.disposed_at:
@@ -2420,7 +2471,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='undo-disposal')
     @transaction.atomic
     def undo_disposal(self, request, pk=None):
-        container = ProblemContainer.objects.select_for_update().get(pk=pk)
+        container = scope_containers(request, ProblemContainer.objects.select_for_update()).get(pk=pk)
         if not container.disposed_at or (container.is_dumping and container.restored_at):
             return Response({'detail': 'This container does not have an active disposal to undo.'}, status=status.HTTP_409_CONFLICT)
 
@@ -2436,7 +2487,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 destination = ProblemContainer.resolve_identifier(destination_code)
                 if not destination:
                     return Response({'detail': 'The selected destination container does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
-                destination = ProblemContainer.objects.select_for_update().get(pk=destination.pk)
+                destination = scope_containers(request, ProblemContainer.objects.select_for_update()).get(pk=destination.pk)
                 if destination.is_dumping or destination.disposed_at:
                     return Response({'detail': 'Choose an active, non-dumping destination container.'}, status=status.HTTP_409_CONFLICT)
             # Defer creating a new container until all rollback checks succeed.
@@ -2513,7 +2564,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
             if diverged:
                 return Response({'detail': 'One or more transferred tickets changed after disposal.', 'blocking_problem_ids': diverged}, status=status.HTTP_409_CONFLICT)
             if destination is None:
-                destination = ProblemContainer.objects.create(created_by=request.user)
+                destination = create_container(container.lab, created_by=request.user)
 
         now = timezone.now()
         for sample, before, saved in restore_plan:
@@ -2751,14 +2802,14 @@ class ProblemColumnViewSet(viewsets.ModelViewSet):
                 ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
             return
 
-        default = column.default_value
-        has_default = not (default is None or default == '' or default == [])
-        if has_default:
-            # Adding a column behaves like a Microsoft List column: the chosen
-            # default immediately fills that column for rows already in the table.
+        # Only the create-time "Fill existing with" value backfills old tickets.
+        # default_value is independent, and only prefills future tickets.
+        fill_existing = getattr(column, '_fill_existing_with', None)
+        if fill_existing is not None and fill_existing != '' and fill_existing != []:
+            import copy
             for problem in column.table.problem_samples.only('id', 'custom_values'):
                 values = dict(problem.custom_values or {})
-                values[column.field_key] = default
+                values[column.field_key] = copy.deepcopy(fill_existing)
                 ProblemSample.objects.filter(pk=problem.pk).update(custom_values=values)
 
         if column.column_type == ProblemColumn.TYPE_INTERCOLUMN_CONTROLLER:

@@ -1,6 +1,7 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 from accounts.views import is_tracker_admin
+from .labs import active_lab
 
 
 class IsTrackerAdminOrReadOnly(BasePermission):
@@ -9,4 +10,6 @@ class IsTrackerAdminOrReadOnly(BasePermission):
     message = 'Administrator access is required to manage tables.'
 
     def has_permission(self, request, view):
-        return request.method in SAFE_METHODS or is_tracker_admin(request.user)
+        if request.method in SAFE_METHODS:
+            return True
+        return is_tracker_admin(request.user) and active_lab(request) is None

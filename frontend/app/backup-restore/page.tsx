@@ -17,12 +17,14 @@ type Status = {
   database_restore_logs_out_users: boolean;
 };
 
-type BackupKind = 'database' | 'media' | 'full';
+type BackupKind = 'database' | 'media' | 'full' | 'upgrade';
+type UpgradePreview = { missing_count: number; missing_migrations: string[]; backup_created_at: string; can_create_staging_database: boolean; staging_isolation_mode: string; safety_warning: string };
 
 const RESTORE_CONFIRMATIONS: Record<BackupKind, string> = {
   database: 'RESTORE DATABASE',
   media: 'RESTORE MEDIA',
   full: 'RESTORE FULL BACKUP',
+  upgrade: 'UPGRADE AND RESTORE FULL BACKUP',
 };
 
 function formatBytes(value: number) {
@@ -80,12 +82,15 @@ export default function BackupRestorePage() {
   const [busy, setBusy] = useState<BackupKind | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [files, setFiles] = useState<Record<BackupKind, File | null>>({ database: null, media: null, full: null });
-  const [confirmationInputs, setConfirmationInputs] = useState<Record<BackupKind, string>>({ database: '', media: '', full: '' });
+  const [files, setFiles] = useState<Record<BackupKind, File | null>>({ database: null, media: null, full: null, upgrade: null });
+  const [upgradePreview, setUpgradePreview] = useState<UpgradePreview | null>(null);
+  const [safetyAcknowledged, setSafetyAcknowledged] = useState(false);
+  const [confirmationInputs, setConfirmationInputs] = useState<Record<BackupKind, string>>({ database: '', media: '', full: '', upgrade: '' });
   const fileInputs = {
     database: useRef<HTMLInputElement>(null),
     media: useRef<HTMLInputElement>(null),
     full: useRef<HTMLInputElement>(null),
+    upgrade: useRef<HTMLInputElement>(null),
   };
 
   async function loadStatus() {
@@ -138,14 +143,30 @@ export default function BackupRestorePage() {
     const next = event.target.files?.[0] || null;
     setFiles(current => ({ ...current, [kind]: next }));
     setConfirmationInputs(current => ({ ...current, [kind]: '' }));
+    if (kind === 'upgrade') { setUpgradePreview(null); setSafetyAcknowledged(false); }
     setError(''); setMessage('');
+  }
+
+  async function previewUpgrade() {
+    const backup = files.upgrade;
+    if (!backup || busy) return;
+    setBusy('upgrade'); setError(''); setMessage(''); setUpgradePreview(null);
+    try {
+      const body = new FormData(); body.append('backup', backup);
+      const result: UpgradePreview = await api('/admin/backup-restore/inspect-upgrade/', { method: 'POST', body });
+      setUpgradePreview(result);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Backup compatibility check failed.'); }
+    finally { setBusy(null); }
   }
 
   async function restore(kind: BackupKind) {
     const file = files[kind];
     const expected = RESTORE_CONFIRMATIONS[kind];
     if (!file || busy || confirmationInputs[kind] !== expected) return;
-    const extraWarning = kind === 'media'
+    if (kind === 'upgrade' && (!upgradePreview?.can_create_staging_database || !safetyAcknowledged)) return;
+    const extraWarning = kind === 'upgrade'
+      ? 'This restores an older Full Backup after upgrading it in an isolated temporary PostgreSQL database. Your CURRENT database and media will be REPLACED. Other users must be offline. Keep a fresh Full Backup of the current system; media writes are not transactional.'
+      : kind === 'media'
       ? 'This will overwrite matching media files from the backup but keep newer/unrelated media files.'
       : kind === 'full'
         ? 'This replaces tracker database data and makes the media folder match the backup. Everyone will be signed out.'
@@ -222,11 +243,38 @@ export default function BackupRestorePage() {
     </section>
 
     <div className="card error" style={{marginBottom: 18}}>
-      <strong>Restore is destructive.</strong> Do it when staff are not actively using the tracker. Database and Full Restore replace business data and sign everyone out. Only restore backups created by this tracker version; the backend checks the migration schema before changing data.
+      <strong>Restore is destructive.</strong> Take a fresh Full Backup of the current system before proceeding and ensure all other users are offline. Standard Database and Full Restore require an exactly matching schema; the separate Restore and Upgrade option accepts supported older migration histories. Media changes cannot be automatically rolled back.
     </div>
 
     <RestorePanel {...panelActions} file={files.database} confirmationInput={confirmationInputs.database} fileInputRef={fileInputs.database} kind="database" title="Restore Database" description="Restores users, tables, tickets, customers, history, tracking links, settings, and other durable tracker records. It does not change image/attachment files. Restore the matching media backup separately if needed." />
     <RestorePanel {...panelActions} file={files.media} confirmationInput={confirmationInputs.media} fileInputRef={fileInputs.media} kind="media" title="Restore Media" description="Restores/overwrites files contained in a Media Backup but keeps additional files currently on the media volume. This is safer when the current database may reference newer uploads." />
-    <RestorePanel {...panelActions} file={files.full} confirmationInput={confirmationInputs.full} fileInputRef={fileInputs.full} kind="full" title="Restore Full Backup" description="Restores the database and media from one Full Backup. After all backup media is written successfully, media files not present in that backup are removed so the media folder matches the backup." />
+    <RestorePanel {...panelActions} file={files.full} confirmationInput={confirmationInputs.full} fileInputRef={fileInputs.full} kind="full" title="Restore Full Backup" description="Restores the database and media from one Full Backup with an identical migration history. Additional media files not in the backup will be removed." />
+
+    <section className="panel" style={{marginBottom: 18}}>
+      <div className="panel-header">Restore and Upgrade Older Full Backup</div>
+      <div className="panel-body">
+        <p className="muted">For an older backup only. The server checks migration compatibility, reconstructs the old database in a disposable PostgreSQL database, loads the historical data, applies all newer migrations, and then restores the upgraded data. No live ticket data is replaced until staging succeeds.</p>
+        <p className="muted">Requires permission to create a temporary PostgreSQL database or isolated schema, and enough free disk space. This can take several minutes and should be performed during a maintenance window. Old migrations must still exist in this deployed codebase.</p>
+        <p className="muted">If the compatibility check passes but restoring returns HTTP 400, the backend's specific reason appears in the error message at the top of this page. Check the Django console for a matching <strong>Backup restore rejected</strong> warning. Do not retry until the cause is identified.</p>
+        <div className="field" style={{marginBottom: 12}}>
+          <label htmlFor="upgrade-backup-file">Older Full Backup (.tar.gz)</label>
+          <input ref={fileInputs.upgrade} id="upgrade-backup-file" className="input" type="file" accept=".tar.gz,application/gzip" disabled={busy !== null} onChange={event => chooseFile('upgrade', event)} />
+        </div>
+        <button type="button" className="button secondary" disabled={!files.upgrade || busy !== null} onClick={() => void previewUpgrade()}>{busy === 'upgrade' ? 'Checking…' : 'Check backup compatibility'}</button>
+        {upgradePreview && <div className="card" style={{marginTop: 12, marginBottom: 12}}>
+          <div><strong>{upgradePreview.missing_count} newer migrations</strong> to apply to this backup. Staging isolation: {upgradePreview.staging_isolation_mode}.</div>
+          <p className="muted">Backup created: {upgradePreview.backup_created_at || 'Unknown'}</p>
+          {upgradePreview.missing_migrations.length > 0 && <details><summary>View migrations</summary><div className="muted" style={{whiteSpace:'pre-wrap', marginTop: 8}}>{upgradePreview.missing_migrations.join('\n')}</div></details>}
+          {!upgradePreview.can_create_staging_database && <div className="card error" role="alert" style={{marginTop: 12}}>This PostgreSQL account cannot create either an isolated database or a private schema. The upgrade is disabled; ask IT for a suitable staging environment or permissions.</div>}
+          <p className="muted" style={{marginTop: 12}}>{upgradePreview.safety_warning}</p>
+          <label style={{display:'flex', gap: 8, alignItems:'flex-start', marginTop: 10}}><input type="checkbox" checked={safetyAcknowledged} onChange={event => setSafetyAcknowledged(event.target.checked)} /> I downloaded a fresh Full Backup of the current system, and all other users are offline.</label>
+          <div className="field" style={{marginTop: 12, marginBottom: 12}}>
+            <label htmlFor="upgrade-confirmation">Type <strong>{RESTORE_CONFIRMATIONS.upgrade}</strong> to confirm</label>
+            <input id="upgrade-confirmation" className="input" autoComplete="off" value={confirmationInputs.upgrade} disabled={busy !== null} onChange={event => setConfirmationInputs(current => ({...current, upgrade: event.target.value}))} />
+          </div>
+          <button className="button" type="button" disabled={!upgradePreview.can_create_staging_database || !safetyAcknowledged || busy !== null || confirmationInputs.upgrade !== RESTORE_CONFIRMATIONS.upgrade} onClick={() => void restore('upgrade')}>Restore and Upgrade Full Backup</button>
+        </div>}
+      </div>
+    </section>
   </div>;
 }

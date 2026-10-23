@@ -313,7 +313,7 @@ def _stream_backup_archive_unlocked(kind: str):
 
 def backup_filename(kind: str) -> str:
     stamp = timezone.localtime().strftime('%Y-%m-%d-%H%M%S')
-    return f'edmonton-ticket-tracker-{kind}-backup-{stamp}.tar.gz'
+    return f'als-ticket-tracker-{kind}-backup-{stamp}.tar.gz'
 
 
 def _safe_archive_name(name: str) -> bool:
@@ -357,7 +357,7 @@ def inspect_backup_archive(uploaded, expected_kind: str | None = None) -> Inspec
             pass
 
     if manifest.get('format') != BACKUP_FORMAT or manifest.get('version') != BACKUP_VERSION:
-        raise BackupError('This file is not a supported Edmonton Ticket Tracker backup.')
+        raise BackupError('This file is not a supported ALS Ticket Tracker backup.')
     kind = manifest.get('kind')
     if kind not in {'database', 'media', 'full'}:
         raise BackupError('Backup type is invalid.')
@@ -399,7 +399,7 @@ def _require_matching_schema(manifest: dict):
     current = current_schema_migrations()
     if sorted(backup_migrations) != current or manifest.get('schema_hash') != schema_hash(current):
         raise BackupError(
-            'The backup was created with a different database schema. Deploy the same tracker version used to create the backup before restoring it.'
+            'The backup was created with a different database schema. For an older Full Backup, use the Restore and Upgrade Older Full Backup section. For matching backups, verify the deployed migrations.'
         )
 
 

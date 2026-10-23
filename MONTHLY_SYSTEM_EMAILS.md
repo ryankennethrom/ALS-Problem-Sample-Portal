@@ -9,6 +9,14 @@ A Railway scheduled job prepares **one pending draft per rule per completed cale
 
 **No email is automatically sent.** Staff must open **Send System Emails → Pending System Emails**, review the draft, open their existing email app, send it there, and explicitly click **I sent the email**. Clicking **I didn't send it** keeps it pending. Marking sent records the staff member and timestamp but is not independent confirmation of external delivery.
 
+## Send a manual report right away
+
+In **Manage Tables → Distributor column → CC rules**, save a valid rule with **Send Monthly Reports** enabled, then click **Send Monthly Report Now** underneath that rule. Unsaved rule changes must be saved first so the report uses the same filter and recipients as the database. Admin access is required.
+
+The button prepares a **month-to-date report** (the 1st through the moment of preparation) for the same table and matching Distributor pattern. It navigates straight to the prepared draft in **Send System Emails**. Review its recipients, open it in your email app, and explicitly confirm **I sent the email** after actually sending. This button **does not send email by itself**. Reports can be regenerated later as separate drafts.
+
+Manual reports do not replace or suppress the normal scheduled report for the full month. They are distinguished as **Manual month-to-date** in the queue, and repeated HTTP requests for the same button click are deduplicated by a request UUID. Migration `0087_manual_monthly_distributor_reports.py` adds the distinction and idempotency key to the SystemEmail model.
+
 ## Railway cron deployment (separate service)
 
 1. Add a new Railway service from the same repository and backend directory, using the same `DATABASE_URL`, Django settings/secrets, and `FRONTEND_URL` as the backend.

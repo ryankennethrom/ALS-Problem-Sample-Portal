@@ -4,16 +4,20 @@ from django.conf import settings
 from django.conf.urls.static import static
 from problem_samples.dashboard_views import DashboardView, ActionRequiredEmailPreviewView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
-from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView
+from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView, BackupUpgradeInspectView
 
-from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView)
+from problem_samples.ticket_creation_timing_views import StartTicketCreationTimingView, TicketCreationTimeReportView
+from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView, QueueManualDistributorReportView)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
+    path('api/ticket-creation-timing/start/', StartTicketCreationTimingView.as_view()),
+    path('api/admin/ticket-creation-time/', TicketCreationTimeReportView.as_view()),
     path('api/dashboard/', DashboardView.as_view()),
     path('api/system-emails/', SystemEmailListView.as_view()),
     path('api/system-emails/queue-due/', QueueDueSystemEmailsView.as_view()),
+    path('api/system-emails/queue-now/', QueueManualDistributorReportView.as_view()),
     path('api/system-emails/<uuid:email_id>/', SystemEmailDetailView.as_view()),
     path('api/system-emails/<uuid:email_id>/confirm-sent/', ConfirmSystemEmailView.as_view()),
     path('api/dashboard/action-required-email/', ActionRequiredEmailPreviewView.as_view()),
@@ -26,6 +30,7 @@ urlpatterns = [
     path('api/admin/backup-restore/prepare-download/', BackupPrepareDownloadView.as_view()),
     path('api/admin/backup-restore/download/', BackupDownloadView.as_view()),
     path('api/admin/backup-restore/restore/', BackupRestoreView.as_view()),
+    path('api/admin/backup-restore/inspect-upgrade/', BackupUpgradeInspectView.as_view()),
     path('api/problem-samples/', include('problem_samples.urls')),
     path('api/public/problem-sample-tracking/', include('problem_samples.public_urls')),
     # Legacy API alias for already-deployed frontend builds.

@@ -1226,3 +1226,66 @@ a.result:hover{background:#f7f9fb}
 .outlook-cc-acknowledgement{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid #ba7d16;border-radius:10px;background:#fff8e7;color:#37280a;font-weight:600;cursor:pointer}
 .outlook-cc-acknowledgement input{flex:0 0 auto;margin-top:4px;accent-color:#7b4e00}
 @media(max-width:540px){.outlook-manual-dialog{padding:14px}.outlook-manual-copy{flex-wrap:wrap}.outlook-manual-copy input{flex-basis:100%}}
+
+/* Lab selector and independently scrolling sidebar navigation. */
+.admin-shell .sidebar{
+  display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;
+}
+.admin-shell .sidebar-brand,.admin-shell .sidebar-lab-select,.admin-shell .user-panel{flex:0 0 auto}
+.admin-shell .side-nav{
+  flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto;overflow-x:hidden;
+  align-content:start;overscroll-behavior:contain;scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.40) transparent;
+  padding-bottom:max(24px,env(safe-area-inset-bottom));
+}
+.admin-shell .side-nav::-webkit-scrollbar{display:block;width:7px}
+.admin-shell .side-nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.35);border-radius:12px}
+.admin-shell .side-nav::-webkit-scrollbar-track{background:transparent}
+.sidebar-lab-select{padding:12px 13px 13px;border-bottom:1px solid rgba(255,255,255,.13)}
+.sidebar-lab-select .sidebar-lab-label{
+  color:#c7d4df;display:block;font-size:11px;font-weight:700;
+  letter-spacing:.09em;text-transform:uppercase;margin-bottom:7px;
+}
+.sidebar-lab-control{position:relative;display:flex;align-items:center;border:1px solid rgba(157,207,255,.32);border-radius:9px;background:linear-gradient(130deg,rgba(23,108,169,.38),rgba(14,23,35,.58));}
+.sidebar-lab-control:focus-within{outline:2px solid #80bfff;outline-offset:1px}
+.sidebar-lab-symbol{font-size:16px;margin:0 0 0 11px;pointer-events:none;color:#b5dcff}
+.sidebar-lab-dropdown{
+  color:#fff;background:transparent;border:0;outline:none;appearance:none;min-width:0;
+  font:inherit;font-weight:600;font-size:14px;height:43px;padding:0 32px 0 10px;width:100%;cursor:pointer;
+}
+.sidebar-lab-dropdown option{background:#fff;color:#182631}
+.sidebar-lab-chevron{position:absolute;right:12px;pointer-events:none;color:#b5dcff;font-size:13px}
+.sidebar-collapsed .sidebar-lab-select{padding:9px 5px}
+.sidebar-collapsed .sidebar-lab-label,.sidebar-collapsed .sidebar-lab-symbol,.sidebar-collapsed .sidebar-lab-chevron{display:none}
+.sidebar-collapsed .sidebar-lab-control{border-radius:6px}
+.sidebar-collapsed .sidebar-lab-dropdown{font-size:10px;text-align:center;padding:0 2px;height:38px}
+@media(max-width:900px){
+  .admin-shell .sidebar{overflow:hidden}
+  .admin-shell .sidebar .side-nav{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;max-height:none}
+}
+.lab-management-panel{padding:20px;min-width:0}
+.lab-management-list{display:grid;gap:10px;margin-top:14px}
+.lab-management-item{padding:12px;border:1px solid #dbe2e8;border-radius:9px;background:#fafbfc}
+.lab-management-summary{display:flex;gap:13px;align-items:center;flex-wrap:wrap}
+.lab-management-code{display:inline-flex;align-items:center;justify-content:center;min-width:56px;background:#e8f2ff;color:#0b5ca2;font-size:12px;font-weight:800;padding:7px 9px;border-radius:7px;letter-spacing:.03em}
+.lab-management-details{display:grid;flex:1;min-width:170px;gap:3px;font-size:14px}
+.lab-management-details .muted{font-size:12px;line-height:1.45}
+.lab-management-actions{display:flex;gap:8px;flex-wrap:wrap}
+.lab-management-rename{display:flex;gap:10px;align-items:end;flex-wrap:wrap;padding-top:14px}
+.lab-management-rename label{flex:1 1 220px}
+.lab-management-rename input{margin-top:5px}
+.lab-create-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:end;margin-top:12px}
+.lab-create-form .button{justify-self:start}
+.lab-create-form .input{margin-top:5px}
+@media(max-width:700px){.lab-create-form{grid-template-columns:1fr}.lab-management-summary{align-items:start}.lab-management-actions{width:100%}}
+
+/* Keep Logout visible even with many labs or expanded ticket tables. */
+.sidebar-footer{
+  flex:0 0 auto;padding:8px 9px max(10px,env(safe-area-inset-bottom));
+  border-top:1px solid rgba(255,255,255,.16);background:var(--sidebar);
+}
+.sidebar-collapsed .sidebar-footer{padding-left:8px;padding-right:8px}
+.sidebar-collapsed .sidebar-footer .side-link{justify-content:center;padding:0 10px}
+@media(max-width:900px){
+  .admin-shell .sidebar .sidebar-footer .side-link{padding:0 18px;justify-content:flex-start}
+}

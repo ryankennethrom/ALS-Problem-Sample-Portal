@@ -127,7 +127,7 @@ export default function TerminalTicketCleanupPage() {
   return <div>
     <div className="page-heading-row"><div>
       <div className="eyebrow">Admin</div>
-      <h1 className="page-heading">Delete Old Tickets</h1>
+      <h1 className="page-heading">Delete Old & Finished Tickets</h1>
       <p className="muted">Delete tickets whose Current Workflow is <strong>Disposed</strong>, <strong>Shipped back to client</strong>, or <strong>Back to testing</strong> and whose creation date falls in the selected range.</p>
     </div></div>
 

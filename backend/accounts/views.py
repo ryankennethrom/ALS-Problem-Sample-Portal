@@ -11,7 +11,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .account_utils import derive_unique_username, generate_temporary_password, normalize_als_email, user_has_als_email
-from .models import AppSession, UserProfile
+from .models import AppSession, UserProfile, Lab
+from problem_samples.labs import active_lab
 
 
 def normalize_role(value):
@@ -47,6 +48,9 @@ def user_payload(user):
         'needs_role': not admin and not bool(profile.role),
         'needs_email': not user_has_als_email(user),
         'is_admin': admin,
+        'lab_id': profile.lab_id, 'lab_code': profile.lab.code if profile.lab_id else '',
+        'lab_name': profile.lab.name if profile.lab_id else '',
+        'needs_lab': not bool(profile.lab_id),
     }
 
 
@@ -66,6 +70,10 @@ def get_managed_account(request, user_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    from problem_samples.labs import active_lab
+    selected_lab = active_lab(request)
+    if selected_lab and getattr(getattr(target, 'tracker_profile', None), 'lab_id', None) != selected_lab.pk:
+        return None, Response({'detail': 'Account belongs to another lab.'}, status=403)
     return target, None
 
 
@@ -102,6 +110,8 @@ def account_list_payload(user):
         'role_label': profile.get_role_display() if profile.role else '',
         'is_admin': admin,
         'is_active': user.is_active,
+        'lab_id': profile.lab_id, 'lab_code': profile.lab.code if profile.lab_id else '',
+        'lab_name': profile.lab.name if profile.lab_id else '',
     }
 
 
@@ -128,6 +138,10 @@ def login(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    if not (user.is_superuser or profile.is_admin) and not profile.lab_id:
+        return Response({'detail': 'An administrator must assign your lab before you can sign in.'},
+                        status=status.HTTP_403_FORBIDDEN)
     now = timezone.now()
     token = AppSession.new_token()
     AppSession.objects.create(
@@ -147,12 +161,30 @@ def accounts(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    from problem_samples.labs import active_lab
+    selected_lab = active_lab(request)
     if request.method == 'GET':
-        users = User.objects.all().order_by('first_name', 'last_name', 'username')
+        users = User.objects.filter(tracker_profile__lab=selected_lab) if selected_lab else User.objects.all()
+        users = users.order_by('first_name', 'last_name', 'username')
         return Response([account_list_payload(user) for user in users])
 
+    lab_id = request.data.get('lab_id')
+    lab = Lab.objects.filter(pk=lab_id).first() if str(lab_id or '').isdigit() else None
+    if lab is None:
+        return Response({'detail': 'Select a valid lab for this account.'}, status=400)
+    if selected_lab and selected_lab != lab:
+        return Response({'detail': 'Switch to the account lab before creating staff.'}, status=403)
     first_name = str(request.data.get('first_name') or '').strip()
     last_name = str(request.data.get('last_name') or '').strip()
+    role = normalize_role(request.data.get('role'))
+    if not role:
+        return Response({'detail': 'Choose a valid role (Lab or Customer Service).'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        email = normalize_als_email(request.data.get('email'))
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    if User.objects.filter(email__iexact=email).exists():
+        return Response({'detail': 'That ALS email is already assigned to another staff account.'}, status=status.HTTP_400_BAD_REQUEST)
     if not first_name or not last_name:
         return Response(
             {'detail': 'First Name and Last Name are required.'},
@@ -173,9 +205,9 @@ def accounts(request):
                 password=generated_password,
                 first_name=first_name,
                 last_name=last_name,
-                email='',
+                email=email,
             )
-            UserProfile.objects.get_or_create(user=user)
+            UserProfile.objects.get_or_create(user=user, defaults={'role': role, 'lab': lab})
     except ValueError as exc:
         return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -244,62 +276,10 @@ def me(request):
     profile, _ = UserProfile.objects.get_or_create(user=user)
 
     if request.method == 'PATCH':
-        changed = False
-        if 'email' in request.data:
-            try:
-                email = normalize_als_email(request.data.get('email'))
-            except ValueError as exc:
-                return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-            if User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
-                return Response(
-                    {'detail': 'That ALS email is already assigned to another staff account.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if user.email != email:
-                old_email = str(user.email or '').strip().lower()
-                user.email = email
-                user.save(update_fields=['email'])
-                changed = True
-                # Keep configured Group defaults pointing at this user if an
-                # administrator had stored the previous email as the default.
-                if old_email:
-                    from problem_samples.models import ProblemColumn
-                    for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP):
-                        if str(column.default_value or '').strip().lower() == old_email:
-                            column.default_value = email
-                            column.save(update_fields=['default_value', 'modified_at'])
-
-        if 'role' in request.data:
-            role = normalize_role(request.data.get('role'))
-            if role not in {UserProfile.ROLE_LAB_TECHNICIAN, UserProfile.ROLE_CUSTOMER_SERVICE}:
-                return Response(
-                    {'detail': 'Role must be Lab or Customer Service.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if profile.role != role:
-                profile.role = role
-                profile.save(update_fields=['role', 'modified_at'])
-                changed = True
-
-            # A Group-column default must always point at a user who still belongs
-            # to that column's configured group. Keep historical row assignments,
-            # but clear stale defaults after a user changes roles.
-            from problem_samples.models import ProblemColumn
-            identifiers = {
-                str(user.email or '').strip().lower(),
-                str(user.username or '').strip().lower(),
-            }
-            identifiers.discard('')
-            for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP).exclude(group_role=role):
-                if str(column.default_value or '').strip().lower() in identifiers:
-                    column.default_value = None
-                    column.save(update_fields=['default_value', 'modified_at'])
-
-        if not changed and not any(key in request.data for key in ('email', 'role')):
-            return Response(
-                {'detail': 'Provide an ALS email or workflow role to update.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        return Response(
+            {'detail': 'Only administrators can change account email and workflow role in Staff Accounts.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     return Response(user_payload(user))
 
@@ -314,7 +294,7 @@ def users_by_role(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     profiles = (
-        UserProfile.objects.filter(role=role, user__is_active=True)
+        UserProfile.objects.filter(role=role, lab=active_lab(request, require_specific=True), user__is_active=True)
         .select_related('user')
         .order_by('user__first_name', 'user__last_name', 'user__username')
     )
@@ -374,6 +354,77 @@ def account_admin_status(request, user_id):
     # interface cannot continue to look privileged after the role change.
     if not requested_admin:
         AppSession.objects.filter(user=target, revoked_at__isnull=True).update(revoked_at=timezone.now())
+
+    return Response(account_list_payload(target))
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def account_profile(request, user_id):
+    """Only administrators can assign account emails and workflow roles."""
+    if not is_tracker_admin(request.user):
+        return Response({'detail': 'Administrator access is required.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if 'role' not in request.data or 'email' not in request.data:
+        return Response({'detail': 'Both ALS email and workflow role are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    role = normalize_role(request.data.get('role'))
+    if not role:
+        return Response({'detail': 'Role must be Lab or Customer Service.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        email = normalize_als_email(request.data.get('email'))
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    lab_id = request.data.get('lab_id')
+    lab = Lab.objects.filter(pk=lab_id).first() if str(lab_id or '').isdigit() else None
+    if lab is None:
+        return Response({'detail': 'Select a valid lab.'}, status=400)
+    from problem_samples.labs import active_lab
+    selected_lab = active_lab(request)
+    if selected_lab and selected_lab != lab:
+        return Response({'detail': 'Switch to the target lab to edit its accounts.'}, status=403)
+    with transaction.atomic():
+        try:
+            target = User.objects.select_for_update().get(pk=user_id)
+        except User.DoesNotExist:
+            return Response({'detail': 'User account not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if User.objects.filter(email__iexact=email).exclude(pk=target.pk).exists():
+            return Response(
+                {'detail': 'That ALS email is already assigned to another staff account.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile, _ = UserProfile.objects.get_or_create(user=target)
+        old_email = str(target.email or '').strip().lower()
+        old_role = profile.role
+        if selected_lab and profile.lab_id and profile.lab_id != selected_lab.pk:
+            return Response({'detail': 'Account belongs to a different lab.'}, status=403)
+        if profile.lab_id != lab.pk:
+            profile.lab = lab
+            profile.save(update_fields=['lab', 'modified_at'])
+        if target.email != email:
+            target.email = email
+            target.save(update_fields=['email'])
+        if profile.role != role:
+            profile.role = role
+            profile.save(update_fields=['role', 'modified_at'])
+
+        # Group defaults reference account identifiers; preserve valid email
+        # defaults after a rename and clear defaults that no longer match the role.
+        from problem_samples.models import ProblemColumn
+        identifiers = {str(target.username or '').strip().lower(), old_email, email}
+        identifiers.discard('')
+        if old_email and old_email != email:
+            for col in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP):
+                if str(col.default_value or '').strip().lower() == old_email:
+                    col.default_value = email
+                    col.save(update_fields=['default_value', 'modified_at'])
+        if old_role != role:
+            for col in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_GROUP).exclude(group_role=role):
+                if str(col.default_value or '').strip().lower() in identifiers:
+                    col.default_value = None
+                    col.save(update_fields=['default_value', 'modified_at'])
 
     return Response(account_list_payload(target))
 

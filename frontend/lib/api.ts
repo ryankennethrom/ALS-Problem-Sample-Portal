@@ -3,8 +3,10 @@ import { toastError, toastSuccess } from '@/lib/toast';
 const API = '/backend-api';
 
 export function getToken(){ if(typeof window==='undefined') return null; return sessionStorage.getItem('pst_token'); }
-export function setToken(token:string){ sessionStorage.setItem('pst_token',token); }
-export function clearToken(){ sessionStorage.removeItem('pst_token'); }
+export function setToken(token:string){ sessionStorage.setItem('pst_token',token); sessionStorage.removeItem('pst_active_lab'); }
+export function clearToken(){ sessionStorage.removeItem('pst_token'); sessionStorage.removeItem('pst_active_lab'); }
+export function activeLabCode(){ return typeof window==='undefined' ? '' : (sessionStorage.getItem('pst_active_lab') || ''); }
+export function setActiveLabCode(code:string){ sessionStorage.setItem('pst_active_lab', code); }
 
 type ApiInit = RequestInit & {
   successMessage?: string;
@@ -21,6 +23,7 @@ export async function api(path:string, init:ApiInit={}){
   const headers = new Headers(requestInit.headers || {});
   if(!(requestInit.body instanceof FormData)) headers.set('Content-Type','application/json');
   const token=getToken(); if(token && path !== '/auth/login/') headers.set('Authorization',`Bearer ${token}`);
+  if(token && activeLabCode()) headers.set('X-Active-Lab', activeLabCode());
 
   let res: Response;
   try {
@@ -52,6 +55,7 @@ export async function apiBlob(path:string, init:ApiInit={}){
   const headers = new Headers(requestInit.headers || {});
   if(!(requestInit.body instanceof FormData)) headers.set('Content-Type','application/json');
   const token=getToken(); if(token && path !== '/auth/login/') headers.set('Authorization',`Bearer ${token}`);
+  if(token && activeLabCode()) headers.set('X-Active-Lab', activeLabCode());
 
   let res: Response;
   try {

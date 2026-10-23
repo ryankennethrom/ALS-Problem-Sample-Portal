@@ -16,8 +16,9 @@ from .email_templates import (
     DEFAULT_CUSTOMER_NOTIFICATION_SUBJECT,
     REQUIRED_CUSTOMER_NOTIFICATION_PLACEHOLDERS,
 )
-from .models import EmailTemplate
-from .notification_recipient import get_edmonton_recipient
+from .models import EmailTemplate, LabEmailTemplate
+from .labs import active_lab
+from .notification_recipient import get_edmonton_recipient, addresses_for_lab
 
 PLACEHOLDER_RE = re.compile(r'{{\s*([a-zA-Z0-9_]+)\s*}}')
 
@@ -31,7 +32,7 @@ def _is_admin(user):
     return bool(profile.is_admin)
 
 
-def _get_customer_template():
+def _get_customer_template(lab=None):
     template, _ = EmailTemplate.objects.get_or_create(
         key=CUSTOMER_NOTIFICATION_KEY,
         defaults={
@@ -40,13 +41,18 @@ def _get_customer_template():
             'body_template': DEFAULT_CUSTOMER_NOTIFICATION_BODY,
         },
     )
-    return template
+    if lab is None:
+        return template
+    current, _ = LabEmailTemplate.objects.get_or_create(
+        lab=lab, key=CUSTOMER_NOTIFICATION_KEY,
+        defaults={'subject_template': template.subject_template, 'body_template': template.body_template})
+    return current
 
 
 def _payload(template):
     return {
         'key': template.key,
-        'name': template.name,
+        'name': getattr(template, 'name', CUSTOMER_NOTIFICATION_NAME),
         'subject_template': template.subject_template,
         'body_template': template.body_template,
         'allowed_placeholders': ALLOWED_CUSTOMER_NOTIFICATION_PLACEHOLDERS,
@@ -61,7 +67,8 @@ def _payload(template):
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 def customer_notification_template(request):
-    template = _get_customer_template()
+    lab = active_lab(request, require_specific=True)
+    template = _get_customer_template(lab)
 
     # Every authenticated staff user can read the active template because the
     # browser uses it to compose Outlook/mailto customer notifications. Only
@@ -115,24 +122,22 @@ def customer_notification_template(request):
 @api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 def edmonton_recipient(request):
+    """Backward-compatible endpoint; notification config is now scoped by lab."""
+    from accounts.models import UserProfile
+    lab = active_lab(request, require_specific=True)
     if request.method == 'PUT':
         if not _is_admin(request.user):
-            return Response({'detail': 'Administrator access is required.'}, status=status.HTTP_403_FORBIDDEN)
-        email = request.data.get('email')
-        if not isinstance(email, str) or not email.strip() or len(email.strip()) > 254:
-            return Response({'email': 'Enter one valid email address.'}, status=status.HTTP_400_BAD_REQUEST)
-        email = email.strip()
-        try:
-            validate_email(email)
-        except DjangoValidationError:
-            return Response({'email': 'Enter one valid email address.'}, status=status.HTTP_400_BAD_REQUEST)
-        recipient = get_edmonton_recipient()
-        recipient.email = email
-        recipient.updated_by = request.user
-        recipient.save(update_fields=['email', 'updated_by', 'updated_at'])
-    else:
-        recipient = get_edmonton_recipient()
-    return Response({
-        'email': recipient.email, 'updated_at': recipient.updated_at,
-        'updated_by': (recipient.updated_by.get_full_name().strip() or recipient.updated_by.username) if recipient.updated_by else '',
-    })
+            return Response({'detail': 'Administrator access is required.'}, status=403)
+        raw = str(request.data.get('email') or '')
+        emails = [email.strip() for email in re.split(r'[,;\n]', raw) if email.strip()]
+        if not emails:
+            return Response({'detail': 'Provide at least one Lab notification address.'}, status=400)
+        for email in emails:
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                return Response({'detail': f'Invalid email address: {email}'}, status=400)
+        lab.lab_notification_mode = 'addresses'
+        lab.lab_notification_emails = emails
+        lab.save(update_fields=['lab_notification_mode', 'lab_notification_emails'])
+    return Response({'email': ', '.join(addresses_for_lab(lab, UserProfile.ROLE_LAB_TECHNICIAN))})
