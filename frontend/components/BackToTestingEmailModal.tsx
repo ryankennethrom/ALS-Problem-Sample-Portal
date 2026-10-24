@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { api } from '@/lib/api';
 import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
-import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 
 export type TestingCustomerMessage = {
   message: string;
@@ -37,7 +36,6 @@ type Props = {
 };
 
 export default function BackToTestingEmailModal({ details, batchSamples, showRackReminder = true, onConfirm, onCancel, busy, error }: Props) {
-  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [recipient, setRecipient] = useState('');
   const [recipientError, setRecipientError] = useState('');
   const [additional, setAdditional] = useState('');
@@ -135,10 +133,9 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
         {!notSentReason.trim() && <span className="error" role="alert">A reason is required.</span>}
       </div>}
       <div className="email-confirm-actions">
-        {!showNotSentReason && microsoftChecked && microsoftConnected && recipient && <MicrosoftSendButton content={{to:[recipient],cc:[],subject,body}} onAccepted={() => onConfirm(true, body, recipient)} disabled={busy || body.length > 10000}/>}
-        {!showNotSentReason && microsoftChecked && !microsoftConnected && seconds === null && <button type="button" className="button" onClick={proceed} disabled={busy || !recipient || body.length > 10000}>Proceed</button>}
-        {!microsoftConnected && !showNotSentReason && seconds === 0 && <button type="button" className="button" onClick={() => onConfirm(true, body, recipient)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
-        {!showNotSentReason && (microsoftConnected || seconds === 0) && <button type="button" className="button secondary" onClick={() => setShowNotSentReason(true)} disabled={busy}>{"I didn't send the email"}</button>}
+        {!showNotSentReason && seconds === null && <button type="button" className="button" onClick={proceed} disabled={busy || !recipient || body.length > 10000}>Proceed</button>}
+        {!showNotSentReason && seconds === 0 && <button type="button" className="button" onClick={() => onConfirm(true, body, recipient)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
+        {!showNotSentReason && seconds === 0 && <button type="button" className="button secondary" onClick={() => setShowNotSentReason(true)} disabled={busy}>{"I didn't send the email"}</button>}
         {showNotSentReason && <button type="button" className="button" onClick={() => onConfirm(false, body, recipient, notSentReason.trim())} disabled={busy || !notSentReason.trim()}>{busy ? 'Saving…' : 'Confirm email not sent'}</button>}
         {showNotSentReason && <button type="button" className="button secondary" onClick={() => setShowNotSentReason(false)} disabled={busy}>Back</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>

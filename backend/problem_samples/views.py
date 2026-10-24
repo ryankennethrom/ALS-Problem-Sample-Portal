@@ -889,8 +889,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 )
             problem.transition_to_disposal_if_due(now=timezone.now())
             if sent is True:
-                send_method = 'microsoft_graph' if request.data.get('graph_send_key') else 'outlook_web'
-                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, send_method, prepared_token=prepared.tracking_token)
+                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'outlook_web', prepared_token=prepared.tracking_token)
                 if recorded.status_code >= 400:
                     raise DRFValidationError(recorded.data)
             else:
@@ -1833,17 +1832,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
 
     def _record_customer_notification_sent(self, request, problem, supplied_token, delivery_method, prepared_token=None):
-        if delivery_method == 'microsoft_graph':
-            from microsoft_graph.models import MicrosoftMailSend
-            try:
-                graph_key = uuid.UUID(str(request.data.get('graph_send_key')))
-            except (ValueError, TypeError, AttributeError):
-                return Response({'detail': 'A valid Microsoft send confirmation is required.'}, status=400)
-            if not MicrosoftMailSend.objects.filter(
-                user=request.user, idempotency_key=graph_key, status='accepted',
-            ).exists():
-                return Response({'detail': 'Microsoft has not accepted this email for sending.'}, status=400)
-        if delivery_method not in {'mailto', 'eml', 'outlook_web', 'microsoft_graph'}:
+        if delivery_method not in {'mailto', 'eml', 'outlook_web'}:
             delivery_method = ''
 
         # A new ticket tracking link does not exist in the database until this
@@ -1946,7 +1935,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             summary='Sent tracking link to customer by email',
             details={
                 'delivery_method': delivery_method,
-                'confirmation': ('Microsoft Graph accepted the email for sending.' if delivery_method == 'microsoft_graph' else 'User confirmed the customer notification email was sent.'),
+                'confirmation': 'User confirmed the customer notification email was sent.',
                 'first_notification': first_notification,
                 'starts_pt_clock': automatic_disposal_activated,
                 'automatic_disposal_activated': automatic_disposal_activated,
@@ -3285,12 +3274,12 @@ class ProblemAcknowledgementView(APIView):
                         'pickup': 'Pick up in person',
                         'shipping_quote': 'Receive a quote for the shipping charges',
                     }.get(method)
-                    return f'Take back sample(s) — {suffix}' if suffix else 'Take back sample(s)'
+                    return f'I want these sample(s) back — {suffix}' if suffix else 'I want these sample(s) back'
                 return str(details['customer_action_label'])
 
         return {
             CUSTOMER_ACTION_DISPOSE: 'Dispose Sample(s)',
-            CUSTOMER_ACTION_SHIP_BACK: 'Take back sample(s)',
+            CUSTOMER_ACTION_SHIP_BACK: 'I want these sample(s) back',
             CUSTOMER_ACTION_HOLD: 'Hold sample',
             CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }.get(action, '')
@@ -3384,7 +3373,7 @@ class ProblemAcknowledgementView(APIView):
                 **public_files,
                 'visible_until': visible_until,
                 'customer_action': problem.customer_acknowledgement_action or CUSTOMER_ACTION_SHIP_BACK,
-                'customer_action_label': self._customer_action_label(problem) or 'Take back sample(s)',
+                'customer_action_label': self._customer_action_label(problem) or 'I want these sample(s) back',
                 'can_choose_action': False,
             }
 
@@ -3500,7 +3489,7 @@ class ProblemAcknowledgementView(APIView):
             elif courier_account_number:
                 return Response({'detail': 'A courier account number is only allowed with the courier account option.'}, status=status.HTTP_400_BAD_REQUEST)
         elif shipping_method or courier_account_number:
-            return Response({'detail': 'Return details can only be sent with Take back sample(s).'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Return details can only be sent with I want these sample(s) back.'}, status=status.HTTP_400_BAD_REQUEST)
 
         requested_information = str(request.data.get('requested_information') or '').strip()
         customer_image_uploads = list(request.FILES.getlist('images'))
@@ -3669,7 +3658,7 @@ class ProblemAcknowledgementView(APIView):
 
         label = {
             CUSTOMER_ACTION_DISPOSE: 'Permit immediate disposal',
-            CUSTOMER_ACTION_SHIP_BACK: 'Take back sample(s)',
+            CUSTOMER_ACTION_SHIP_BACK: 'I want these sample(s) back',
             CUSTOMER_ACTION_REQUESTED_INFORMATION: 'Message us about the issue',
         }[customer_action]
         details = {
@@ -3683,7 +3672,7 @@ class ProblemAcknowledgementView(APIView):
             details['customer_shipping_method_label'] = shipping_method_labels[shipping_method]
             if shipping_method == 'courier_account':
                 details['customer_courier_account_number'] = courier_account_number
-            label = f'Take back sample(s) — {shipping_method_labels[shipping_method]}'
+            label = f'I want these sample(s) back — {shipping_method_labels[shipping_method]}'
             details['customer_action_label'] = label
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:
             details['customer_requested_information'] = requested_information

@@ -9,7 +9,6 @@ import DynamicField from '@/components/DynamicField';
 import ReopenContainerModal from '@/components/ReopenContainerModal';
 import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, findDistributorCCRecipients, invokeCustomerEmail, mailtoForCustomerEmail, prepareCustomerEmail } from '@/lib/customerEmail';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
-import { microsoftMailStatus } from '@/lib/microsoftMail';
 import GeneralCustomerEmailModal from '@/components/GeneralCustomerEmailModal';
 import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackToTestingEmailModal';
 import { changeReasonHeaders } from '@/lib/changeReason';
@@ -268,12 +267,9 @@ export default function Detail() {
       // Submit immediately attempts to open the generated message in the staff
       // member's Outlook webmail. The preview remains available
       // so they can retry if the browser/OS blocks the first launch.
-      // Connected Microsoft users send from the confirmation modal; no mailto draft.
-      if (!(await microsoftMailStatus().catch(() => ({ connected: false }))).connected) {
-        invokeCustomerEmail(mailtoForCustomerEmail({
-          to: preview.email.to, cc: preview.email.cc || [], subject: preview.email.subject, body: preview.email.body,
-        }));
-      }
+      invokeCustomerEmail(mailtoForCustomerEmail({
+        to: preview.email.to, cc: preview.email.cc || [], subject: preview.email.subject, body: preview.email.body,
+      }));
       setHistoryReplyEmailDraft({
         historyId: historyReplyTarget.id,
         reply,
@@ -561,7 +557,7 @@ export default function Detail() {
     } finally { setRecordingEmailSent(false); }
   }
 
-  async function confirmEmailSent(graphSendKey = '') {
+  async function confirmEmailSent() {
     if (!pendingEmailLaunch || recordingEmailSent) return;
     setError('');
     setRecordingEmailSent(true);
@@ -569,8 +565,7 @@ export default function Detail() {
       await api(`/problem-samples/${id}/customer-notification-sent/`, {
         method:'POST',
         body:JSON.stringify({
-          delivery_method: graphSendKey ? 'microsoft_graph' : 'outlook_web',
-          ...(graphSendKey ? {graph_send_key: graphSendKey} : {}),
+          delivery_method: 'outlook_web',
           tracking_token: pendingEmailLaunch.trackingToken,
         }),
         successMessage:'Tracking link sent. The automatic-disposal countdown has started when applicable.',

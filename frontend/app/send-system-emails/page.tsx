@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import styles from './systemEmails.module.css';
@@ -30,7 +29,6 @@ export default function SendSystemEmailsPage() {
   const [emails, setEmails] = useState<SystemEmail[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [selected, setSelected] = useState<SystemEmail | null>(null);
-  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [opened, setOpened] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -92,21 +90,6 @@ export default function SendSystemEmailsPage() {
     } finally { setBusy(false); }
   }
 
-  async function confirmSentAfterMicrosoft(emailId: string) {
-    // Only mark the report sent after Microsoft Graph returned 202 Accepted.
-    setBusy(true); setError('');
-    try {
-      await api(`/system-emails/${emailId}/confirm-sent/`, {
-        method: 'POST', body: JSON.stringify({confirmation: 'sent'}),
-      });
-      setSelected(null); setOpened(false);
-      setSuccess('Email Sent — Microsoft accepted the message. Delivery is not guaranteed.');
-      await load();
-    } catch (e) {
-      setError('Microsoft accepted the message, but report confirmation failed. Do not send it again; ask an administrator to reconcile the pending record. ' + (e instanceof Error ? e.message : ''));
-    } finally { setBusy(false); }
-  }
-
   async function queueDue() {
     setBusy(true); setError(''); setSuccess('');
     try {
@@ -155,17 +138,14 @@ export default function SendSystemEmailsPage() {
           <h2 id="system-email-dialog-title">Review Distributor monthly report</h2>
           <button type="button" className="button secondary" onClick={() => {setSelected(null);setOpened(false);}}>Close</button>
         </div>
-        <p className={styles.help}>{microsoftConnected ? 'When connected, Send Email submits directly through Microsoft 365. Confirmation follows Microsoft acceptance, not final delivery.' : 'Opening an email draft does not send it. Only confirm below after actually sending it in Outlook webmail.'}</p>
+        <p className={styles.help}>Opening an email draft does not send it. Only confirm below after actually sending it in Outlook webmail.</p>
         <div className={styles.field}><label htmlFor="system-email-to">To</label><input id="system-email-to" className="input" readOnly value={selected.to_emails?.join(', ') || ''}/></div>
         <div className={styles.field}><label htmlFor="system-email-subject">Subject</label><input id="system-email-subject" className="input" readOnly value={selected.subject}/></div>
         <div className={styles.field}><label htmlFor="system-email-body">Message</label><textarea id="system-email-body" rows={14} className="textarea" readOnly value={selected.body || ''}/></div>
-        {opened && <p className={styles.success} role="status">{microsoftConnected ? 'Email Sent — accepted by Microsoft 365.' : 'Draft opened in Outlook webmail. Did you actually send it?'}</p>}
+        {opened && <p className={styles.success} role="status">Draft opened in Outlook webmail. Did you actually send it?</p>}
         <div className={styles.actions}>
-          {!opened ? (microsoftChecked && microsoftConnected ? <MicrosoftSendButton
-            content={{to:selected.to_emails || [], cc:[], subject:selected.subject, body:selected.body || ''}}
-            onAccepted={() => { setOpened(true); void confirmSentAfterMicrosoft(selected.id); }} disabled={busy} /> :
-            <button type="button" className="button" onClick={openMailApp}>Open Outlook webmail to send</button>) : <>
-            {!microsoftConnected && <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>}
+          {!opened ? <button type="button" className="button" onClick={openMailApp}>Open Outlook webmail to send</button> : <>
+            <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>
             <button type="button" className="button secondary" disabled={busy} onClick={() => setOpened(false)}>I didn’t send it</button>
           </>}
           <button type="button" className="button secondary" onClick={() => {setSelected(null);setOpened(false);}}>Cancel</button>

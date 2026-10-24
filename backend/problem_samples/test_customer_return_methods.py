@@ -52,7 +52,8 @@ class CustomerReturnMethodTests(TestCase):
         self.assertEqual(history.details['customer_shipping_method'], 'courier_account')
         self.assertEqual(history.details['customer_courier_account_number'], 'AB-123456')
         self.assertIn('courier account', history.summary.lower())
-        self.assertIn('Courier account', result.data['customer_action_label'])
+        self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Provide a courier account number')
+        self.assertEqual(history.details['customer_action_label'], result.data['customer_action_label'])
 
     def test_pickup_queues_shipping_and_records_method(self):
         result = self.respond(shipping_method='pickup')
@@ -62,7 +63,7 @@ class CustomerReturnMethodTests(TestCase):
         history = self.latest_selection()
         self.assertEqual(history.details['customer_shipping_method'], 'pickup')
         self.assertNotIn('customer_courier_account_number', history.details)
-        self.assertIn('Pick up in person', result.data['customer_action_label'])
+        self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Pick up in person')
 
     def test_quote_returns_to_customer_service_follow_up(self):
         first = self.respond(shipping_method='pickup')
@@ -75,7 +76,7 @@ class CustomerReturnMethodTests(TestCase):
         history = self.latest_selection()
         self.assertEqual(history.details['customer_shipping_method'], 'shipping_quote')
         self.assertIn('shipping charges', history.summary.lower())
-        self.assertIn('quote', result.data['customer_action_label'])
+        self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Receive a quote for the shipping charges')
         self.assertTrue(result.data['can_choose_action'])
         self.assertEqual(self.client.get(self.url).data['customer_action_label'], result.data['customer_action_label'])
 
@@ -118,4 +119,4 @@ class CustomerReturnMethodTests(TestCase):
         response = self.client.get(self.url)
         # Existing records are still readable without needing a method set retroactively.
         # This is a legacy response label change, not a data rewrite.
-        self.assertEqual(response.data['customer_action_label'], 'Take back sample(s)')
+        self.assertEqual(response.data['customer_action_label'], 'I want these sample(s) back')

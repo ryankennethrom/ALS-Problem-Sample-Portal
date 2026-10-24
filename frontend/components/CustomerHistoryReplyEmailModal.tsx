@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
-import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 
 export type CustomerHistoryReplyEmail = {
   to: string[];
@@ -28,7 +27,6 @@ export default function CustomerHistoryReplyEmailModal({
   error?: string;
   launchedAt?: number;
 }) {
-  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [opened, setOpened] = useState(Boolean(launchedAt));
   const [seconds, setSeconds] = useState(launchedAt ? 5 : 0);
   const countdownEndsAt = useRef(launchedAt ? launchedAt + 5000 : 0);
@@ -66,8 +64,8 @@ export default function CustomerHistoryReplyEmailModal({
       {error && <p className="error" role="alert">{error}</p>}
       {opened && <p className="customer-email-send-prompt" role="status">Send this email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
       <div className="email-confirm-actions">
-        {microsoftChecked && (microsoftConnected ? <MicrosoftSendButton content={{to:email.to, cc:email.cc || [],subject:email.subject,body:email.body}} onAccepted={onSent} disabled={busy}/> : <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email draft again' : 'Open email draft'}</button>)}
-        {!microsoftConnected && opened && seconds === 0 && <button type="button" className="button" onClick={onSent} disabled={busy}>{busy ? 'Saving…' : 'I sent this email — Save Reply'}</button>}
+        <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email draft again' : 'Open email draft'}</button>
+        {opened && seconds === 0 && <button type="button" className="button" onClick={onSent} disabled={busy}>{busy ? 'Saving…' : 'I sent this email — Save Reply'}</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </div>

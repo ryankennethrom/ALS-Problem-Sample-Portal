@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import styles from './actionRequiredEmail.module.css';
 
@@ -30,7 +29,6 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [opened, setOpened] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
@@ -174,9 +172,9 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
           <label className={styles.label} htmlFor="action-update-body">Message</label>
           <textarea id="action-update-body" className="textarea" rows={13} value={draft.body} readOnly />
         </div>
-        {opened && <p className={styles.success} role="status">{microsoftConnected ? 'Email Sent: Microsoft accepted the Action Required update.' : 'Your mail app was opened with this draft. Please send it there to finish.'}</p>}
+        {opened && <p className={styles.success} role="status">Your mail app was opened with this draft. Please send it there to finish.</p>}
         <div className={styles.actions}>
-          {microsoftChecked && (microsoftConnected ? <MicrosoftSendButton content={{to:draft.recipients,cc:[],subject:draft.subject,body:draft.body}} onAccepted={() => setOpened(true)}/> : <button type="button" className="button" onClick={openEmail}>{opened ? 'Open email draft again' : 'Open email draft to send'}</button>)}
+          <button type="button" className="button" onClick={openEmail}>{opened ? 'Open email draft again' : 'Open email draft to send'}</button>
           <button type="button" className="button secondary" onClick={() => { setDraft(null); setOpened(false); }}>Edit recipients or message</button>
           <button type="button" className="button secondary" onClick={onClose}>Close</button>
         </div>

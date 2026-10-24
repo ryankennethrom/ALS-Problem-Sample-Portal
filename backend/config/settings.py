@@ -19,7 +19,7 @@ if DEBUG and '*' not in ALLOWED_HOSTS:
 INSTALLED_APPS = [
     'django.contrib.admin','django.contrib.auth','django.contrib.contenttypes',
     'django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles',
-    'corsheaders','rest_framework','accounts','problem_samples','customers','microsoft_graph',
+    'corsheaders','rest_framework','accounts','problem_samples','customers',
 ]
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
@@ -91,9 +91,3 @@ PUBLIC_TRACKING_WRITE_LIMIT_PER_HOUR = int(os.getenv('PUBLIC_TRACKING_WRITE_LIMI
 
 SESSION_EXPIRES_HOURS=int(os.getenv('SESSION_EXPIRES_HOURS','12'))
 FRONTEND_URL=os.getenv('FRONTEND_URL','http://localhost:3000')
-
-# Optional Microsoft 365 delegated mail integration (configured by ALS IT).
-MS_GRAPH_TENANT_ID = os.getenv('MS_GRAPH_TENANT_ID', '').strip()
-MS_GRAPH_CLIENT_ID = os.getenv('MS_GRAPH_CLIENT_ID', '').strip()
-MS_GRAPH_CLIENT_SECRET = os.getenv('MS_GRAPH_CLIENT_SECRET', '').strip()
-MS_GRAPH_FERNET_KEY = os.getenv('MS_GRAPH_FERNET_KEY', '').strip()

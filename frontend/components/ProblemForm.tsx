@@ -207,7 +207,7 @@ export default function ProblemForm() {
     }
   }
 
-  async function finalizeCreation(sent: boolean, notSentReason = '', graphSendKey = '') {
+  async function finalizeCreation(sent: boolean, notSentReason = '') {
     if (!pendingCreation || saving) return;
     setSaving(true);
     setError('');
@@ -216,7 +216,6 @@ export default function ProblemForm() {
       payload.append('creation_timing_id', await ensureCreationTimer());
       payload.append('id', pendingCreation.preparedId);
       payload.append('sent', String(sent));
-      if (sent && graphSendKey) payload.append('graph_send_key', graphSendKey);
       if (!sent) payload.append('not_sent_reason', notSentReason || 'User chose not to send the tracking-link email during ticket creation.');
       if (imageMode !== 'hidden') imageFiles.forEach(file => payload.append('images', file));
       if (attachmentMode !== 'hidden') attachmentFiles.forEach(file => payload.append('attachments', file));
@@ -363,7 +362,7 @@ export default function ProblemForm() {
   />}
   {pendingCreation && <CustomerEmailModal
     content={pendingCreation.emailContent}
-    onSent={(graphKey) => finalizeCreation(true, '', graphKey)}
+    onSent={() => finalizeCreation(true)}
     onDidNotSend={(reason) => finalizeCreation(false, reason)}
     onCancel={cancelPendingCreation}
     busy={saving}

@@ -76,7 +76,7 @@ function PendingChatPhoto({ file }: { file: File }) {
 
 const actionLabels: Record<Exclude<CustomerAction, ''>, string> = {
   dispose: 'Dispose Sample(s)',
-  ship_back: 'Take back sample(s)',
+  ship_back: 'I want these sample(s) back',
   hold: 'Hold sample',
   requested_info: 'Message us about the issue',
 };
@@ -281,7 +281,7 @@ export default function ProblemSampleTrackingPage() {
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about the issue</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => {
               setError(''); setShippingMethod(''); setCourierAccountNumber(''); setReturnDialogOpen(true);
-            }}>Take back sample(s)</button>
+            }}>I want these sample(s) back</button>
           </div>
         </div>}
         {data.state === 'acknowledged' && !data.can_choose_action && data.customer_action && <div className="public-ack-selection">
@@ -298,7 +298,7 @@ export default function ProblemSampleTrackingPage() {
           if (event.target === event.currentTarget && !busy) setReturnDialogOpen(false);
         }}>
           <section className="public-requested-info-dialog public-return-dialog" role="dialog" aria-modal="true" aria-labelledby="return-samples-title">
-            <h2 id="return-samples-title">Take back sample(s)</h2>
+            <h2 id="return-samples-title">I want these sample(s) back</h2>
             <p>We do not charge a client handling fee. However, shipping charges still apply.</p>
             <p><strong>Please let us know which option you prefer:</strong></p>
             <div className="public-return-options" role="radiogroup" aria-label="Return method">

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { microsoftMailStatus, type MicrosoftMailStatus } from '@/lib/microsoftMail';
 
 type Role = 'lab_technician' | 'customer_service';
 type User = {
@@ -28,30 +27,6 @@ export default function AccountPage() {
   const [passwordError, setPasswordError] = useState('');
   const [passwordSaved, setPasswordSaved] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
-  const [microsoft, setMicrosoft] = useState<MicrosoftMailStatus | null>(null);
-  const [microsoftBusy, setMicrosoftBusy] = useState(false);
-  const [microsoftError, setMicrosoftError] = useState('');
-
-  useEffect(() => { microsoftMailStatus().then(setMicrosoft).catch(() => setMicrosoft(null)); }, []);
-
-  async function connectMicrosoft() {
-    setMicrosoftBusy(true); setMicrosoftError('');
-    try {
-      const result = await api('/auth/microsoft/start/', { method: 'POST' });
-      window.location.assign(result.authorization_url);
-    } catch (error) {
-      setMicrosoftError(error instanceof Error ? error.message : 'Unable to start Microsoft sign-in');
-      setMicrosoftBusy(false);
-    }
-  }
-  async function disconnectMicrosoft() {
-    setMicrosoftBusy(true); setMicrosoftError('');
-    try {
-      await api('/auth/microsoft/disconnect/', { method: 'POST' });
-      setMicrosoft(await microsoftMailStatus());
-    } catch (error) { setMicrosoftError(error instanceof Error ? error.message : 'Unable to disconnect Microsoft'); }
-    finally { setMicrosoftBusy(false); }
-  }
 
   useEffect(() => {
     api('/auth/me/').then((u: User) => {
@@ -110,19 +85,6 @@ export default function AccountPage() {
         <div className="muted result-meta">Only administrators can change workflow roles and ALS email addresses. {user?.is_admin ? 'Use Staff Accounts to manage these settings.' : 'Contact your administrator if your account details need updating.'}</div>
         {(user?.needs_email || user?.needs_role) && <div className="error">Your account is missing required details. Contact an administrator to assign your role and ALS email before using the tracker.</div>}
         {error && <div className="error">{error}</div>}
-      </div>
-    </section>
-
-    <section className="panel panel-blue" style={{maxWidth: 680, marginTop: 18}}>
-      <div className="panel-header">Microsoft 365 — Optional Email Connection</div>
-      <div className="panel-body stack">
-        <p>Connecting Microsoft 365 is optional. Your existing ALS Ticket Tracker login will keep working.</p>
-        <div className="muted result-meta">{microsoft?.connected ? `Connected as ${microsoft.email}` : microsoft?.configured ? 'Microsoft 365 is available, but not connected.' : 'Not yet configured. ALS IT must register the app and provide its credentials.'}</div>
-        {microsoft?.redirect_uri && <div className="field"><label>Microsoft Entra Web Redirect URI (for IT)</label><input className="input" readOnly value={microsoft.redirect_uri} onClick={e => e.currentTarget.select()} /></div>}
-        {microsoftError && <div className="error" role="alert">{microsoftError}</div>}
-        <div>{microsoft?.connected ? <button type="button" className="button secondary" disabled={microsoftBusy} onClick={disconnectMicrosoft}>Disconnect Microsoft 365</button>
-          : <button type="button" className="button" disabled={microsoftBusy || !microsoft?.configured} onClick={connectMicrosoft}>Connect Microsoft 365</button>}</div>
-        <p className="muted">When connected, mail can be submitted through Microsoft Graph with To and CC recipients, rather than opening Outlook. A successful response means Microsoft accepted the message, not necessarily that it was delivered.</p>
       </div>
     </section>
 

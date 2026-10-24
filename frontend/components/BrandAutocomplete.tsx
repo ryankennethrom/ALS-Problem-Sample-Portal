@@ -29,9 +29,17 @@ export default function BrandAutocomplete({
   const [suggestions, setSuggestions] = useState<BrandSuggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [searchEnabled, setSearchEnabled] = useState(false);
   const requestId = useRef(0);
 
   useEffect(() => {
+    if (!searchEnabled) {
+      setSuggestions([]);
+      setOpen(false);
+      setLoading(false);
+      return;
+    }
+
     const query = text.trim();
     if (!query) {
       setSuggestions([]);
@@ -58,12 +66,14 @@ export default function BrandAutocomplete({
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [text]);
+  }, [text, searchEnabled]);
 
   function choose(item: BrandSuggestion) {
     onChange(item.brand);
     setSuggestions([]);
     setOpen(false);
+    setSearchEnabled(false);
+    requestId.current += 1;
   }
 
   return <div className="field distributor-field">
@@ -76,9 +86,19 @@ export default function BrandAutocomplete({
         required={required}
         autoComplete="off"
         placeholder={placeholder}
-        onFocus={() => { if (suggestions.length) setOpen(true); }}
-        onBlur={() => window.setTimeout(() => setOpen(false), 140)}
-        onChange={e => onChange(e.target.value)}
+        onFocus={() => {
+          setSearchEnabled(true);
+          if (suggestions.length) setOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => {
+          setOpen(false);
+          setSearchEnabled(false);
+          requestId.current += 1;
+        }, 140)}
+        onChange={e => {
+          setSearchEnabled(true);
+          onChange(e.target.value);
+        }}
       />
       {loading && <span className="distributor-loading">Searching…</span>}
       {open && <div className="distributor-suggestions" role="listbox">

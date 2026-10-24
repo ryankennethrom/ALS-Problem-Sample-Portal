@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
-import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 
 export type MentionEmailDraft = {
   email: string;
@@ -26,7 +25,6 @@ export default function MentionEmailModal({
   busy?: boolean;
   error?: string;
 }) {
-  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [opened, setOpened] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const countdownEndsAt = useRef(0);
@@ -73,8 +71,8 @@ export default function MentionEmailModal({
       {error && <p className="error" role="alert">{error}</p>}
       {opened && <p className="customer-email-send-prompt" role="status">Send this email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
       <div className="email-confirm-actions">
-        {microsoftChecked && (microsoftConnected ? <MicrosoftSendButton content={{to: current.recipients?.length ? current.recipients : current.email.split(',').map(v => v.trim()).filter(Boolean), cc: [], subject: current.subject, body: current.body}} onAccepted={onComplete} disabled={busy} /> : <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email draft again' : 'Open email draft'}</button>)}
-        {!microsoftConnected && opened && seconds === 0 && <button type="button" className="button" onClick={onComplete} disabled={busy}>{busy ? 'Saving…' : 'I sent this email — Save Follow Up'}</button>}
+        <button type="button" className="button" onClick={openEmail} disabled={busy}>{opened ? 'Open email draft again' : 'Open email draft'}</button>
+        {opened && seconds === 0 && <button type="button" className="button" onClick={onComplete} disabled={busy}>{busy ? 'Saving…' : 'I sent this email — Save Follow Up'}</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </div>
