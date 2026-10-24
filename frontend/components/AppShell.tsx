@@ -30,6 +30,108 @@ function Icon({ name }: { name: IconName }) {
   return <svg {...common}><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 19V5a2 2 0 0 0-2-2h-6"/></svg>;
 }
 
+type LabOption = { id: number; name: string; code: string };
+
+type LabSelectorProps = {
+  user: User | null;
+  labs: LabOption[];
+  selectedLabCode: string;
+  onSelect: (code: string) => void;
+  collapsed: boolean;
+  onExpand: () => void;
+};
+
+/** Admins may switch labs; staff have a labelled, read-only assignment. */
+function LabSelector({ user, labs, selectedLabCode, onSelect, collapsed, onExpand }: LabSelectorProps) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const options = [{ id: 0, name: 'All Labs', code: 'ALL' }, ...labs];
+  const activeCode = user?.is_admin ? (selectedLabCode || user.lab_code) : user?.lab_code;
+  const active = options.find(option => option.code === activeCode);
+  const activeName = active?.name || user?.lab_name || 'No lab assigned';
+
+  useEffect(() => {
+    if (!open) return;
+    optionRefs.current[options.findIndex(option => option.code === activeCode)]?.focus();
+    const onOutsideClick = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onOutsideClick);
+    return () => document.removeEventListener('pointerdown', onOutsideClick);
+  }, [open, activeCode, labs]);
+
+  useEffect(() => { setOpen(false); }, [selectedLabCode, user?.is_admin]);
+
+  const choose = (code: string) => {
+    if (!user?.is_admin || !options.some(option => option.code === code)) return;
+    setOpen(false);
+    if (code !== activeCode) onSelect(code);
+    else triggerRef.current?.focus();
+  };
+
+  const navigate = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const focused = optionRefs.current.findIndex(option => option === document.activeElement);
+      const next = event.key === 'Home' ? 0
+        : event.key === 'End' ? options.length - 1
+        : (focused + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      optionRefs.current[next]?.focus();
+    } else if (event.key === 'Tab') {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="sidebar-lab-select" ref={wrapperRef}>
+      <div className="sidebar-lab-label" id="active-lab-label">Active Lab</div>
+      {user?.is_admin ? (
+        <>
+          <button ref={triggerRef} type="button" className={`sidebar-lab-control sidebar-lab-dropdown ${open ? 'is-open' : ''}`}
+            aria-label="Select active lab" aria-labelledby="active-lab-label active-lab-name"
+            aria-haspopup="listbox" aria-expanded={open} aria-controls="active-lab-options"
+            onClick={() => { if (collapsed) { onExpand(); setOpen(true); } else setOpen(value => !value); }}
+            onKeyDown={event => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (collapsed) onExpand();
+                setOpen(true);
+              } else if (event.key === 'Escape') { setOpen(false); }
+            }}>
+            <span className="sidebar-lab-emblem" aria-hidden="true"><Icon name="flask" /></span>
+            <span className="sidebar-lab-details"><span id="active-lab-name" className="sidebar-lab-current-name">{activeName}</span><span className="sidebar-lab-subtitle">{activeCode === 'ALL' ? 'Organization-wide view' : `${activeCode || '—'} · Lab workspace`}</span></span>
+            <span className={`sidebar-lab-toggle-icon ${open ? 'open' : ''}`} aria-hidden="true"><Icon name="chevron" /></span>
+          </button>
+          {open && <div id="active-lab-options" className="sidebar-lab-menu" role="listbox" aria-labelledby="active-lab-label" onKeyDown={navigate}>
+            <div className="sidebar-lab-menu-heading">Switch workspace</div>
+            {options.map((option, index) => <button
+              key={option.code} type="button" role="option" aria-selected={option.code === activeCode}
+              className={`sidebar-lab-option ${option.code === activeCode ? 'selected' : ''}`}
+              ref={element => { optionRefs.current[index] = element; }}
+              onClick={() => choose(option.code)}>
+              <span className="sidebar-lab-option-badge" aria-hidden="true">{option.code === 'ALL' ? '◎' : option.code.slice(0, 3)}</span>
+              <span className="sidebar-lab-option-copy"><span className="sidebar-lab-option-name">{option.name}</span><span className="sidebar-lab-option-caption">{option.code === 'ALL' ? 'View all laboratories' : `Lab code: ${option.code}`}</span></span>
+              {option.code === activeCode && <span className="sidebar-lab-option-check" aria-label="Selected">✓</span>}
+            </button>)}
+          </div>}
+        </>
+      ) : (
+        <div className="sidebar-lab-control sidebar-lab-locked" aria-label={`Assigned lab: ${activeName}. Lab switching is restricted to administrators.`}>
+          <span className="sidebar-lab-emblem" aria-hidden="true"><Icon name="flask" /></span>
+          <span className="sidebar-lab-details"><span className="sidebar-lab-current-name">{activeName}</span><span className="sidebar-lab-subtitle">{user?.lab_code || '—'} · Assigned workspace</span></span>
+          <span className="sidebar-lab-lock" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -135,10 +237,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         if (pathname !== '/lab-setup') router.replace('/lab-setup');
         return;
       }
-      const code = activeLabCode() || u.lab_code;
+      // Non-admins must never retain an old cross-lab selection (e.g. after
+      // account privileges change). The backend independently enforces this.
+      const storedCode = activeLabCode();
+      const code = u.is_admin ? (storedCode || u.lab_code) : u.lab_code;
       setSelectedLabCode(code);
-      if (!activeLabCode()) setActiveLabCode(code);
-      api('/auth/labs/').then(data => setLabs(Array.isArray(data) ? data : [])).catch(() => {});
+      if (storedCode !== code) setActiveLabCode(code);
+      api('/auth/labs/').then(data => {
+        const permitted = Array.isArray(data) ? data : [];
+        setLabs(permitted);
+        // Admins can have a stale selection after a lab is deleted.
+        if (u.is_admin && code !== 'ALL' && !permitted.some((lab: LabOption) => lab.code === code)) {
+          setActiveLabCode(u.lab_code);
+          setSelectedLabCode(u.lab_code);
+        }
+      }).catch(() => {});
       if (u.needs_email || u.needs_role) {
         const setupPath = u.is_admin ? '/accounts' : '/account';
         if (pathname !== setupPath) router.replace(setupPath);
@@ -194,19 +307,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           }
         }}>×</label>
       <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">A</span><span className="brand-label">ALS Ticket Tracker</span></Link>
-      <div className="sidebar-lab-select">
-        <label htmlFor="active-lab" className="sidebar-lab-label">Active Lab</label>
-        <div className="sidebar-lab-control">
-          <span className="sidebar-lab-symbol" aria-hidden="true">⌂</span>
-          <select id="active-lab" className="sidebar-lab-dropdown" aria-label="Select active lab"
-            value={selectedLabCode || user?.lab_code || ''}
-            onChange={event => { const code=event.target.value; setActiveLabCode(code); setSelectedLabCode(code); window.location.assign('/dashboard'); }}>
-            {user?.is_admin && <option value="ALL">Lab: All</option>}
-            {labs.map(lab => <option key={lab.code} value={lab.code}>Lab: {lab.name}</option>)}
-          </select>
-          <span className="sidebar-lab-chevron" aria-hidden="true">▾</span>
-        </div>
-      </div>
+      <LabSelector user={user} labs={labs} selectedLabCode={selectedLabCode}
+        collapsed={collapsed} onExpand={() => setCollapsed(false)}
+        onSelect={code => {
+          // Only administrators may switch. Always reload so all API data and
+          // lab-scoped pages are fetched in the selected context.
+          if (!user?.is_admin) return;
+          setActiveLabCode(code);
+          setSelectedLabCode(code);
+          window.location.assign('/dashboard');
+        }} />
       <Link href="/account" className="user-panel user-panel-link" onClick={closeMobileDrawer}><div className="avatar">{(user?.name || user?.username || 'U').charAt(0).toUpperCase()}</div><div className="user-copy"><div className="user-name">{user?.name || 'ALS User'}</div><div className="user-role">{user?.is_admin ? 'Administrator' : (user?.role_label || 'Choose role')}</div><div className="user-email">{user?.username ? `@${user.username}` : 'Sign in required'}</div></div></Link>
       <nav className="side-nav" aria-label="Main navigation" onClickCapture={(event) => {
         if ((event.target as HTMLElement).closest('a')) closeMobileDrawer();

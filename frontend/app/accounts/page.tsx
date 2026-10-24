@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 
 type Account = {
@@ -37,6 +37,8 @@ export default function AccountsPage() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editEmail, setEditEmail] = useState('');
   const [editRole, setEditRole] = useState('lab_technician');
+  const [editError, setEditError] = useState('');
+  const editDialogRef = useRef<HTMLDivElement>(null);
   const [created, setCreated] = useState<CreatedAccount | null>(null);
   const [resetResult, setResetResult] = useState<ResetPasswordResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +63,46 @@ export default function AccountsPage() {
   }
 
   useEffect(() => { void loadAccounts(); api('/auth/labs/').then((v)=>{setLabs(v);setNewLab(String(v[0]?.id||''))}).catch(()=>{}); }, []);
+
+  // Keep keyboard interaction within the edit popup and restore page scrolling on close.
+  useEffect(() => {
+    if (!editingAccount) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const dialog = editDialogRef.current;
+    dialog?.querySelector<HTMLInputElement>('#edit-email')?.focus();
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        if (!busyAction) {
+          event.preventDefault();
+          setEditingAccount(null);
+        }
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = originalOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [editingAccount, busyAction]);
 
   async function createAccount(e: FormEvent) {
     e.preventDefault();
@@ -94,13 +136,14 @@ export default function AccountsPage() {
     setEditEmail(account.email || '');
     setEditRole(account.role || 'lab_technician');
     setEditLab(String(account.lab_id || ''));
+    setEditError('');
     setError('');
   }
 
   async function saveAccountDetails(e: FormEvent) {
     e.preventDefault();
     if (!editingAccount) return;
-    setError('');
+    setEditError('');
     setBusyAction(`profile-${editingAccount.id}`);
     try {
       const updated: Account = await api(`/auth/accounts/${editingAccount.id}/profile/`, {
@@ -113,7 +156,7 @@ export default function AccountsPage() {
       setEditingAccount(null);
       if (updated.id === currentUserId) window.location.reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update account details');
+      setEditError(e instanceof Error ? e.message : 'Failed to update account details');
     } finally {
       setBusyAction('');
     }
@@ -226,16 +269,30 @@ export default function AccountsPage() {
       </form>
     </section>
 
-    {editingAccount && <section className="panel panel-blue" style={{maxWidth: 760, marginBottom: 20}}>
-      <div className="panel-header">Edit Role and Email — {editingAccount.name}</div>
-      <form className="panel-body stack" onSubmit={saveAccountDetails}>
-        <div className="field"><label htmlFor="edit-email">ALS Email</label><input id="edit-email" className="input" type="email" required value={editEmail} onChange={e => setEditEmail(e.target.value)} /></div>
-        <div className="field"><label htmlFor="edit-role">Workflow Role</label><select id="edit-role" className="select" required value={editRole} onChange={e => setEditRole(e.target.value)}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>
-        <div className="field"><label htmlFor="edit-lab">Associated lab *</label><select id="edit-lab" className="select" required value={editLab} onChange={e=>setEditLab(e.target.value)}><option value="">Select lab</option>{labs.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-        <div className="muted result-meta">Changing a role can change which Group fields the account belongs to. ALS email addresses must end in @alsglobal.com.</div>
-        <div style={{display:'flex', gap:8, flexWrap:'wrap'}}><button className="button" disabled={Boolean(busyAction)} type="submit">{busyAction === `profile-${editingAccount.id}` ? 'Saving…' : 'Save Role and Email'}</button><button className="button secondary" type="button" disabled={Boolean(busyAction)} onClick={() => setEditingAccount(null)}>Cancel</button></div>
-      </form>
-    </section>}
+    {editingAccount && <div className="account-edit-overlay" role="presentation" onMouseDown={event => {
+      if (event.target === event.currentTarget && !busyAction) setEditingAccount(null);
+    }}>
+      <div ref={editDialogRef} className="account-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="account-edit-title" aria-describedby="account-edit-description">
+        <div className="account-edit-heading">
+          <div>
+            <h2 id="account-edit-title">Edit Role, Email &amp; Lab</h2>
+            <p id="account-edit-description" className="muted">Update the account details for <strong>{editingAccount.name}</strong> (@{editingAccount.username}).</p>
+          </div>
+          <button type="button" className="account-edit-close" aria-label="Close edit account popup" title="Close" disabled={Boolean(busyAction)} onClick={() => setEditingAccount(null)}>×</button>
+        </div>
+        <form className="stack" onSubmit={saveAccountDetails}>
+          <div className="field"><label htmlFor="edit-email">ALS Email</label><input id="edit-email" className="input" type="email" autoFocus required value={editEmail} onChange={e => setEditEmail(e.target.value)} /></div>
+          <div className="field"><label htmlFor="edit-role">Workflow Role</label><select id="edit-role" className="select" required value={editRole} onChange={e => setEditRole(e.target.value)}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>
+          <div className="field"><label htmlFor="edit-lab">Associated Lab</label><select id="edit-lab" className="select" required value={editLab} onChange={e=>setEditLab(e.target.value)}><option value="">Select lab</option>{labs.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div className="muted result-meta">Changing a role can change which Group fields the account belongs to. ALS email addresses must end in @alsglobal.com.</div>
+          {editError && <div className="error" role="alert">{editError}</div>}
+          <div className="account-edit-actions">
+            <button className="button secondary" type="button" disabled={Boolean(busyAction)} onClick={() => setEditingAccount(null)}>Cancel</button>
+            <button className="button" disabled={Boolean(busyAction)} type="submit">{busyAction === `profile-${editingAccount.id}` ? 'Saving…' : 'Save Changes'}</button>
+          </div>
+        </form>
+      </div>
+    </div>}
 
     {created && <section className="panel" style={{maxWidth: 760, marginBottom: 20}}>
       <div className="panel-header">New Account Credentials</div>

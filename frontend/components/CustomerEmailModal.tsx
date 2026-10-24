@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CustomerEmailContent, invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
+import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 
 type Props = {
   content: CustomerEmailContent | null;
-  onSent: () => void;
+  onSent: (graphSendKey?: string) => void | Promise<void>;
   onDidNotSend: (reason: string) => void;
   onCancel: () => void;
   busy?: boolean;
@@ -14,6 +15,7 @@ type Props = {
 };
 
 export default function CustomerEmailModal({ content, onSent, onDidNotSend, onCancel, busy = false, error = '', requireNotSentReason = true }: Props) {
+  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [seconds, setSeconds] = useState<number | null>(null);
   const countdownEndsAt = useRef(0);
   const [copied, setCopied] = useState('');
@@ -69,17 +71,18 @@ export default function CustomerEmailModal({ content, onSent, onDidNotSend, onCa
       </div> : <p className="muted">Select a customer email address before sending a tracking link.</p>}
       {copied && <p className="muted customer-email-copy-status" role="status">{copied}</p>}
       {error && <p className="error" role="alert">{error}</p>}
-      {seconds !== null && <p className="customer-email-send-prompt" role="status">Send the email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
-      {seconds !== null && <p className="muted email-confirm-note">{requireNotSentReason ? 'The tracking link becomes active only after you confirm that the email was sent.' : 'The ticket and tracking link are created only after you choose whether the email was sent.'}</p>}
+      {!microsoftConnected && seconds !== null && <p className="customer-email-send-prompt" role="status">Send the email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
+      {!microsoftConnected && seconds !== null && <p className="muted email-confirm-note">{requireNotSentReason ? 'The tracking link becomes active only after you confirm that the email was sent.' : 'The ticket and tracking link are created only after you choose whether the email was sent.'}</p>}
       {showNotSentReason && <div className="field" style={{marginBottom: 16}}>
         <label htmlFor="customer-email-not-sent-reason">Why wasn&apos;t the email sent? <span aria-hidden="true">*</span></label>
         <textarea id="customer-email-not-sent-reason" className="textarea" required maxLength={500} autoFocus value={notSentReason} onChange={event => setNotSentReason(event.target.value)} disabled={busy} />
         {!notSentReason.trim() && <span className="error" role="alert">A reason is required.</span>}
       </div>}
       <div className="email-confirm-actions">
-        {!showNotSentReason && seconds === null && content && <button type="button" className="button" onClick={proceed} disabled={busy}>Proceed</button>}
-        {!showNotSentReason && seconds === 0 && <button type="button" className="button" onClick={onSent} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
-        {!showNotSentReason && (seconds === 0 || !content) && <button type="button" className="button secondary" onClick={didNotSend} disabled={busy}>{"I didn't send the email"}</button>}
+        {!showNotSentReason && microsoftChecked && microsoftConnected && content && <MicrosoftSendButton content={content} disabled={busy} onAccepted={onSent} />}
+        {!showNotSentReason && microsoftChecked && !microsoftConnected && seconds === null && content && <button type="button" className="button" onClick={proceed} disabled={busy}>Proceed</button>}
+        {!microsoftConnected && !showNotSentReason && seconds === 0 && <button type="button" className="button" onClick={() => onSent()} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
+        {!showNotSentReason && (microsoftConnected || seconds === 0 || !content) && <button type="button" className="button secondary" onClick={didNotSend} disabled={busy}>{"I didn't send the email"}</button>}
         {showNotSentReason && <button type="button" className="button" onClick={() => onDidNotSend(notSentReason.trim())} disabled={busy || !notSentReason.trim()}>{busy ? 'Saving…' : 'Confirm email not sent'}</button>}
         {showNotSentReason && <button type="button" className="button secondary" onClick={() => setShowNotSentReason(false)} disabled={busy}>Back</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>

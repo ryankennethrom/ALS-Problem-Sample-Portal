@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { api } from '@/lib/api';
+import { api, activeLabCode } from '@/lib/api';
 import { ProblemTable } from '@/lib/problemTables';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import styles from './dashboard.module.css';
@@ -107,6 +107,7 @@ function Chart({points,ariaLabel,tooltipNoun='ticket'}:{points:Point[];ariaLabel
 
 export default function Dashboard() {
   const currentUser = useCurrentUser();
+  const showStorageAnalytics = Boolean(currentUser?.is_admin && activeLabCode() === 'ALL');
   const [range,setRange]=useState<Range>('week');
   const [start,setStart]=useState(()=>dateOffset(-30));
   const [end,setEnd]=useState(()=>dateOffset(0));
@@ -151,7 +152,15 @@ export default function Dashboard() {
   },[]);
 
   useEffect(()=>{
+    // Storage data is server-wide and must only be fetched in the admin Lab: All view.
+    if (!showStorageAnalytics) {
+      setStorage(null);
+      setStorageError('');
+      setStorageLoading(false);
+      return;
+    }
     let stop=false;
+    setStorage(null);
     setStorageLoading(true);
     setStorageError('');
     api('/dashboard/storage/')
@@ -159,7 +168,7 @@ export default function Dashboard() {
       .catch(e=>{if(!stop)setStorageError(e instanceof Error?e.message:'Could not load storage information');})
       .finally(()=>{if(!stop)setStorageLoading(false);});
     return()=>{stop=true;};
-  },[]);
+  },[showStorageAnalytics]);
 
   useEffect(()=>{
     let stop=false;
@@ -297,47 +306,52 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <div className={styles.subsectionHeadingRow}>
-        <div>
-          <h3 className={styles.subsectionHeading}>Storage</h3>
-          <p className={styles.subsectionNote}>Actual ticket-image files stored by the backend.</p>
-        </div>
-        {storage && <span className={`${styles.storageBadge} ${storage.persistent_volume_configured ? styles.storageBadgeGood : styles.storageBadgeWarn}`}>
-          {storage.persistent_volume_configured ? 'Persistent volume connected' : 'Persistent Railway volume not detected'}
-        </span>}
-      </div>
+      {showStorageAnalytics && (
+        <>
+          <div className={styles.subsectionHeadingRow}>
+            <div>
+              <h3 className={styles.subsectionHeading}>Storage</h3>
+              <p className={styles.subsectionNote}>Actual ticket-image files stored by the backend.</p>
+            </div>
+            {storage && <span className={`${styles.storageBadge} ${storage.persistent_volume_configured ? styles.storageBadgeGood : styles.storageBadgeWarn}`}>
+              {storage.persistent_volume_configured ? 'Persistent volume connected' : 'Persistent Railway volume not detected'}
+            </span>}
+          </div>
 
-      {storageError && <div className={styles.storageWarning}>{storageError}</div>}
-      <div className={styles.storageCards}>
-        <div className={styles.card}>
-          <div className={styles.label}>Image storage</div>
-          <div className={styles.storageValue}>{storageLoading&&!storage?'…':formatBytes(storage?.total_image_bytes)}</div>
-          <div className={styles.note}>Actual bytes under problem-images/</div>
-          {storage?.volume_total_bytes != null && <div className={styles.progress} aria-label={`${formatPercent(storage.image_percent_of_volume)} of media volume used by ticket images`}>
-            <span style={{width:`${Math.min(100, Math.max(0, storage.image_percent_of_volume || 0))}%`}} />
+          {storageError && <div className={styles.storageWarning}>{storageError}</div>}
+          <div className={styles.storageCards}>
+            <div className={styles.card}>
+              <div className={styles.label}>Image storage</div>
+              <div className={styles.storageValue}>{storageLoading&&!storage?'…':formatBytes(storage?.total_image_bytes)}</div>
+              <div className={styles.note}>Actual bytes under problem-images/</div>
+              {storage?.volume_total_bytes != null && <div className={styles.progress} aria-label={`${formatPercent(storage.image_percent_of_volume)} of media volume used by ticket images`}>
+                <span style={{width:`${Math.min(100, Math.max(0, storage.image_percent_of_volume || 0))}%`}} />
+              </div>}
+              {storage?.volume_total_bytes != null && <div className={styles.storageDetail}>{formatPercent(storage.image_percent_of_volume)} of {formatBytes(storage.volume_total_bytes)} filesystem capacity</div>}
+            </div>
+            <div className={styles.card}>
+              <div className={styles.label}>Stored images</div>
+              <div className={styles.storageValue}>{storageLoading&&!storage?'…':format(storage?.image_file_count)}</div>
+              <div className={styles.note}>Average {formatBytes(storage?.average_image_bytes)} per image</div>
+              {storage && storage.database_image_records !== storage.image_file_count && <div className={styles.storageDetail}>{format(storage.database_image_records)} database image records</div>}
+            </div>
+            <div className={styles.card}>
+              <div className={styles.label}>Media volume free</div>
+              <div className={styles.storageValue}>{storageLoading&&!storage?'…':formatBytes(storage?.volume_free_bytes)}</div>
+              <div className={styles.note}>{storage?.volume_used_percent != null ? `${formatPercent(storage.volume_used_percent)} of the filesystem is currently used` : 'Filesystem capacity unavailable'}</div>
+            </div>
+            <div className={styles.card}>
+              <div className={styles.label}>Estimated images remaining</div>
+              <div className={styles.storageValue}>{storageLoading&&!storage?'…':format(storage?.estimated_images_remaining)}</div>
+              <div className={styles.note}>{storage?.estimate_basis === 'current_average' ? `At the current ${formatBytes(storage.estimate_basis_bytes)} average` : `Using the ${formatBytes(storage?.compression_target_bytes)} compression target`}</div>
+            </div>
+          </div>
+          {storage && (storage.missing_image_file_count > 0 || storage.orphan_image_file_count > 0) && <div className={styles.storageWarning}>
+            Storage check: {format(storage.missing_image_file_count)} image record{storage.missing_image_file_count===1?'':'s'} point to missing files; {format(storage.orphan_image_file_count)} stored file{storage.orphan_image_file_count===1?' is':'s are'} not referenced by the database.
           </div>}
-          {storage?.volume_total_bytes != null && <div className={styles.storageDetail}>{formatPercent(storage.image_percent_of_volume)} of {formatBytes(storage.volume_total_bytes)} filesystem capacity</div>}
-        </div>
-        <div className={styles.card}>
-          <div className={styles.label}>Stored images</div>
-          <div className={styles.storageValue}>{storageLoading&&!storage?'…':format(storage?.image_file_count)}</div>
-          <div className={styles.note}>Average {formatBytes(storage?.average_image_bytes)} per image</div>
-          {storage && storage.database_image_records !== storage.image_file_count && <div className={styles.storageDetail}>{format(storage.database_image_records)} database image records</div>}
-        </div>
-        <div className={styles.card}>
-          <div className={styles.label}>Media volume free</div>
-          <div className={styles.storageValue}>{storageLoading&&!storage?'…':formatBytes(storage?.volume_free_bytes)}</div>
-          <div className={styles.note}>{storage?.volume_used_percent != null ? `${formatPercent(storage.volume_used_percent)} of the filesystem is currently used` : 'Filesystem capacity unavailable'}</div>
-        </div>
-        <div className={styles.card}>
-          <div className={styles.label}>Estimated images remaining</div>
-          <div className={styles.storageValue}>{storageLoading&&!storage?'…':format(storage?.estimated_images_remaining)}</div>
-          <div className={styles.note}>{storage?.estimate_basis === 'current_average' ? `At the current ${formatBytes(storage.estimate_basis_bytes)} average` : `Using the ${formatBytes(storage?.compression_target_bytes)} compression target`}</div>
-        </div>
-      </div>
-      {storage && (storage.missing_image_file_count > 0 || storage.orphan_image_file_count > 0) && <div className={styles.storageWarning}>
-        Storage check: {format(storage.missing_image_file_count)} image record{storage.missing_image_file_count===1?'':'s'} point to missing files; {format(storage.orphan_image_file_count)} stored file{storage.orphan_image_file_count===1?' is':'s are'} not referenced by the database.
-      </div>}
+
+        </>
+      )}
 
     <div className={styles.openedHeading}>
       <select

@@ -28,7 +28,7 @@ test('lab code immutable when renaming', () => {
 test('sidebar selector is styled and accessible', () => {
   assert.match(shell, /sidebar-lab-dropdown/);
   assert.match(shell, /aria-label="Select active lab"/);
-  assert.match(css, /\.sidebar-lab-control:focus-within/);
+  assert.match(css, /button\.sidebar-lab-control:focus-visible/);
 });
 
 test('sidebar scrolls without clipping Logout even on mobile', () => {

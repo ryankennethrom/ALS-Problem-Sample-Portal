@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { CustomerEmailContent, invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
+import MicrosoftSendButton, { useMicrosoftConnection } from '@/components/MicrosoftSendButton';
 
 type Props = {
   recipients: string[];
@@ -16,6 +17,7 @@ type Props = {
 export default function GeneralCustomerEmailModal({ recipients, ccRecipients, problemNumber, onSent, onCancel, busy = false, error = '' }: Props) {
   const [subject, setSubject] = useState(`Ticket Ticket #${problemNumber}`);
   const [body, setBody] = useState(`Hello,\n\nI'm contacting you regarding ticket ticket #${problemNumber}.\n\nRegards,\nALS`);
+  const { connected: microsoftConnected, checked: microsoftChecked } = useMicrosoftConnection();
   const [opened, setOpened] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const countdownEndsAt = useRef(0);
@@ -47,8 +49,8 @@ export default function GeneralCustomerEmailModal({ recipients, ccRecipients, pr
       {error && <p className="error" role="alert">{error}</p>}
       {opened && <p className="customer-email-send-prompt" role="status">Send the email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
       <div className="email-confirm-actions">
-        <button type="button" className="button" onClick={openEmail} disabled={busy || !message.subject || !message.body}>{opened ? 'Open email draft again' : 'Open email draft'}</button>
-        {opened && seconds === 0 && <button type="button" className="button" onClick={() => onSent(message)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
+        {!microsoftChecked ? null : microsoftConnected ? <MicrosoftSendButton content={message} onAccepted={() => onSent(message)} disabled={busy || !message.subject || !message.body}/> : <button type="button" className="button" onClick={openEmail} disabled={busy || !message.subject || !message.body}>{opened ? 'Open email draft again' : 'Open email draft'}</button>}
+        {!microsoftConnected && opened && seconds === 0 && <button type="button" className="button" onClick={() => onSent(message)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
         <button type="button" className="button secondary" onClick={onCancel} disabled={busy}>Cancel</button>
       </div>
     </div>
