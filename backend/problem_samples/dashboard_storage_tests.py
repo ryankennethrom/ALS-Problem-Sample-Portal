@@ -3,6 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from accounts.models import Lab, UserProfile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -19,8 +20,11 @@ class DashboardStorageTests(TestCase):
         self.addCleanup(self.media_dir.cleanup)
 
         self.user = User.objects.create_user(username='storage.dashboard')
+        self.lab = Lab.objects.create(name='Edmonton', code='EDM')
+        UserProfile.objects.create(user=self.user, lab=self.lab, is_admin=True)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
+        self.client.credentials(HTTP_X_ACTIVE_LAB='ALL')
         table = ProblemTable.objects.create(name='Storage dashboard table', is_default=True)
         self.problem = ProblemSample.objects.create(table=table, problem_number=1)
 
@@ -59,6 +63,33 @@ class DashboardStorageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['persistent_volume_configured'])
         self.assertEqual(response.data['storage_kind'], 'railway_volume')
+
+    def test_admin_in_specific_lab_cannot_see_storage(self):
+        self.client.credentials(HTTP_X_ACTIVE_LAB='EDM')
+        response = self.client.get('/api/dashboard/storage/')
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('Lab: All', str(response.data['detail']))
+
+    def test_admin_without_all_selection_cannot_see_storage(self):
+        self.client.credentials()
+        response = self.client.get('/api/dashboard/storage/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_nonadmin_cannot_see_storage_even_if_all_requested(self):
+        profile = self.user.tracker_profile
+        profile.is_admin = False
+        profile.save(update_fields=['is_admin'])
+        self.client.credentials(HTTP_X_ACTIVE_LAB='ALL')
+        response = self.client.get('/api/dashboard/storage/')
+        self.assertEqual(response.status_code, 403)
+
+    def test_nonadmin_cannot_see_storage_in_own_lab(self):
+        profile = self.user.tracker_profile
+        profile.is_admin = False
+        profile.save(update_fields=['is_admin'])
+        self.client.credentials(HTTP_X_ACTIVE_LAB='EDM')
+        response = self.client.get('/api/dashboard/storage/')
+        self.assertEqual(response.status_code, 403)
 
     def test_requires_authentication(self):
         response = APIClient().get('/api/dashboard/storage/')

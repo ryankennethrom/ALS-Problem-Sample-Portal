@@ -1,8 +1,14 @@
 from django.urls import path
 from . import views
 from . import lab_views
+from microsoft_graph import views as microsoft_views
 
 urlpatterns = [
+    path('microsoft/status/', microsoft_views.status_view),
+    path('microsoft/start/', microsoft_views.start_view),
+    path('microsoft/callback/', microsoft_views.callback_view),
+    path('microsoft/send/', microsoft_views.send_view),
+    path('microsoft/disconnect/', microsoft_views.disconnect_view),
     path('labs/', lab_views.labs),
     path('labs/<int:lab_id>/', lab_views.lab_detail),
     path('me/lab/', lab_views.my_lab),

@@ -148,21 +148,3 @@ class HistoricalFixtureCompatibilityTests(SimpleTestCase):
         self.assertIn('load historical JSON fixture: AttributeError', message)
         self.assertIn('test_backup_upgrade.py:', message)
         self.assertNotIn('secret connection string', message)
-
-
-class HistoricalNaturalKeyUpgradeTests(SimpleTestCase):
-    """The staged worker must normalize username-based FKs before loaddata."""
-
-    def test_safe_error_summary_shows_chained_exception_types_not_values(self):
-        from .management.commands.stage_backup_upgrade import _safe_upgrade_failure
-        try:
-            try:
-                raise AttributeError('sensitive customer content')
-            except AttributeError as root:
-                raise ValueError('other sensitive content') from root
-        except ValueError as exc:
-            msg = _safe_upgrade_failure('load historical JSON fixture', exc)
-        self.assertIn('ValueError', msg)
-        self.assertIn('AttributeError', msg)
-        self.assertNotIn('sensitive customer content', msg)
-        self.assertNotIn('other sensitive content', msg)

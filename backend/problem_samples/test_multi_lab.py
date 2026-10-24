@@ -55,6 +55,24 @@ class LabIsolationTests(TestCase):
         response = self.client.get('/api/problem-samples/', HTTP_X_ACTIVE_LAB='EDM')
         self.assertEqual(response.status_code, 403)
 
+    def test_nonadmin_cannot_select_all_labs(self):
+        self.client.force_authenticate(self.staff)
+        response = self.client.get('/api/problem-samples/', HTTP_X_ACTIVE_LAB='ALL')
+        self.assertEqual(response.status_code, 403)
+
+    def test_nonadmin_assigned_lab_remains_accessible(self):
+        self.client.force_authenticate(self.staff)
+        response = self.client.get('/api/problem-samples/', HTTP_X_ACTIVE_LAB='CGY')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn(str(self.cg_ticket.pk), str(response.data))
+        self.assertNotIn(str(self.ed_ticket.pk), str(response.data))
+
+    def test_nonadmin_lab_choices_only_return_assigned_lab(self):
+        self.client.force_authenticate(self.staff)
+        response = self.client.get('/api/auth/labs/')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([lab['code'] for lab in response.data], ['CGY'])
+
     def test_container_ids_are_independent_per_lab(self):
         ed = create_container(self.edmonton, created_by=self.admin)
         cg = create_container(self.calgary, created_by=self.admin)

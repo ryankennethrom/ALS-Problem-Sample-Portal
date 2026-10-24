@@ -18,6 +18,10 @@ class BearerSessionAuthentication(BaseAuthentication):
         '/api/auth/me/lab',
         '/api/auth/labs/',
         '/api/auth/labs',
+        '/api/auth/microsoft/status/',
+        '/api/auth/microsoft/start/',
+        '/api/auth/microsoft/callback/',
+        '/api/auth/microsoft/disconnect/',
     }
 
     def authenticate(self, request):

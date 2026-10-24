@@ -6,6 +6,7 @@ from django.db.models.functions import TruncDay, TruncMonth, TruncWeek
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.views import APIView
 
 from .models import (
@@ -398,10 +399,14 @@ class ActionRequiredEmailPreviewView(APIView):
 
 
 class DashboardStorageView(APIView):
-    """Actual image/media storage telemetry for the staff dashboard."""
+    """Server-wide image/media usage; admins can access it only in Lab: All."""
 
     def get(self, request):
-        return Response(image_storage_stats(active_lab(request)))
+        # active_lab validates the staff member's lab and permits ALL only for admins.
+        # A specific-lab selection must never expose server-wide volume telemetry.
+        if active_lab(request) is not None:
+            raise PermissionDenied('Storage analytics are available only in Lab: All.')
+        return Response(image_storage_stats())
 
 
 class DashboardOpenedTicketsView(APIView):

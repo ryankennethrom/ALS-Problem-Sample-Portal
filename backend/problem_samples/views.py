@@ -889,7 +889,8 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 )
             problem.transition_to_disposal_if_due(now=timezone.now())
             if sent is True:
-                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, 'outlook_web', prepared_token=prepared.tracking_token)
+                send_method = 'microsoft_graph' if request.data.get('graph_send_key') else 'outlook_web'
+                recorded = self._record_customer_notification_sent(request, problem, prepared.tracking_token, send_method, prepared_token=prepared.tracking_token)
                 if recorded.status_code >= 400:
                     raise DRFValidationError(recorded.data)
             else:
@@ -1832,7 +1833,17 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
 
     def _record_customer_notification_sent(self, request, problem, supplied_token, delivery_method, prepared_token=None):
-        if delivery_method not in {'mailto', 'eml', 'outlook_web'}:
+        if delivery_method == 'microsoft_graph':
+            from microsoft_graph.models import MicrosoftMailSend
+            try:
+                graph_key = uuid.UUID(str(request.data.get('graph_send_key')))
+            except (ValueError, TypeError, AttributeError):
+                return Response({'detail': 'A valid Microsoft send confirmation is required.'}, status=400)
+            if not MicrosoftMailSend.objects.filter(
+                user=request.user, idempotency_key=graph_key, status='accepted',
+            ).exists():
+                return Response({'detail': 'Microsoft has not accepted this email for sending.'}, status=400)
+        if delivery_method not in {'mailto', 'eml', 'outlook_web', 'microsoft_graph'}:
             delivery_method = ''
 
         # A new ticket tracking link does not exist in the database until this
@@ -1935,7 +1946,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             summary='Sent tracking link to customer by email',
             details={
                 'delivery_method': delivery_method,
-                'confirmation': 'User confirmed the customer notification email was sent.',
+                'confirmation': ('Microsoft Graph accepted the email for sending.' if delivery_method == 'microsoft_graph' else 'User confirmed the customer notification email was sent.'),
                 'first_notification': first_notification,
                 'starts_pt_clock': automatic_disposal_activated,
                 'automatic_disposal_activated': automatic_disposal_activated,
