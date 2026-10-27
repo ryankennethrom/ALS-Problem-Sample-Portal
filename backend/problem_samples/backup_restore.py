@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import contextlib
 import io
+import logging
 import json
 import os
 import queue
@@ -34,6 +35,8 @@ from django.db import connection, connections, transaction
 from django.db.migrations.recorder import MigrationRecorder
 from django.utils import timezone
 
+
+logger = logging.getLogger(__name__)
 
 BACKUP_FORMAT = 'edmonton-ticket-tracker-backup'
 BACKUP_VERSION = 1
@@ -508,6 +511,23 @@ def _copy_member_to_named_temp(uploaded, member_name: str, suffix: str):
         uploaded.seek(0)
 
 
+def _database_error_detail(exc: Exception) -> str:
+    """Show the useful root cause behind Django's generic flush CommandError.
+
+    Include only the first line and bound its length so an unexpected backend
+    response cannot dump a SQL statement or fixture contents into the API.
+    """
+    cause = exc
+    seen = set()
+    while getattr(cause, '__cause__', None) is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        cause = cause.__cause__
+    if cause is exc:
+        return ''
+    summary = str(cause).splitlines()[0].strip() if str(cause) else ''
+    return f' Underlying database error: {summary[:240]}' if summary else ''
+
+
 def restore_database(uploaded, inspected: InspectedArchive):
     _require_matching_schema(inspected.manifest)
     fixture_path = _copy_member_to_named_temp(uploaded, DATABASE_MEMBER, '.json')
@@ -520,10 +540,15 @@ def restore_database(uploaded, inspected: InspectedArchive):
         # transaction. A failed fixture therefore rolls back to the pre-restore
         # database rather than leaving a half-loaded tracker.
         with transaction.atomic():
-            call_command('flush', interactive=False, verbosity=0)
+            # PostgreSQL may have FK relationships between Django-managed tables.
+            # Django's flush defaults allow_cascade=False, which can reject the
+            # TRUNCATE even when all related tables are part of this full restore.
+            # Keep the flush + fixture load in ONE transaction for rollback safety.
+            call_command('flush', interactive=False, verbosity=0, allow_cascade=True)
             call_command('loaddata', fixture_path, verbosity=0)
     except Exception as exc:
-        raise BackupError(f'Database restore failed: {exc}') from exc
+        logger.exception('Database restore failed; transactional database changes were rolled back.')
+        raise BackupError(f'Database restore failed: {exc}{_database_error_detail(exc)}') from exc
     finally:
         try:
             os.unlink(fixture_path)

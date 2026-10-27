@@ -249,11 +249,11 @@ export default function Dashboard() {
         <Link href="/follow-up-required/customer-responded" className={styles.seeAll}>See all &gt;</Link>
       </section>
 
-      <section className={styles.newCard} aria-label="Other customer service tickets">
+      <section className={styles.newCard} aria-label="Others: Follow Up Required tickets">
         <div>
-          <div className={styles.label}>Other</div>
+          <div className={styles.label}>Others</div>
           <div className={styles.value}>{loading&&!data?'…':format(data?.counts.customer_service_other)}</div>
-          <div className={styles.note}>CS Follow-Up · not Tracking Not Sent or New Tracking Link Response</div>
+          <div className={styles.note}>Follow Up Required · not Tracking Not Sent or New Tracking Link Response</div>
         </div>
         <Link href="/follow-up-required/other" className={styles.seeAll}>See all &gt;</Link>
       </section>

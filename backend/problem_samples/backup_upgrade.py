@@ -205,7 +205,7 @@ def upgrade_full_backup(uploaded, inspected: InspectedArchive) -> dict:
             from django.db import connections
             try:
                 with transaction.atomic():
-                    call_command('flush', interactive=False, verbosity=0)
+                    call_command('flush', interactive=False, verbosity=0, allow_cascade=True)
                     call_command('loaddata', str(upgraded_fixture), verbosity=0)
             except Exception as exc:
                 raise BackupError('The live database rejected the upgraded fixture; '

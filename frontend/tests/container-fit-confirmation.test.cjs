@@ -53,7 +53,7 @@ function mount(overrides = {}) {
   vm.runInNewContext(outputText, sandbox, { filename: 'ReopenContainerModal.js' });
   const Modal = sandbox.exports.default;
   const props = {
-    purpose: 'change', ticketNumber: 17, previousWorkflow: 'CS Follow-Up',
+    purpose: 'change', ticketNumber: 17, previousWorkflow: 'Follow Up Required',
     nextWorkflow: 'Waiting for Customer Response', isInDumpingContainer: false,
     onConfirm: value => confirmations.push({ ...value }),
     onCancel: () => cancellations.push(true), ...overrides,
@@ -126,7 +126,7 @@ test('Blank existing Container ID cannot advance or assign', () => {
 });
 
 test('Reopening a terminal workflow uses the same fit-confirmation step', () => {
-  const app = mount({ purpose: 'reopen', previousWorkflow: 'Disposed', nextWorkflow: 'CS Follow-Up' });
+  const app = mount({ purpose: 'reopen', previousWorkflow: 'Disposed', nextWorkflow: 'Follow Up Required' });
   app.typeId('PC-000777'); app.render(); app.continueForm(); app.render();
   assert.equal(app.confirmations.length, 0);
   app.click('Fits in container PC-000777');

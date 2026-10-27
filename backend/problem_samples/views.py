@@ -29,7 +29,7 @@ from accounts.models import UserProfile
 from accounts.account_utils import normalize_als_email, user_has_als_email
 from .models import TicketCreationTiming, ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
 from .permissions import IsTrackerAdminOrReadOnly
-from .labs import active_lab, scope_tickets, scope_containers, require_lab_matches, create_container
+from .labs import active_lab, scope_tickets, scope_containers, require_lab_matches, create_container, archive_legacy_empty_disposal
 from .notification_recipient import get_edmonton_recipient, addresses_for_lab
 from .serializers import (
     ProblemSampleSerializer, ShippingProblemSampleSerializer, CommentSerializer, ImageSerializer, AttachmentSerializer, ProblemTableSerializer, ProblemColumnSerializer, ProblemContainerSerializer,
@@ -558,7 +558,7 @@ def ensure_current_workflow_column(table):
         table.columns.filter(position__gte=1).update(position=F('position') + 1)
         column = ProblemColumn.objects.create(
             table=table, name='Current Workflow',
-            description='Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
+            description='Required built-in routing state used by Follow Up Required, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
             field_key=SYSTEM_CURRENT_WORKFLOW_FIELD_KEY,
             column_type=ProblemColumn.TYPE_CHOICE, required=True, searchable=True,
             include_in_customer_notification=False, choices=list(CURRENT_WORKFLOW_CHOICES),
@@ -567,7 +567,7 @@ def ensure_current_workflow_column(table):
     else:
         desired = {
             'name': 'Current Workflow',
-            'description': 'Required built-in routing state used by CS Follow-Up, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
+            'description': 'Required built-in routing state used by Follow Up Required, disposal, shipping, back-to-testing, customer tracking, and automatic disposal.',
             'column_type': ProblemColumn.TYPE_CHOICE, 'required': True, 'searchable': True,
             'include_in_customer_notification': False, 'choices': list(CURRENT_WORKFLOW_CHOICES),
             'default_value': CURRENT_WORKFLOW_DEFAULT, 'position': 1, 'is_system': True,
@@ -1076,7 +1076,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get', 'post'], url_path='follow-up-required')
     def follow_up_required(self, request):
-        # CS Follow-Up is table-scoped.  The selected ProblemTable is the
+        # Follow Up Required is table-scoped.  The selected ProblemTable is the
         # source of truth for both searching and rendering; do not infer a table
         # from row values or from a collection of generic workflow fields.
         table_id = (request.data.get('table') if request.method.lower() == 'post' else request.query_params.get('table'))
@@ -1866,7 +1866,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             credential_fields.append('pending_tracking_token')
 
         # The first confirmed customer email activates automatic disposal. Once a
-        # tracking-link email is actually sent from CS Follow-Up, the ticket is also
+        # tracking-link email is actually sent from Follow Up Required, the ticket is also
         # routed to Waiting for Customer Response. A resend must not pull a ticket
         # back out of a terminal/shipping/testing workflow.
         first_notification = problem.customer_notified_at is None
@@ -2494,6 +2494,15 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
 
         reason = _change_reason(request)
         samples = list(container.problem_samples.select_for_update().prefetch_related('table__columns'))
+        # Legacy PC records can be marked disposed despite containing no tickets.
+        # There is nothing to roll back in that case: release the existing PC ID
+        # and retain its original disposal stamp in archived snapshot metadata.
+        if not container.is_dumping and not samples:
+            archive_legacy_empty_disposal(
+                container, reopened_at=timezone.now(),
+                reopened_by_id=request.user.pk, reason=reason,
+            )
+            return Response(self.get_serializer(container).data)
         snapshot = container.disposal_snapshot or {}
 
         # A stamped container whose tickets were already Disposed needs only
@@ -2575,7 +2584,7 @@ class ProblemContainerViewSet(viewsets.ModelViewSet):
                 sample.modified_by_id = saved.get('modified_by_id')
                 sample.acknowledged_at = parse_datetime(saved.get('acknowledged_at')) if saved.get('acknowledged_at') else None
                 if sample.workflow_status == CURRENT_WORKFLOW_DEFAULT:
-                    # CS Follow-Up reactivates the persistent tracking link,
+                    # Follow Up Required reactivates the persistent tracking link,
                     # so an old routed-workflow expiry anchor must not be restored.
                     sample.acknowledgement_status_changed_at = None
                 else:

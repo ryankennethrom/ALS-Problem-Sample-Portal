@@ -74,6 +74,8 @@ type CustomerHistoryReplyPreview = {
 };
 
 function displayHistoryValue(value: unknown) {
+  // Render legacy audit entries with the new workflow label without rewriting history.
+  if (value === 'CS Follow-Up') return 'Follow Up Required';
   if (value === null || value === undefined || value === '') return '—';
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';

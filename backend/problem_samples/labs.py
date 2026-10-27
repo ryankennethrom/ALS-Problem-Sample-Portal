@@ -49,12 +49,63 @@ def require_lab_matches(request, lab):
     return selected
 
 
+def first_available_number(assigned_numbers):
+    """Find the smallest positive unused number from an ordered PC number list.
+
+    An existing container, even if empty or disposed, still owns its number.
+    Old DC records are not included in this PC-only allocation.
+    """
+    candidate = 1
+    for number in assigned_numbers:
+        if number is None or number < candidate:
+            continue
+        if number > candidate:
+            break
+        candidate += 1
+    return candidate
+
+
+def archive_legacy_empty_disposal(container, *, reopened_at, reopened_by_id=None, reason=''):
+    """Clear an empty PC's old disposal stamp without losing its audit data."""
+    snapshot = dict(container.disposal_snapshot or {})
+    events = list(snapshot.get('_legacy_reactivation_events') or [])
+    events.append({
+        'disposed_at': container.disposed_at.isoformat() if container.disposed_at else None,
+        'disposed_by_id': container.disposed_by_id,
+        'reactivated_at': reopened_at.isoformat(),
+        'reactivated_by_id': reopened_by_id,
+        'reason': reason,
+    })
+    snapshot['_legacy_reactivation_events'] = events
+    container.disposal_snapshot = snapshot
+    container.disposed_at = None
+    container.disposed_by = None
+    container.save(update_fields=['disposal_snapshot', 'disposed_at', 'disposed_by'])
+
+
 def create_container(lab, *, created_by=None, **fields):
-    """Independent serial per lab; atomic for concurrent requests."""
+    """Allocate a per-lab PC gap first; DC audit numbers remain monotonic.
+
+    A Lab row lock makes this atomic across concurrent allocations for a lab.
+    Only missing numbers can be assigned to new containers. Disposed/empty
+    physical containers keep their IDs until they are explicitly reactivated.
+    """
     with transaction.atomic():
         locked = Lab.objects.select_for_update().get(pk=lab.pk)
-        number = locked.next_container_number
-        locked.next_container_number = number + 1
-        locked.save(update_fields=['next_container_number'])
         from .models import ProblemContainer
+        if fields.get('is_dumping'):
+            counter = 'next_dumping_container_number'
+            number = locked.next_dumping_container_number
+            locked.next_dumping_container_number = number + 1
+            locked.save(update_fields=[counter])
+        else:
+            numbers = (ProblemContainer.objects.filter(lab=locked, is_dumping=False)
+                       .exclude(lab_number__isnull=True)
+                       .order_by('lab_number')
+                       .values_list('lab_number', flat=True))
+            number = first_available_number(numbers)
+            # Preserve the high-water mark; it may be well beyond the gaps.
+            if number >= locked.next_container_number:
+                locked.next_container_number = number + 1
+                locked.save(update_fields=['next_container_number'])
         return ProblemContainer.objects.create(lab=locked, lab_number=number, created_by=created_by, **fields)

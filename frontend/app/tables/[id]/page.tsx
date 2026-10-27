@@ -12,7 +12,7 @@ import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
 import BrandAutocomplete from '@/components/BrandAutocomplete';
 
 const CURRENT_WORKFLOWS = [
-  'CS Follow-Up',
+  'Follow Up Required',
   'Waiting for Customer Response',
   'To be Disposed',
   'To be shipped back to client',
@@ -697,14 +697,14 @@ export default function TableSettings() {
             <div className="field"><label>Name</label><input className="input" value={name} onChange={e=>setName(e.target.value)} required/></div>
             <div className="field"><label>Description</label><textarea className="textarea" value={description} onChange={e=>setDescription(e.target.value)}/></div>
             <div className="field"><label>Ticket Expiration Period (days)</label><input className="input" type="number" min={0} max={3650} value={ptDays} onChange={e=>{ const value = Number(e.target.value); setPtDays(Number.isFinite(value) ? Math.min(3650, Math.max(0, value)) : 0); }} required/><div className="muted result-meta">Each time Dispose Automatically changes from No to Yes, a new expiration period of this many days starts. When it ends, Current Workflow automatically changes to To be Disposed. Enter 0 for an immediate transition.</div></div>
-            <div className="muted result-meta">Ticket Tracking Links remain available for 30 days after the most recent change to a routed disposal, shipping, or back-to-testing Current Workflow. Returning Current Workflow to CS Follow-Up clears that expiry clock and makes the tracking link accessible again.</div>
+            <div className="muted result-meta">Ticket Tracking Links remain available for 30 days after the most recent change to a routed disposal, shipping, or back-to-testing Current Workflow. Returning Current Workflow to Follow Up Required clears that expiry clock and makes the tracking link accessible again.</div>
             <div><button className="button">Save Table Details</button></div>
           </form>
         </section>
         <section className="panel">
           <div className="panel-header">Current Workflow</div>
           <div className="panel-body stack">
-            <div className="muted result-meta">Current Workflow is the required built-in routing field. These values are fixed because the system uses them for CS Follow-Up, disposal, shipping, back-to-testing, and customer tracking:</div>
+            <div className="muted result-meta">Current Workflow is the required built-in routing field. These values are fixed because the system uses them for Follow Up Required, disposal, shipping, back-to-testing, and customer tracking:</div>
             <div className="status-settings-list">
               {CURRENT_WORKFLOWS.map(label => <div className="status-settings-row" key={label}><input className="input" value={label} disabled readOnly/><span className="badge blue">Workflow</span></div>)}
             </div>

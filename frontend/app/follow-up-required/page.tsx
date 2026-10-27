@@ -174,21 +174,21 @@ function FollowUpContent() {
     <div className="page-toolbar">
       <div>
         <div className="eyebrow">Tickets</div>
-        <h1 className="page-heading" style={{marginBottom: 2}}>{trackingNotSent ? 'Tracking Not Sent' : other ? 'Other' : 'CS Follow-Up'}</h1>
+        <h1 className="page-heading" style={{marginBottom: 2}}>{trackingNotSent ? 'Tracking Not Sent' : other ? 'Others' : 'Follow Up Required'}</h1>
         <div className="muted table-description">
           {trackingNotSent
-            ? 'CS Follow-Up tickets without a persisted tracking link, ordered oldest first.'
+            ? 'Follow Up Required tickets without a persisted tracking link, ordered oldest first.'
             : other
-              ? 'CS Follow-Up tickets that are neither Tracking Not Sent nor New Tracking Link Response, ordered oldest first.'
-              : 'Tickets in CS Follow-Up or Waiting for Customer Response, ordered oldest first.'}
+              ? 'Follow Up Required tickets that are neither Tracking Not Sent nor New Tracking Link Response, ordered oldest first.'
+              : 'Tickets in Follow Up Required or Waiting for Customer Response, ordered oldest first.'}
         </div>
       </div>
     </div>
 
-    <nav className="container-view-tabs" aria-label="CS Follow-Up views">
+    <nav className="container-view-tabs" aria-label="Follow Up Required views">
       <Link className={`container-view-tab ${trackingNotSent ? 'active' : ''}`} aria-current={trackingNotSent ? 'page' : undefined} href="/follow-up-required/tracking-not-sent">Tracking Not Sent</Link>
       <Link className="container-view-tab" href="/follow-up-required/customer-responded">New Tracking Link Response</Link>
-      <Link className={`container-view-tab ${other ? 'active' : ''}`} aria-current={other ? 'page' : undefined} href="/follow-up-required/other">Other</Link>
+      <Link className={`container-view-tab ${other ? 'active' : ''}`} aria-current={other ? 'page' : undefined} href="/follow-up-required/other">Others</Link>
     </nav>
 
     {error && <div className="card error" style={{marginBottom: 14}}>{error}</div>}
@@ -275,7 +275,7 @@ function FollowUpContent() {
             </th>)}
           </tr></thead>
           <tbody>
-            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">{trackingNotSent ? 'No CS Follow-Up tickets without a tracking link in this table.' : other ? 'No other CS Follow-Up tickets in this table.' : 'No tickets currently require follow-up in this table.'}</td></tr>}
+            {!loading && items.length === 0 && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">{trackingNotSent ? 'No Follow Up Required tickets without a tracking link in this table.' : other ? 'No other Follow Up Required tickets in this table.' : 'No tickets currently require follow-up in this table.'}</td></tr>}
             {loading && <tr><td colSpan={2 + selectedTable.columns.length} className="empty-table">Loading samples…</td></tr>}
             {!loading && items.map(item => <tr key={item.id} className={automaticDisposalRowClass(item)}>
               <td className="row-action-column"><Link className="row-open-link" href={`/problems/${item.id}`} title="Open ticket">›</Link></td>
@@ -303,5 +303,5 @@ function FollowUpContent() {
 
 
 export default function FollowUpRequiredPage() {
-  return <Suspense fallback={<div className="muted">Loading CS Follow-Up...</div>}><FollowUpContent /></Suspense>;
+  return <Suspense fallback={<div className="muted">Loading Follow Up Required...</div>}><FollowUpContent /></Suspense>;
 }

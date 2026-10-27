@@ -720,7 +720,7 @@ a.result:hover{background:#f7f9fb}
 @media(max-width:560px){.public-ack-page{padding:24px 10px}.public-ack-card{padding:26px 18px}.public-ack-images{grid-template-columns:1fr}.public-ack-attachment{grid-template-columns:auto minmax(0,1fr)}.public-ack-download{grid-column:2}}
 .history-reason{margin-top:7px;padding:8px 10px;background:#f7f8f9;border-left:3px solid #6f7d86;border-radius:2px;color:#343a40;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 
-/* CS Follow-Up uses a real selected ProblemTable plus its actual schema. */
+/* Follow Up Required uses a real selected ProblemTable plus its actual schema. */
 .followup-table-search-grid{grid-template-columns:minmax(190px,.65fr) minmax(280px,1.5fr) auto;align-items:end}
 @media(max-width:1050px){.followup-table-search-grid{grid-template-columns:minmax(180px,.7fr) minmax(0,1.3fr) auto}}
 @media(max-width:760px){.followup-table-search-grid{grid-template-columns:1fr}.followup-table-search-grid .advanced-search{width:100%}.followup-table-search-grid .advanced-toggle{width:100%}}

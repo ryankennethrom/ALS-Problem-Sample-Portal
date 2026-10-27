@@ -39,8 +39,8 @@ class BulkBackToTestingTests(TestCase):
         self.assertEqual(self.client.post(self.url, self.payload(back_to_testing_email_sent=True,
             back_to_testing_email_body='Please retest.'), format='json').status_code, 400)
         stale = self.sample(3)
-        stale.current_workflow = 'CS Follow-Up'
-        stale.custom_values = {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: 'CS Follow-Up'}
+        stale.current_workflow = 'Follow Up Required'
+        stale.custom_values = {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: 'Follow Up Required'}
         stale.save(update_fields=['current_workflow', 'custom_values'])
         self.assertEqual(self.client.post(self.url, {
             'problem_ids': [str(self.first.pk), str(stale.pk)], 'back_to_testing_email_sent': False,

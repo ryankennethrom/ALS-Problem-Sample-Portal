@@ -274,7 +274,7 @@ export function displayProblemValue(
   },
 ): string {
   if (column.field_key === 'problem-id') return String(problem.problem_number);
-  if (column.field_key === 'current-workflow') return problem.workflow_status || String(problem.custom_values?.['current-workflow'] || 'CS Follow-Up');
+  if (column.field_key === 'current-workflow') return problem.workflow_status || String(problem.custom_values?.['current-workflow'] || 'Follow Up Required');
   if (column.field_key === 'system-days-until-automatic-disposal') return automaticDisposalDisplay(problem);
   if (column.field_key === 'system-tracking-link') return problem.tracking_url || '—';
   if (column.field_key === 'system-tracking-link-expiry') {

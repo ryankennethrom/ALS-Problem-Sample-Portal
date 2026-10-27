@@ -313,9 +313,9 @@ The **Containers** page shows every container and the expiration state of its sa
 The sidebar has a direct **To be shipped** tab at `/shipping/to-be-shipped`. This page shows only problem samples whose **Current Workflow** is **To be shipped back to client**. Users can search the queue, select one or many rows (including Select all visible), and choose **Ship Selected**. The backend validates the selection transactionally and changes every selected row to **Shipped back to client**, updates Recent Row Modifier fields, applies the existing tracking-link status-transition timing, and writes a History entry for each row. Completed **Shipped back to client** rows disappear from the queue and are removed from their containers.
 
 ## Current Workflow, Status, and container disposal
-Every problem sample table has three required built-in controls: **Status**, **Current Workflow**, and **Dispose Automatically**. **Status** is descriptive and has six fixed built-in values: **NEW**, **IN PROGRESS**, **ON HOLD**, **SHIPPED BACK TO CLIENT**, **DISPOSED**, and **COMPLETED**. **Current Workflow** is the authoritative system-routing field and has immutable values **CS Follow-Up**, **Waiting for Customer Response**, **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, and **Shipped back to client**. **Dispose Automatically** is fixed to **Yes** or **No**. New rows default to **Current Workflow = CS Follow-Up** and **Dispose Automatically = No**. The first confirmed customer email turns **Dispose Automatically** to **Yes** without changing Status or Current Workflow. When that period expires, **Current Workflow** is automatically persisted as **To be Disposed** and **Dispose Automatically** is turned back to **No**; Status is left unchanged and History records the workflow change.
+Every problem sample table has three required built-in controls: **Status**, **Current Workflow**, and **Dispose Automatically**. **Status** is descriptive and has six fixed built-in values: **NEW**, **IN PROGRESS**, **ON HOLD**, **SHIPPED BACK TO CLIENT**, **DISPOSED**, and **COMPLETED**. **Current Workflow** is the authoritative system-routing field and has immutable values **Follow Up Required**, **Waiting for Customer Response**, **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, and **Shipped back to client**. **Dispose Automatically** is fixed to **Yes** or **No**. New rows default to **Current Workflow = Follow Up Required** and **Dispose Automatically = No**. The first confirmed customer email turns **Dispose Automatically** to **Yes** without changing Status or Current Workflow. When that period expires, **Current Workflow** is automatically persisted as **To be Disposed** and **Dispose Automatically** is turned back to **No**; Status is left unchanged and History records the workflow change.
 
-Migration `0051_current_workflow` adds the indexed Current Workflow mirror and required built-in column. Existing rows that were in one of the old protected workflow Status values retain that routing value as Current Workflow; their Status is reset to the table descriptive default. Existing rows with a custom/non-workflow Status keep that Status and migrate to Current Workflow = CS Follow-Up.
+Migration `0051_current_workflow` adds the indexed Current Workflow mirror and required built-in column. Existing rows that were in one of the old protected workflow Status values retain that routing value as Current Workflow; their Status is reset to the table descriptive default. Existing rows with a custom/non-workflow Status keep that Status and migrate to Current Workflow = Follow Up Required.
 
 A container is **Ready to Dispose** when it contains at least one ticket and every attached ticket has **Current Workflow = To be Disposed** or **Disposed**. When a row with **Dispose Automatically = Yes** reaches its table's Problem Sample Expiration Period, the backend persists a real workflow transition: **Current Workflow** becomes **To be Disposed** and **Dispose Automatically** becomes **No**. The Containers page highlights ready containers and provides a **Dispose Container** action. Disposing a container records who disposed it and when, changes every disposal-participating problem sample's **Current Workflow** to **Disposed**, leaves already **Disposed** tickets unchanged, updates Recent Row Modifier fields, records the workflow changes in History, and stores a rollback snapshot of the pre-disposal sample state. A disposed container exposes **Undo Disposal**, which restores that snapshot, clears the container's disposal stamp, and records an undo event in each sample's History. If any contained sample was manually changed after disposal, the undo is blocked rather than overwriting the newer change. Containers disposed before rollback snapshots existed fall back to recorded disposal History when possible.
 
@@ -327,7 +327,7 @@ An existing ticket can be assigned to an active container, moved, or detached by
 Customer notification emails include a public secure Problem Sample Tracking URL. Customers do not need an ALS account and there is no separate access code. The tracking page offers **Permit immediate disposal**, **Message us about the issue**, and **Ship back**. If **Dispose Automatically = Yes**, it also shows the remaining automatic-disposal countdown; submitting any customer response stops that countdown. Customers may revise a response while the ticket is still in an active or intermediate **To be ...** workflow. Responses become read-only only after Current Workflow reaches **Disposed**, **Back to testing**, or **Shipped back to client**. When the automatic-disposal deadline itself is reached, the backend changes **Current Workflow** to **To be Disposed** automatically while preserving Status; the customer can still revise the response until disposal is completed. A GET/page preview never acknowledges the row; the first explicit customer action records acknowledgement and applies the selected action.
 
 ## Problem Sample Tracking Link lifecycle
-Problem Sample Tracking Links are persistent tokens whose public accessibility is controlled by a fixed 30-day window after the most recent **Current Workflow** transition into **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, or **Shipped back to client**. Returning **Current Workflow** to **CS Follow-Up** clears that expiry clock and makes the same link accessible again. An automatic-disposal deadline counts as a real transition to **To be Disposed**, so its 30-day window begins at the actual deadline.
+Problem Sample Tracking Links are persistent tokens whose public accessibility is controlled by a fixed 30-day window after the most recent **Current Workflow** transition into **To be Disposed**, **To be shipped back to client**, **To be back to testing**, **Back to testing**, **Disposed**, or **Shipped back to client**. Returning **Current Workflow** to **Follow Up Required** clears that expiry clock and makes the same link accessible again. An automatic-disposal deadline counts as a real transition to **To be Disposed**, so its 30-day window begins at the actual deadline.
 
 ### Acknowledgement credentials are committed only after confirmed send
 
@@ -335,7 +335,7 @@ When a customer notification is prepared, the backend returns a temporary secure
 
 
 ### First confirmed customer email
-The first confirmed customer email turns **Dispose Automatically** from **No** to **Yes** while **Current Workflow = CS Follow-Up**, without changing Status or Current Workflow. That No -> Yes change starts a fresh table-configured automatic-disposal period. Resending the email does not restart the period unless **Dispose Automatically** is later changed back from No to Yes.
+The first confirmed customer email turns **Dispose Automatically** from **No** to **Yes** while **Current Workflow = Follow Up Required**, without changing Status or Current Workflow. That No -> Yes change starts a fresh table-configured automatic-disposal period. Resending the email does not restart the period unless **Dispose Automatically** is later changed back from No to Yes.
 
 ## Shipping-back workflow
 
@@ -343,17 +343,17 @@ The first confirmed customer email turns **Dispose Automatically** from **No** t
 
 - **Provide a courier account number:** the number is required and saved in ticket history; route to **To be shipped back to client**.
 - **Pick up in person:** record the method in ticket history; route to **To be shipped back to client**.
-- **Receive a quote for the shipping charges:** record the request in ticket history; route to **CS Follow-Up** for the team to prepare a quote.
+- **Receive a quote for the shipping charges:** record the request in ticket history; route to **Follow Up Required** for the team to prepare a quote.
 
 The customer can revise their response until ALS completes the action. Both `/track/[token]` and `/acknowledge/[token]` use the same backend validation; incomplete return requests are rejected. Previous `ship_back` records retain their internal value for compatibility. When staff completes the return, Current Workflow becomes `Shipped back to client`. Completed shipped-back samples are ignored for container disposal readiness and are not changed when a container is disposed.
 
-## CS Follow-Up queue
+## Follow Up Required queue
 
-The Problem Samples navigation includes **CS Follow-Up**, a cross-table queue ordered oldest-first. It contains only rows whose **Current Workflow = CS Follow-Up**.
+The Problem Samples navigation includes **Follow Up Required**, a cross-table queue ordered oldest-first. It contains only rows whose **Current Workflow = Follow Up Required**.
 
 
-### CS Follow-Up ordering
-The CS Follow-Up queue is ordered by problem sample creation time, oldest first, so the longest-waiting samples appear at the top.
+### Follow Up Required ordering
+The Follow Up Required queue is ordered by problem sample creation time, oldest first, so the longest-waiting samples appear at the top.
 
 ### Back To Testing and NA.EDM notification
 
@@ -369,12 +369,12 @@ Migration `0061_secure_public_tracking` replaces older tracking tokens, includin
 
 The public tracking page, customer actions, images, attachments, and older API alias share database-backed request limits: per client address, 60 reads/minute and 600 reads/hour, and 10 writes/minute and 60 writes/hour; per link, 120 reads/minute and 3 writes/minute plus 12 writes/hour. Exceeding a limit returns HTTP 429 with `Retry-After`. The limits apply across application workers. `PUBLIC_TRACKING_*_LIMIT_*` in `backend/.env.example` allow adjustment. By default the limiter uses `REMOTE_ADDR`. If a trusted reverse proxy appends `X-Forwarded-For`, set `PUBLIC_TRACKING_TRUSTED_PROXY_HOPS` only after verifying the proxy chain; otherwise users behind one proxy may share a limit. For heavy automated traffic, add rate limits at the public ingress as well.
 
-### CS Follow-Up automatic-disposal countdown
+### Follow Up Required automatic-disposal countdown
 
-The CS Follow-Up queue shows a **Days until up for disposal** column. Only samples with **Dispose Automatically = Yes** have an automatic-disposal countdown, based on the most recent **No → Yes** change plus the table's Problem Sample Expiration Period. Rows become progressively red as the deadline approaches. Once the deadline is reached, the backend changes **Current Workflow** to **To be Disposed**, so the row leaves CS Follow-Up and enters the disposal workflow while its descriptive Status remains unchanged. **Dispose Automatically = No** displays **Unknown**.
+The Follow Up Required queue shows a **Days until up for disposal** column. Only samples with **Dispose Automatically = Yes** have an automatic-disposal countdown, based on the most recent **No → Yes** change plus the table's Problem Sample Expiration Period. Rows become progressively red as the deadline approaches. Once the deadline is reached, the backend changes **Current Workflow** to **To be Disposed**, so the row leaves Follow Up Required and enters the disposal workflow while its descriptive Status remains unchanged. **Dispose Automatically = No** displays **Unknown**.
 
-### CS Follow-Up navigation
-`CS Follow-Up` is a top-level sidebar tab rather than a sub-item under `Problem Samples`. Its queue behavior, oldest-first ordering, age indicator, automatic-disposal countdown, and row urgency shading are unchanged.
+### Follow Up Required navigation
+`Follow Up Required` is a top-level sidebar tab rather than a sub-item under `Problem Samples`. Its queue behavior, oldest-first ordering, age indicator, automatic-disposal countdown, and row urgency shading are unchanged.
 
 ## Disposal workspace
 
@@ -391,14 +391,14 @@ The new-ticket form requires staff to select or create a container before saving
 
 ## Workflow queue search improvements
 
-The workflow queues now use normalized search behavior so user-facing Problem ID queries such as `Problem #6`, `Problem ID #6`, `#6`, and `6` resolve correctly. This applies to CS Follow-Up, Dispose Samples, To be shipped, and To be back to testing.
+The workflow queues now use normalized search behavior so user-facing Problem ID queries such as `Problem #6`, `Problem ID #6`, `#6`, and `6` resolve correctly. This applies to Follow Up Required, Dispose Samples, To be shipped, and To be back to testing.
 
 Those four pages also include Advanced Search. Advanced conditions can target Problem ID, table, Current Workflow, Status, container, distributor, end user, brand, ALS/courier tracking fields, created/modified time, or all custom field values. Conditions can match all or any rules. Dispose Samples can run Advanced Search without requiring a basic search term. **To be back to testing** now supports selecting individual or all visible tickets and moving them together after one NA.EDM email sent/not-sent confirmation. The backend rejects stale selections as a unit, removes completed tickets from their containers, and records the outcome in each ticket's History.
 
 
 ## Sidebar navigation
 
-Sidebar navigation is grouped into **Workflows**, **Tables**, **Admin**, and **Settings**. Workflows contains CS Follow-Up, Disposal, Shipping, and Back To Testing; Tables contains Problem Samples and Manage Tables. The **Admin** section is shown only to administrators and contains Customers and Staff Accounts. Settings contains My Account and Logout. CS Follow-Up uses a clock icon.
+Sidebar navigation is grouped into **Workflows**, **Tables**, **Admin**, and **Settings**. Workflows contains Follow Up Required, Disposal, Shipping, and Back To Testing; Tables contains Problem Samples and Manage Tables. The **Admin** section is shown only to administrators and contains Customers and Staff Accounts. Settings contains My Account and Logout. Follow Up Required uses a clock icon.
 
 ### Recently Disposed Containers
 
@@ -417,7 +417,7 @@ When creating a problem sample with **Use an existing container**, the form now 
 - Advanced Search stays within the content card width at desktop, tablet, and mobile sizes.
 - Condition fields now shrink safely without overflowing their grid cells.
 - `Between` conditions display two values with an `and` separator; value-less operators show a clear `No value required` placeholder.
-- The fix applies to CS Follow-Up, Dispose Samples, To Be Shipped, To Be Back to Testing, and the shared table Advanced Search styling.
+- The fix applies to Follow Up Required, Dispose Samples, To Be Shipped, To Be Back to Testing, and the shared table Advanced Search styling.
 
 
 ## Advanced Search alignment update
@@ -434,13 +434,13 @@ Images and attachments remain stored with problem samples, but **Email Customer*
 
 Staff-driven changes to existing problem-sample rows require a reason. The detail-page Save Changes action, Dispose Samples bulk action, Shipping bulk action, Back To Testing bulk action, container disposal, and container-disposal undo all prompt for a reason before the change is submitted. The backend also rejects these mutations when no reason is supplied. The reason is stored in the existing ProblemHistory JSON details and displayed in the row History alongside the field changes. System/customer-driven events such as customer acknowledgement and customer-notification confirmation are not prompted for a staff reason.
 
-## CS Follow-Up table selection
+## Follow Up Required table selection
 
-CS Follow-Up is explicitly scoped to a selected Problem Sample Table. The table dropdown uses the real `ProblemTable` relationship, and the queue renders that table's actual columns instead of a fixed set of inferred workflow fields. Basic and Advanced Search are also evaluated against the selected table's real searchable columns. The selected table's follow-up rows remain oldest-first.
+Follow Up Required is explicitly scoped to a selected Problem Sample Table. The table dropdown uses the real `ProblemTable` relationship, and the queue renders that table's actual columns instead of a fixed set of inferred workflow fields. Basic and Advanced Search are also evaluated against the selected table's real searchable columns. The selected table's follow-up rows remain oldest-first.
 
 
 ## Dispose Automatically default
-New problem samples default to **CS Follow-Up** with **Dispose Automatically = No**. The two old automatic-disposal Status values are legacy-only migration inputs and are not selectable Status values.
+New problem samples default to **Follow Up Required** with **Dispose Automatically = No**. The two old automatic-disposal Status values are legacy-only migration inputs and are not selectable Status values.
 
 ## Built-in automatic-disposal countdown
 Every problem-sample table includes the required built-in **Dispose Automatically** Yes/No field and a read-only **Days until up for disposal** column. Changing **Dispose Automatically** from No to Yes starts/restarts the countdown from that moment using the table's Problem Sample Expiration Period. **No** displays **Unknown**. When the deadline is reached, the backend persists **Current Workflow = To be Disposed** and changes **Dispose Automatically = No** while preserving the descriptive Status. A zero-day period performs that transition immediately.
@@ -458,9 +458,9 @@ Staff-driven problem-sample changes use a dedicated modal instead of `window.pro
 ### Customer acknowledgement and notification history
 Customer acknowledgement history entries display **Customer acknowledged problem sample**. Customer-selected routing changes are stored with their before/after values. **Sent an email to the customer** records any field changes caused by confirming the first email; normally that is **Dispose Automatically: No -> Yes** and the newly started countdown. When the countdown later expires, a separate System History event records **Status -> To be Disposed** and **Dispose Automatically -> No**.
 
-## CS Follow-Up quick filters
+## Follow Up Required quick filters
 
-The CS Follow-Up workflow exposes a Quick Filters section for the currently selected real problem-sample table. Each Choice column with configured choices receives an All/value dropdown. Quick filters can be combined with the basic search and Advanced Search and are enforced by the backend follow-up endpoint. The Oldest problem sample requiring follow up indicator follows the current filtered result set, so it always identifies the oldest row remaining after the selected table, basic search, Quick Filters, and Advanced Search are applied.
+The Follow Up Required workflow exposes a Quick Filters section for the currently selected real problem-sample table. Each Choice column with configured choices receives an All/value dropdown. Quick filters can be combined with the basic search and Advanced Search and are enforced by the backend follow-up endpoint. The Oldest problem sample requiring follow up indicator follows the current filtered result set, so it always identifies the oldest row remaining after the selected table, basic search, Quick Filters, and Advanced Search are applied.
 
 
 
@@ -468,7 +468,7 @@ The CS Follow-Up workflow exposes a Quick Filters section for the currently sele
 - Each problem sample row has at most one secure tracking token/link. Once saved, that same link is reused.
 - Workflow expiry leaves the token stored and blocks public access; staff revocation removes the link and invalidates its token permanently.
 - The link expires 30 days after the latest **Current Workflow** transition into To be Disposed, Disposed, To be shipped back to client, Shipped back to client, To be back to testing, or Back to testing.
-- Returning **Current Workflow** to CS Follow-Up clears the active tracking-link expiry.
+- Returning **Current Workflow** to Follow Up Required clears the active tracking-link expiry.
 - Every problem-sample table has read-only built-in Tracking Link and Tracking Link Expiry columns.
 
 ### Required role selection for new accounts
@@ -484,7 +484,7 @@ The canonical migration graph includes `0045_alter_problemsample_acknowledgement
 ### Customer tracking actions
 - Available while the workflow is not complete: Permit immediate disposal, Message us about the issue, or Ship back.
 - Customers may replace an earlier response, including while Current Workflow is **To be Disposed**, **To be shipped back to client**, or **To be back to testing**.
-- **Message us about the issue** returns Current Workflow to **CS Follow-Up**.
+- **Message us about the issue** returns Current Workflow to **Follow Up Required**.
 - Customer responses are locked once Current Workflow is **Disposed**, **Back to testing**, or **Shipped back to client**.
 
 
@@ -518,9 +518,9 @@ Administrators have an **Admin > Email Templates** page. The **Send Tracking Lin
 
 ## Tracking link and customer email controls
 
-Creating a ticket does not create an active tracking link. On the ticket detail page, **Send Tracking Link** prepares a secure URL, opens the tracking email in the staff member's email app, and activates the URL only after **I sent the email** is confirmed. Resending an existing link reuses its token. The first confirmed tracking-link email in **CS Follow-Up** moves the ticket to **Waiting for Customer Response** and may activate Dispose Automatically according to the existing workflow. General **Email Customer** messages do not change Current Workflow, the tracking link, or the customer-notified timestamp.
+Creating a ticket does not create an active tracking link. On the ticket detail page, **Send Tracking Link** prepares a secure URL, opens the tracking email in the staff member's email app, and activates the URL only after **I sent the email** is confirmed. Resending an existing link reuses its token. The first confirmed tracking-link email in **Follow Up Required** moves the ticket to **Waiting for Customer Response** and may activate Dispose Automatically according to the existing workflow. General **Email Customer** messages do not change Current Workflow, the tracking link, or the customer-notified timestamp.
 
-**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. If the ticket is in **Waiting for Customer Response**, revocation returns it to **CS Follow-Up** so it reappears in **Tracking Not Sent**. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. A ticket appears in **Tracking Not Sent** only when its Current Workflow is **CS Follow-Up** and it has no active persisted tracking link. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
+**Revoke Tracking Link** immediately invalidates the current URL for public pages, responses, and file downloads, and records the action in History. If the ticket is in **Waiting for Customer Response**, revocation returns it to **Follow Up Required** so it reappears in **Tracking Not Sent**. Staff may then use **Send Tracking Link** to issue a different token; the old URL remains invalid. A ticket appears in **Tracking Not Sent** only when its Current Workflow is **Follow Up Required** and it has no active persisted tracking link. Existing 30-day workflow expiry rules still apply to links that have not been revoked.
 
 
 ### Client Email clipboard controls
@@ -528,16 +528,16 @@ Creating a ticket does not create an active tracking link. On the ticket detail 
 Client Email fields include per-address **Copy** buttons and a **Copy All** button. Copy All copies every email currently kept in the field as a semicolon-separated recipient list suitable for pasting into Outlook.
 
 
-## CS Follow-Up and fixed Status values
+## Follow Up Required and fixed Status values
 
-Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Workflow from `Follow Up Required` to `CS Follow-Up` and standardizes Status across every table to `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Existing Status values are normalized into that set; unrecognized values become `NEW`.
+Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Workflow from `Follow Up Required` to `Follow Up Required` and standardizes Status across every table to `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Existing Status values are normalized into that set; unrecognized values become `NEW`.
 
 ## Dashboard
 
 The dashboard is grouped into **Action Required** (Tracking Not Sent, New Tracking Link Response, To be shipped, To be back to testing, and Old Tickets) and **Analytics** (all remaining metrics, date-range cards, and charts).
 The Dashboard is tracker-wide across all problem-sample tables. "Opened" means the problem sample row's `created_at` timestamp. It shows rolling counts for the last 24 hours, 7 days, 30 days, 183 days, and 365 days plus an inclusive custom date range. The graph supports week, month, 6 months, year, and custom ranges and uses daily, weekly, or monthly buckets as appropriate. Each opened-ticket count card includes **See samples >**, which opens a paginated cross-table list using the same rolling or custom date window and links each result directly to its ticket.
 
-**Tracking Not Sent** counts tickets across all tables whose Current Workflow is exactly **CS Follow-Up** and which have no persisted `ProblemTrackingLink` row. Pending email tokens do not count as sent links. The Dashboard card links to the Customer Service > Tracking Not Sent page; its selected-table list applies the same database filter before search and quick filters. The former NEW shortcut redirects there.
+**Tracking Not Sent** counts tickets across all tables whose Current Workflow is exactly **Follow Up Required** and which have no persisted `ProblemTrackingLink` row. Pending email tokens do not count as sent links. The Dashboard card links to the Customer Service > Tracking Not Sent page; its selected-table list applies the same database filter before search and quick filters. The former NEW shortcut redirects there.
 
 ## Finished ticket deletion
 
@@ -616,7 +616,7 @@ Administrators have an **Admin → Backup & Restore** page. It can download Data
 
 ### Customer History replies
 
-Staff can reply directly to a customer's “Message us about the issue” History entry. The reply is not saved until staff confirms that the generated customer email was sent. The email contains the original customer message, the staff reply, and a secure tracking link with the customer message modal opened. Confirmed replies move CS Follow-Up tickets to Waiting for Customer Response; the next customer message moves the ticket back into CS Follow-Up through the normal customer-response flow.
+Staff can reply directly to a customer's “Message us about the issue” History entry. The reply is not saved until staff confirms that the generated customer email was sent. The email contains the original customer message, the staff reply, and a secure tracking link with the customer message modal opened. Confirmed replies move Follow Up Required tickets to Waiting for Customer Response; the next customer message moves the ticket back into Follow Up Required through the normal customer-response flow.
 
 ### Customer correspondence chat panel
 

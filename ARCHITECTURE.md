@@ -130,7 +130,7 @@ automatic_disposal_started_at + ProblemTable.pt_days
 `automatic_disposal_started_at` is reset whenever the required built-in `Dispose Automatically` value changes from `No` to `Yes`. The first confirmed customer email normally causes that initial change, so it starts a fresh expiration period; resending the email while automatic disposal is already enabled does not reset it. The container API aggregates sample states into `empty`, `active`, `partially_expired`, or `all_expired`; `all_expired` is true only when the container has at least one sample and every sample is expired.
 
 ### Current Workflow, Status, and container disposal
-`Status` is a required built-in descriptive choice field with six immutable values: `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Routing is owned by a separate required system `ProblemColumn(field_key="current-workflow", column_type="choice")` and the indexed `ProblemSample.current_workflow` mirror. Its immutable values include `CS Follow-Up`, `To be Disposed`, `To be shipped back to client`, `To be back to testing`, `Back to testing`, `Disposed`, and `Shipped back to client`. Automatic-disposal state is separate again in the required system `ProblemColumn(field_key="dispose-automatically")`, whose immutable choices are `Yes` and `No`. Workflow endpoints, queues, public customer actions, container readiness, automatic disposal, and tracking-link expiry read/write Current Workflow instead of descriptive Status. Migration `0065_optional_container_testing_workflow` restores the pending testing choice to existing tables and detaches legacy tickets already in final shipping/testing workflows.
+`Status` is a required built-in descriptive choice field with six immutable values: `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Routing is owned by a separate required system `ProblemColumn(field_key="current-workflow", column_type="choice")` and the indexed `ProblemSample.current_workflow` mirror. Its immutable values include `Follow Up Required`, `To be Disposed`, `To be shipped back to client`, `To be back to testing`, `Back to testing`, `Disposed`, and `Shipped back to client`. Automatic-disposal state is separate again in the required system `ProblemColumn(field_key="dispose-automatically")`, whose immutable choices are `Yes` and `No`. Workflow endpoints, queues, public customer actions, container readiness, automatic disposal, and tracking-link expiry read/write Current Workflow instead of descriptive Status. Migration `0065_optional_container_testing_workflow` restores the pending testing choice to existing tables and detaches legacy tickets already in final shipping/testing workflows.
 
 Container readiness is computed from every attached ticket's persisted **Current Workflow**. At least one ticket must be attached and all attached tickets must be `To be Disposed` or `Disposed`. An expired `Dispose Automatically = Yes` countdown is first persisted as `Current Workflow = To be Disposed` and `Dispose Automatically = No`. `POST /api/problem-containers/{id}/dispose/` is transactional, refuses non-ready/empty containers, captures a JSON rollback snapshot only for `To be Disposed` tickets, changes those tickets to `Disposed`, and stamps `disposed_at`/`disposed_by` on the container. A container with only `Disposed` tickets can be stamped as disposed. `POST /api/problem-containers/{id}/undo-disposal/` restores snapshot-participating tickets, clears the stamp/snapshot, and records History. For legacy disposed containers without a snapshot, the endpoint can fall back to disposal History to recover prior workflow.
 
@@ -139,10 +139,10 @@ Container readiness is computed from every attached ticket's persisted **Current
 An existing problem sample can be moved to another active container or detached by changing or clearing **Container ID** and choosing **Save Changes**. New tickets created through the frontend require a container, while the API permits unassigned tickets. The API validates a supplied ID and records container changes in row History. Completing `Shipped back to client` or `Back to testing` automatically detaches the ticket, both through the detail editor and through the bulk shipping action. A database constraint enforces this for final states; pending shipping/testing tickets remain attached until completed. Samples cannot be moved into or out of a disposed container; undo the container disposal first.
 
 ### Public customer acknowledgement
-`ProblemSample` has an opaque high-entropy tracking token generated with `secrets.token_urlsafe(48)` and an optional `customer_acknowledgement_action`. Public GET/POST endpoints live under `/api/public/problem-sample-tracking/<token>/` with `AllowAny`. When `Current Workflow = CS Follow-Up`, tracking-page choices are driven by the separate `Dispose Automatically` Yes/No field. A due automatic-disposal countdown is persisted as `Current Workflow = To be Disposed` before the public payload is generated; descriptive Status is preserved. The first customer POST records acknowledgement and applies the selected workflow action atomically.
+`ProblemSample` has an opaque high-entropy tracking token generated with `secrets.token_urlsafe(48)` and an optional `customer_acknowledgement_action`. Public GET/POST endpoints live under `/api/public/problem-sample-tracking/<token>/` with `AllowAny`. When `Current Workflow = Follow Up Required`, tracking-page choices are driven by the separate `Dispose Automatically` Yes/No field. A due automatic-disposal countdown is persisted as `Current Workflow = To be Disposed` before the public payload is generated; descriptive Status is preserved. The first customer POST records acknowledgement and applies the selected workflow action atomically.
 
 
-Expired tracking links remain stored but public endpoints reject them after the 30-day window. Revocation explicitly removes the link row so the old token is unusable even if the workflow later returns to CS Follow-Up.
+Expired tracking links remain stored but public endpoints reject them after the 30-day window. Revocation explicitly removes the link row so the old token is unusable even if the workflow later returns to Follow Up Required.
 
 ## Customer-notification acknowledgement credential lifecycle
 
@@ -158,7 +158,7 @@ Acknowledgement tokens are not model defaults. `ProblemSample.acknowledgement_to
 ## Shipping-back and disposal behavior
 
 - Fixed Current Workflow `To be shipped back to client` represents a pending customer return.
-- The public **I want these sample(s) back** action requires a return method: courier account (with account number) or pickup routes to the pending shipping workflow; a request for a shipping quote routes to **CS Follow-Up** instead. Every option, and the courier number when provided, is written to `ProblemHistory.details` and displayed in staff ticket history.
+- The public **I want these sample(s) back** action requires a return method: courier account (with account number) or pickup routes to the pending shipping workflow; a request for a shipping quote routes to **Follow Up Required** instead. Every option, and the courier number when provided, is written to `ProblemHistory.details` and displayed in staff ticket history.
 - `Shipped back to client` samples leave their container when shipping completes.
 - Container disposal checks all attached tickets and changes only `To be Disposed` tickets to `Disposed`.
 
@@ -166,9 +166,9 @@ Acknowledgement tokens are not model defaults. `ProblemSample.acknowledgement_to
 
 The authenticated staff route `/shipping/to-be-shipped` is backed by `GET /api/problem-samples/to-be-shipped/`, which returns a lightweight representation of rows whose Current Workflow is `To be shipped back to client`. `POST /api/problem-samples/bulk-ship-back/` accepts one or more problem-sample UUIDs, locks the selected rows transactionally, verifies that every row is still pending shipment, and changes each to `Shipped back to client`. The action also updates server-controlled Recent Row Modifier columns, invokes the existing acknowledgement-status lifecycle transition, and creates a row History event. A stale selection is rejected as a unit rather than partially updating rows. The frontend supports search, individual selection, and Select all visible.
 
-## CS Follow-Up queue
+## Follow Up Required queue
 
-The Problem Samples navigation includes **CS Follow-Up**, a cross-table oldest-first queue containing only rows whose **Current Workflow** is `CS Follow-Up`.
+The Problem Samples navigation includes **Follow Up Required**, a cross-table oldest-first queue containing only rows whose **Current Workflow** is `Follow Up Required`.
 
 ### Back To Testing notification
 
@@ -176,11 +176,11 @@ Public customer tracking uses a server-generated 48-byte `secrets.token_urlsafe`
 
 The `/to-be-back-to-testing` queue lists tickets whose Current Workflow is `To be back to testing`, using `GET /api/problem-samples/to-be-back-to-testing/`. It uses the same search, advanced filters, selection, and Select all visible controls as `/shipping/to-be-shipped`. Customer requested-information responses enter this pending workflow while retaining their container. `POST /api/problem-samples/bulk-back-to-testing/` locks and validates the entire selected batch before moving tickets to final `Back to testing` and detaching them from containers. A shared NA.EDM email preview requires a sent decision (message and current configured recipient) or a required not-sent reason; the endpoint records each outcome and change in per-ticket History. Single-ticket updates still require the same email decision. `POST /api/problem-samples/{id}/back-to-testing-notification/` records a later confirmed NA.EDM notification. The older `/back-to-testing` endpoint remains available for existing clients.
 
-- CS Follow-Up displays a prominent Oldest problem sample requiring follow up indicator based on the oldest row in the current filtered result set; it refreshes the displayed age every minute and reacts to table selection, basic search, Quick Filters, and Advanced Search.
+- Follow Up Required displays a prominent Oldest problem sample requiring follow up indicator based on the oldest row in the current filtered result set; it refreshes the displayed age every minute and reacts to table selection, basic search, Quick Filters, and Advanced Search.
 
 ## Follow-Up automatic-disposal warning
 
-`ShippingProblemSampleSerializer` exposes `pt_days` and `days_until_automatic_disposal` for queue views. The countdown is only populated while `Dispose Automatically = Yes`; rows with automatic disposal disabled do not have an automatic-disposal timer. Request middleware persists due countdowns as `Current Workflow = To be Disposed`, so overdue rows leave CS Follow-Up and container readiness relies only on persisted Current Workflow.
+`ShippingProblemSampleSerializer` exposes `pt_days` and `days_until_automatic_disposal` for queue views. The countdown is only populated while `Dispose Automatically = Yes`; rows with automatic disposal disabled do not have an automatic-disposal timer. Request middleware persists due countdowns as `Current Workflow = To be Disposed`, so overdue rows leave Follow Up Required and container readiness relies only on persisted Current Workflow.
 
 ## Disposal workspace
 
@@ -195,7 +195,7 @@ The `/to-be-back-to-testing` queue lists tickets whose Current Workflow is `To b
 
 ## Workflow queue search
 
-`frontend/lib/workflowQueueSearch.ts` centralizes normalized workflow-queue text matching and client-side advanced-filter evaluation. `frontend/components/WorkflowQueueAdvancedSearch.tsx` provides the shared Advanced Search UI used by CS Follow-Up, Dispose Samples, To be shipped, and To be back to testing.
+`frontend/lib/workflowQueueSearch.ts` centralizes normalized workflow-queue text matching and client-side advanced-filter evaluation. `frontend/components/WorkflowQueueAdvancedSearch.tsx` provides the shared Advanced Search UI used by Follow Up Required, Dispose Samples, To be shipped, and To be back to testing.
 
 Backend fuzzy search recognizes user-facing Problem ID forms through `problem_number_from_query()` in `backend/problem_samples/search.py`. `GET /api/problem-samples/disposal-browse/` supplies the Dispose Samples candidate set when advanced conditions are used without a basic search query.
 
@@ -212,17 +212,17 @@ Manual staff mutations of an existing ProblemSample require an `X-Change-Reason`
 ## Problem sample creation timestamp
 
 - `ProblemSample.created_at` is the canonical read-only Date Created field.
-- It is displayed in the main problem-sample table, CS Follow-Up, Dispose Samples, To Be Shipped, To Be Back to Testing, and the individual row detail page.
+- It is displayed in the main problem-sample table, Follow Up Required, Dispose Samples, To Be Shipped, To Be Back to Testing, and the individual row detail page.
 - No duplicate date field is stored in `custom_values`; the existing model timestamp is used.
 
-### CS Follow-Up table scoping
+### Follow Up Required table scoping
 
 `GET/POST /api/problem-samples/follow-up-required/` requires a real ProblemTable id (`table`). GET supports the basic `q` search; POST supports the table-schema Advanced Search payload. Both paths restrict candidates to the selected table relation and then to follow-up workflow states. The frontend loads `/problem-tables/`, presents an explicit table selector, and renders `selectedTable.columns` directly.
 
 
 ## Halted automatic disposal default
 
-New problem samples default to `Status = CS Follow-Up` and `Dispose Automatically = No`. Migration `0049_dispose_automatically_and_custom_statuses.py` maps legacy `Automatically Disposed`/`Halted Automatic Disposal` rows into the new dedicated Yes/No field.
+New problem samples default to `Status = Follow Up Required` and `Dispose Automatically = No`. Migration `0049_dispose_automatically_and_custom_statuses.py` maps legacy `Automatically Disposed`/`Halted Automatic Disposal` rows into the new dedicated Yes/No field.
 
 - `Days until up for disposal` is a system `ProblemColumn` (`system-days-until-automatic-disposal`, position 2) computed from `ProblemSample.days_until_automatic_disposal`; it is read-only and follows `Status` in every table.
 
@@ -246,7 +246,7 @@ The public problem sample tracking endpoint writes a `ProblemHistory` action of 
 
 The `customer-notification-sent` action stores visible row changes in `ProblemHistory.details.changes`. The first confirmed email normally records `Dispose Automatically: No -> Yes` and the newly started countdown. A later automatic deadline creates a separate System history event for `Status -> To be Disposed` and `Dispose Automatically -> No`.
 
-### CS Follow-Up quick filters
+### Follow Up Required quick filters
 
 `frontend/app/follow-up-required/page.tsx` derives Quick Filters from the selected `ProblemTable.columns`, limited to Choice columns with configured choices. Active values are submitted as `quick_filters` to `POST /problem-samples/follow-up-required/` whenever quick or advanced filters are active. `ProblemSampleViewSet.follow_up_required` passes those conditions into the shared `advanced_search_problem_samples` implementation, keeping table scoping and workflow-status filtering server-side.
 
@@ -266,7 +266,7 @@ Regular new accounts with no workflow role still receive the required first-logi
 - Descriptive Status changes do not start/reset tracking-link expiry.
 - Every problem-sample table has read-only built-in Tracking Link and Tracking Link Expiry columns.
 
-- Returning a problem sample's **Current Workflow** to CS Follow-Up clears the active tracking-link expiry and makes the same persistent tracking link accessible again.
+- Returning a problem sample's **Current Workflow** to Follow Up Required clears the active tracking-link expiry and makes the same persistent tracking link accessible again.
 
 ### Required first-login role gate
 `AppShell` renders `RequiredRoleModal` whenever `/api/auth/me/` reports `needs_role=true`. The modal blocks the protected portal with no dismiss action until the user explicitly selects Lab or Customer Service and the PATCH to `/api/auth/me/` succeeds. Existing role-bearing accounts bypass the gate.
@@ -282,7 +282,7 @@ Regular new accounts with no workflow role still receive the required first-logi
 ### Customer tracking actions by follow-up status
 - Available actions are **Permit immediate disposal**, **Message us about the issue**, and **Ship back**.
 - An existing customer response remains editable in active and intermediate queue workflows, including **To be Disposed**, **To be shipped back to client**, and **To be back to testing**.
-- **Message us about the issue** returns Current Workflow to **CS Follow-Up**.
+- **Message us about the issue** returns Current Workflow to **Follow Up Required**.
 - Submitting any customer response turns `Dispose Automatically` off.
 - Once Current Workflow is **Disposed**, **Back to testing**, or **Shipped back to client**, both the UI and public POST endpoint reject further response changes.
 
@@ -319,9 +319,9 @@ The root problem-sample table page renders its search-param-dependent content th
 `problem_samples.NotificationRecipient` stores the NA.EDM address (default `NAEDM.DE@ALSGlobal.com`). `/api/email-templates/edmonton-recipient/` allows authenticated staff to read it and administrators to change it. The new-ticket customer email includes this address; the customer email body uses `{{na_edm_email}}`; and the Back to Testing email preview loads it on opening. Confirming a sent Back to Testing email requires the same active address, preventing a stale preview from recording a different destination. Migration `0060_notification_recipient` upgrades the previously saved default customer email template to use the placeholder.
 
 
-## CS Follow-Up and fixed Status values
+## Follow Up Required and fixed Status values
 
-Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Workflow from `Follow Up Required` to `CS Follow-Up` and standardizes Status across every table to `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Existing Status values are normalized into that set; unrecognized values become `NEW`.
+Migration `0052_cs_follow_up_and_fixed_statuses` renames the default Current Workflow from `Follow Up Required` to `Follow Up Required` and standardizes Status across every table to `NEW`, `IN PROGRESS`, `ON HOLD`, `SHIPPED BACK TO CLIENT`, `DISPOSED`, and `COMPLETED`. Existing Status values are normalized into that set; unrecognized values become `NEW`.
 
 ### Ticket-table Image Search
 

@@ -36,7 +36,7 @@ class DashboardReadyContainerTests(TestCase):
 
         blocked = ProblemContainer.objects.create()
         self.sample(blocked, PROBLEM_STATUS_TO_BE_DISPOSED)
-        self.sample(blocked, 'CS Follow-Up')
+        self.sample(blocked, 'Follow Up Required')
 
         ProblemContainer.objects.create()  # Empty containers never qualify.
 

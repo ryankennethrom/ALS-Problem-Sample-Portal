@@ -30,7 +30,7 @@ class ActionRequiredUpdateEmailTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(self.sender)
 
-    def create_ticket(self, table, number, workflow='CS Follow-Up'):
+    def create_ticket(self, table, number, workflow='Follow Up Required'):
         return ProblemSample.objects.create(table=table, problem_number=number, current_workflow=workflow)
 
     def prepare(self, recipients, message=''):

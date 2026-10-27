@@ -16,8 +16,8 @@ from accounts.models import Lab
 
 # Current Workflow is the authoritative system routing field. Its values are
 # immutable because disposal, shipping, back-to-testing, tracking-link, and
-# CS follow-up queues depend on them.
-CURRENT_WORKFLOW_DEFAULT = 'CS Follow-Up'
+# follow up required queues depend on them.
+CURRENT_WORKFLOW_DEFAULT = 'Follow Up Required'
 CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER = 'Waiting for Customer Response'
 PROBLEM_STATUS_TO_BE_DISPOSED = 'To be Disposed'
 PROBLEM_STATUS_TO_BE_SHIPPED_BACK = 'To be shipped back to client'
@@ -33,7 +33,7 @@ TERMINAL_PROBLEM_STATUSES = [
     PROBLEM_STATUS_SHIPPED_BACK,
 ]
 # Pending action queues are NOT terminal, but are protected against automatic
-# disposal and excluded from the CS follow-up response queues.
+# disposal and excluded from the follow up required response queues.
 ROUTED_PROBLEM_STATUSES = [
     PROBLEM_STATUS_TO_BE_DISPOSED,
     PROBLEM_STATUS_TO_BE_SHIPPED_BACK,
@@ -424,34 +424,41 @@ class ProblemContainer(models.Model):
 
     class Meta:
         ordering = ['-id']
-        constraints = [models.UniqueConstraint(fields=['lab', 'lab_number'], name='unique_container_number_per_lab')]
+        constraints = [models.UniqueConstraint(fields=['lab', 'is_dumping', 'lab_number'], name='unique_container_number_per_lab_and_type')]
 
     @property
     def container_id(self):
-        return f'{self.lab.code} PC-{self.lab_number:05d}' if self.lab_id and self.lab_number else f'PC-{self.id:06d}'
+        prefix = 'DC' if self.is_dumping else 'PC'
+        return (f'{self.lab.code} {prefix}-{self.lab_number:05d}'
+                if self.lab_id and self.lab_number else f'{prefix}-{self.id:06d}')
 
     @classmethod
     def resolve_identifier(cls, value):
+        """Resolve typed labels; a PC label must never resolve to a DC, or vice versa.
+
+        Unscoped IDs historically mean Edmonton; bare numbers always mean PC.
+        Records created before lab numbering use their database PK as a fallback.
+        """
+        import re
         text = str(value or '').strip().upper()
-        if not text:
+        match = re.fullmatch(r'(?:(?P<lab>[A-Z0-9_-]+)\s+)?(?P<kind>PC|DC)[-\s#]*(?P<number>\d+)', text)
+        if match:
+            code = match.group('lab')
+            dumping = match.group('kind') == 'DC'
+            number = int(match.group('number'))
+        elif text.isdigit():
+            code, dumping, number = None, False, int(text)
+        else:
             return None
-        lab_code = None
-        if ' PC-' in text:
-            lab_code, text = text.split(' PC-', 1)
-        if lab_code and not Lab.objects.filter(code__iexact=lab_code).exists():
-            return None
-        if text.startswith('PC-'):
-            text = text[3:]
-        elif text.startswith('PC'):
-            text = text[2:]
-        text = text.strip().lstrip('#')
-        if not text.isdigit():
-            return None
-        if lab_code:
-            return cls.objects.filter(lab__code__iexact=lab_code, lab_number=int(text)).first()
-        # Legacy unprefixed IDs are only safe to interpret for Edmonton.
+        if code:
+            return cls.objects.filter(lab__code__iexact=code, is_dumping=dumping, lab_number=number).first()
         edmonton = Lab.objects.filter(code='EDM').first()
-        return cls.objects.filter(lab=edmonton, lab_number=int(text)).first() if edmonton else cls.objects.filter(pk=int(text)).first()
+        if edmonton:
+            result = cls.objects.filter(lab=edmonton, is_dumping=dumping, lab_number=number).first()
+            if result:
+                return result
+        # Old, lab-less records display their globally unique PK instead.
+        return cls.objects.filter(lab__isnull=True, pk=number, is_dumping=dumping).first()
 
     def __str__(self):
         return self.container_id

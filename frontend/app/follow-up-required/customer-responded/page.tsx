@@ -49,10 +49,10 @@ export default function CustomerRespondedPage() {
       <h1 className="page-heading" style={{marginBottom: 2}}>New Tracking Link Response</h1>
       <div className="muted table-description">Tickets whose latest history entry by a person is from the customer and whose workflow is eligible.</div>
     </div></div>
-    <nav className="container-view-tabs" aria-label="CS Follow-Up views">
+    <nav className="container-view-tabs" aria-label="Follow Up Required views">
       <Link className="container-view-tab" href="/follow-up-required/tracking-not-sent">Tracking Not Sent</Link>
       <Link className="container-view-tab active" aria-current="page" href="/follow-up-required/customer-responded">New Tracking Link Response</Link>
-      <Link className="container-view-tab" href="/follow-up-required/other">Other</Link>
+      <Link className="container-view-tab" href="/follow-up-required/other">Others</Link>
     </nav>
     <section className="panel panel-blue search-panel" style={{marginBottom: 18}}>
       <form className="search-grid table-search-grid" onSubmit={event => { event.preventDefault(); setPage(1); setQuery(search.trim()); }}>

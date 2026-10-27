@@ -53,7 +53,7 @@ class TerminalTicketCleanupTests(TestCase):
             self.ticket(4, cutoff, 'To be Disposed'),
             self.ticket(5, cutoff, 'To be shipped back to client'),
             self.ticket(6, cutoff, 'To be back to testing'),
-            self.ticket(7, cutoff, 'CS Follow-Up'),
+            self.ticket(7, cutoff, 'Follow Up Required'),
         ]
         newer = self.ticket(8, cutoff + timedelta(days=1), 'Disposed')
 
@@ -124,7 +124,7 @@ class TerminalTicketCleanupTests(TestCase):
         self.assertEqual(changed.data['default_end_date'], old_ticket_end_date(18).isoformat())
         old_day = old_ticket_end_date(18)
         self.ticket(1, old_day, 'Disposed')
-        self.ticket(2, old_day, 'CS Follow-Up')
+        self.ticket(2, old_day, 'Follow Up Required')
         self.ticket(3, old_day + timedelta(days=1), 'Disposed')
         dashboard = self.client.get('/api/dashboard/')
         self.assertEqual(dashboard.status_code, 200)

@@ -37,7 +37,7 @@ INELIGIBLE_WORKFLOWS = list(ROUTED_PROBLEM_STATUSES)
 
 
 def tracking_not_sent_tickets(queryset=None):
-    """CS Follow Up tickets without a persisted customer tracking link."""
+    """Follow Up Required tickets without a persisted customer tracking link."""
     if queryset is None:
         queryset = ProblemSample.objects.all()
     return queryset.filter(
@@ -74,13 +74,13 @@ def _customer_responded_tickets(queryset=None):
 
 
 def customer_service_other_tickets(queryset=None):
-    """CS Follow-Up tickets in neither Tracking Not Sent nor New Tracking Link Response."""
+    """Follow Up Required tickets in neither Tracking Not Sent nor New Tracking Link Response."""
     if queryset is None:
         queryset = ProblemSample.objects.all()
-    # Tracking Not Sent is exactly CS Follow-Up + no persisted tracking link.
+    # Tracking Not Sent is exactly Follow Up Required + no persisted tracking link.
     # Once a link exists, the ticket belongs to New Tracking Link Response only
     # while the latest human history entry is from the customer. Everything
-    # else still in CS Follow-Up belongs to Other.
+    # else still in Follow Up Required belongs to Other.
     return (
         _latest_person_annotated_tickets(queryset)
         .filter(current_workflow=CURRENT_WORKFLOW_DEFAULT, tracking_link_record__isnull=False)
@@ -368,7 +368,7 @@ class ActionRequiredEmailPreviewView(APIView):
         rows = [
             ('Tracking Not Sent', 'tracking_not_sent', '/follow-up-required/tracking-not-sent'),
             ('New Tracking Link Response', 'customer_responded', '/follow-up-required/customer-responded'),
-            ('Other (CS Follow-Up)', 'customer_service_other', '/follow-up-required/other'),
+            ('Others (Follow Up Required)', 'customer_service_other', '/follow-up-required/other'),
             ('To be shipped', 'to_be_shipped', '/shipping/to-be-shipped'),
             ('To be back to testing', 'to_be_back_to_testing', '/to-be-back-to-testing'),
             ('Containers ready to be disposed', 'containers_ready_to_dispose', '/disposal/containers'),

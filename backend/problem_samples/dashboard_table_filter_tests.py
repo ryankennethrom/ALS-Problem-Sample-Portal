@@ -20,7 +20,7 @@ class DashboardTableFilterTests(TestCase):
         self.first = ProblemTable.objects.create(name='First table', is_default=True)
         self.second = ProblemTable.objects.create(name='Second table')
 
-    def ticket(self, table, number, age_days, workflow='CS Follow-Up'):
+    def ticket(self, table, number, age_days, workflow='Follow Up Required'):
         row = ProblemSample.objects.create(
             table=table,
             problem_number=number,

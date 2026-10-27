@@ -36,7 +36,7 @@ class MonthlyDistributorReportTests(TestCase):
         column.refresh_from_db()
         return column.distributor_cc_rules
 
-    def ticket(self, table, number, distributor, year, month, day, workflow='CS Follow-Up'):
+    def ticket(self, table, number, distributor, year, month, day, workflow='Follow Up Required'):
         row = ProblemSample.objects.create(table=table, problem_number=number, current_workflow=workflow,
                                             custom_values={'distributor': distributor})
         created_at = timezone.make_aware(datetime(year, month, day, 12), ZoneInfo('America/Edmonton'))

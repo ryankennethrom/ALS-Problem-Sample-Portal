@@ -12,7 +12,7 @@ class TrackingNotSentDashboardTests(TestCase):
         first = ProblemTable.objects.create(name='First table')
         second = ProblemTable.objects.create(name='Second table')
 
-        def ticket(table, number, workflow='CS Follow-Up'):
+        def ticket(table, number, workflow='Follow Up Required'):
             return ProblemSample.objects.create(
                 table=table, problem_number=number, current_workflow=workflow,
             )
@@ -55,7 +55,7 @@ class TrackingNotSentDashboardTests(TestCase):
         with_link.tracking_link_record.delete()
         self.assertEqual(client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 2)
 
-        waiting.set_workflow_status('CS Follow-Up')
+        waiting.set_workflow_status('Follow Up Required')
         waiting.save(update_fields=['current_workflow', 'custom_values'])
         self.assertEqual(client.get('/api/dashboard/').data['counts']['tracking_not_sent'], 3)
 
@@ -68,13 +68,13 @@ class CustomerServiceOtherQueueTests(TestCase):
         table = ProblemTable.objects.create(name='Customer Service queues')
 
         tracking_not_sent = ProblemSample.objects.create(
-            table=table, problem_number=1, current_workflow='CS Follow-Up',
+            table=table, problem_number=1, current_workflow='Follow Up Required',
         )
         new_response = ProblemSample.objects.create(
-            table=table, problem_number=2, current_workflow='CS Follow-Up',
+            table=table, problem_number=2, current_workflow='Follow Up Required',
         )
         other = ProblemSample.objects.create(
-            table=table, problem_number=3, current_workflow='CS Follow-Up',
+            table=table, problem_number=3, current_workflow='Follow Up Required',
         )
         waiting = ProblemSample.objects.create(
             table=table, problem_number=4, current_workflow='Waiting for Customer Response',

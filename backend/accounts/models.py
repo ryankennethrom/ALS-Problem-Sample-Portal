@@ -10,6 +10,7 @@ class Lab(models.Model):
     name = models.CharField(max_length=100, unique=True)
     code = models.CharField(max_length=12, unique=True)
     next_container_number = models.PositiveBigIntegerField(default=1)
+    next_dumping_container_number = models.PositiveBigIntegerField(default=1)
     # Group mentions may use role members or explicit per-lab notification addresses.
     lab_notification_mode = models.CharField(max_length=12, default='addresses')
     lab_notification_emails = models.JSONField(default=list, blank=True)
