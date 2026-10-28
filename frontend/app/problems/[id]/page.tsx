@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
 import ReopenContainerModal from '@/components/ReopenContainerModal';
-import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, findDistributorCCRecipients, invokeCustomerEmail, mailtoForCustomerEmail, prepareCustomerEmail } from '@/lib/customerEmail';
+import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, prepareCustomerEmail } from '@/lib/customerEmail';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import GeneralCustomerEmailModal from '@/components/GeneralCustomerEmailModal';
 import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackToTestingEmailModal';
@@ -55,7 +55,7 @@ type HistoryEntry = {
   actor_name: string;
   created_at: string;
 };
-type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues };
+type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues; brand_cc_recipients?: string[] };
 
 // Only completed workflows require a container when staff reopen the ticket.
 const TERMINAL_WORKFLOWS = new Set([
@@ -123,7 +123,7 @@ export default function Detail() {
   const [historyReplyText, setHistoryReplyText] = useState('');
   const [preparingHistoryReply, setPreparingHistoryReply] = useState(false);
   const [savingHistoryReply, setSavingHistoryReply] = useState(false);
-  const [historyReplyEmailDraft, setHistoryReplyEmailDraft] = useState<{ historyId:number; reply:string; email:CustomerHistoryReplyEmail; confirmationToken:string; launchedAt:number } | null>(null);
+  const [historyReplyEmailDraft, setHistoryReplyEmailDraft] = useState<{ historyId:number; reply:string; email:CustomerHistoryReplyEmail; confirmationToken:string } | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -265,19 +265,11 @@ export default function Detail() {
         body: JSON.stringify({ history_id: historyReplyTarget.id, reply }),
         errorMessage: 'Could not prepare customer reply email',
       });
-      const launchedAt = Date.now();
-      // Submit immediately attempts to open the generated message in the staff
-      // member's Outlook webmail. The preview remains available
-      // so they can retry if the browser/OS blocks the first launch.
-      invokeCustomerEmail(mailtoForCustomerEmail({
-        to: preview.email.to, cc: preview.email.cc || [], subject: preview.email.subject, body: preview.email.body,
-      }));
       setHistoryReplyEmailDraft({
         historyId: historyReplyTarget.id,
         reply,
         email: preview.email,
         confirmationToken: preview.confirmation_token,
-        launchedAt,
       });
       setHistoryReplyTarget(null);
     } catch (e) {
@@ -473,9 +465,6 @@ export default function Detail() {
 
   const problem = p;
   const customerEmails = findCustomerEmails(table, customValues);
-  // Use saved Distributor values, just like the backend that records the sent email.
-  // Editing a Distributor without saving must not cause a different CC list in the draft.
-  const generalEmailCC = findDistributorCCRecipients(table, p.custom_values, customerEmails);
   const rowTitle = `Ticket #${problem.problem_number}`;
 
   async function sendTrackingLink() {
@@ -493,6 +482,7 @@ export default function Detail() {
         problemNumber: problem.problem_number,
         tableName: problem.table_name,
         trackingUrl: credentials.tracking_url,
+        cc: problem.brand_cc_recipients || [],
         problemTypePrompts: problem.problem_type_prompts || [],
       };
       const draft = await prepareCustomerEmail(customerEmails, emailContext);
@@ -846,7 +836,7 @@ export default function Detail() {
       </div>
     </div>}
 
-    {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} launchedAt={historyReplyEmailDraft.launchedAt} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
+    {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
 
     {changeContainerOpen && <ReopenContainerModal
       purpose="change"
@@ -869,8 +859,8 @@ export default function Detail() {
 
     {changeReasonModal}
 
-    {pendingEmailLaunch && <CustomerEmailModal content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
-    {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} ccRecipients={generalEmailCC} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
+    {pendingEmailLaunch && <CustomerEmailModal autoStart content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
+    {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
     {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} showRackReminder={testingEmailDraft.mode === 'transition'} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
     {mentionEmailDraft && <MentionEmailModal emails={mentionEmailDraft.emails} onComplete={() => saveComment(mentionEmailDraft.body, mentionEmailDraft.confirmationToken).catch(() => {})} onCancel={() => setMentionEmailDraft(null)} busy={savingMentionComment} error={error} />}
   </div>;

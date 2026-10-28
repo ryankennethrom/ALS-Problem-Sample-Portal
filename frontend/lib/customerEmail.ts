@@ -1,4 +1,4 @@
-import { CustomValues, displayCustomValue, ProblemTable, DistributorCCRule } from '@/lib/problemTables';
+import { CustomValues, displayCustomValue, ProblemTable, BrandCCRule } from '@/lib/problemTables';
 import { api } from '@/lib/api';
 
 export type ProblemTypePrompt = {column: string; choice: string; message: string};
@@ -76,8 +76,8 @@ function findCustomerEmailColumns(table: ProblemTable | null | undefined) {
   return table.columns.filter(column => column.column_type === 'client_email' || column.column_type === 'email');
 }
 
-/** Case-insensitive Distributor name matching; * and ? work in wildcard mode. */
-export function distributorNameMatches(value: string, rule: DistributorCCRule): boolean {
+/** Case-insensitive Brand name matching; * and ? work in wildcard mode. */
+export function brandNameMatches(value: string, rule: BrandCCRule): boolean {
   const name = value.trim().toLocaleLowerCase();
   const pattern = (rule.pattern || '').trim().toLocaleLowerCase();
   if (!name || !pattern) return false;
@@ -95,15 +95,15 @@ export function distributorNameMatches(value: string, rule: DistributorCCRule): 
   }
 }
 
-/** Combine all matching Distributor-column rules; never add the To contact again in CC. */
-export function findDistributorCCRecipients(table: ProblemTable | null | undefined, values: CustomValues, to: string[] = []): string[] {
+/** Synchronous direct-Brand fallback; company Brands come from server-resolved CC. */
+export function findBrandCCRecipients(table: ProblemTable | null | undefined, values: CustomValues, to: string[] = []): string[] {
   const exclude = new Set(to.map(email => email.trim().toLowerCase()));
   const recipients: string[] = [];
   for (const column of table?.columns || []) {
-    if (column.column_type !== 'distributor') continue;
-    const name = String(values[column.field_key] ?? column.default_value ?? '');
-    for (const rule of column.distributor_cc_rules || []) {
-      if (!distributorNameMatches(name, rule)) continue;
+    if (column.column_type !== 'brand') continue;
+    const brand = String(values[column.field_key] ?? '');
+    for (const rule of column.brand_cc_rules || []) {
+      if (rule.pending_brand_review || !(rule.sources || ['ticket']).includes('ticket') || !brandNameMatches(brand, rule)) continue;
       for (const raw of rule.cc_emails || []) {
         const address = raw.trim();
         if (address && !exclude.has(address.toLowerCase())) {
@@ -190,9 +190,11 @@ export function buildCustomerEmailContent(
   const recipientList = normalizeEmails(email);
   const additionalTo = normalizeEmails(context.additionalTo || []);
   const toRecipients = normalizeEmails([...recipientList, ...additionalTo]);
+  // Brand CC rules apply only when preparing a tracking-link email (new or
+  // resent). Ordinary correspondence must never acquire automatic Brand CC.
   const ccRecipients = normalizeEmails([
     ...normalizeEmails(context.cc || []),
-    ...findDistributorCCRecipients(context.table, context.values || {}, toRecipients),
+    ...(context.trackingUrl ? findBrandCCRecipients(context.table, context.values || {}, toRecipients) : []),
   ]).filter(address => !toRecipients.some(to => to.toLowerCase() === address.toLowerCase()));
   const multipleCustomerContacts = recipientList.length > 1;
 
@@ -355,21 +357,22 @@ export function outlookWebDraftForMailto(mailto: string): OutlookWebDraft {
   };
 }
 
-/** Launches the registered mailto handler; with Outlook Webmail registered, CC
- * and all other fields can be passed without a Microsoft deep-link URL. */
+/** Launch the registered mailto handler directly from the Send Email click.
+ * Longer drafts launch with safe-length fields and expose their omitted content
+ * in a non-blocking copy notice. Never open a second modal for a normal draft.
+ */
 export function invokeCustomerEmail(mailto: string): void {
   const draft = outlookWebDraftForMailto(mailto);
-  // Warn BEFORE launching a shortened draft so nobody mistakes the partial
-  // email for a complete one. Short drafts open directly even with Cc.
-  if (!draft.manualBody) {
-    const link = document.createElement('a');
-    link.href = draft.link;
-    link.style.display = 'none';
-    document.body.appendChild(link);
+  const link = document.createElement('a');
+  link.href = draft.link;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  try {
     link.click();
+  } finally {
     link.remove();
   }
-  // Always keep a full copy in the tracker. Browsers and mail clients can
-  // ignore mailto fields, or may not have Outlook registered as the handler.
+  // This event is used ONLY to display missing content for oversized mailto
+  // URLs. Short drafts reset any old warning and show nothing additional.
   window.dispatchEvent(new CustomEvent<OutlookWebDraft>(OUTLOOK_EMAIL_FALLBACK_EVENT, { detail: draft }));
 }

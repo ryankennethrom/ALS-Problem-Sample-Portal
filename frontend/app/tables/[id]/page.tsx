@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
+import { api, activeLabCode } from '@/lib/api';
 import { queueToastForReload } from '@/lib/toast';
-import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable, MaskFieldState, ProblemTypeRules, DistributorCCRule } from '@/lib/problemTables';
+import { COLUMN_TYPES, ColumnType, GroupRole, GroupUser, IntercolumnRule, IntercolumnRuleDirection, ProblemColumn, ProblemTable, MaskFieldState, ProblemTypeRules, BrandCCRule } from '@/lib/problemTables';
 import DistributorAutocomplete from '@/components/DistributorAutocomplete';
 import EndUserAutocomplete from '@/components/EndUserAutocomplete';
 import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
@@ -350,37 +350,88 @@ function MaskRulesEditor({
   </div>;
 }
 
-function DistributorCCRulesEditor({ rules, onChange, columnId, savedRules }: {
-  rules: DistributorCCRule[];
-  onChange: (rules: DistributorCCRule[]) => void;
+function BrandCompanyDependencies({ columns, selected, onChange }: {columns: ProblemColumn[]; selected: string[]; onChange: (ids: string[]) => void}) {
+  const available = columns.filter(col => col.column_type === 'distributor' || col.column_type === 'end_user');
+  return <div className="field" style={{gridColumn:'1 / -1'}}>
+    <label>Other Company fields to check their Brand</label>
+    <div className="muted result-meta">Select the ticket's Distributor and/or End User fields. Each company's Brand is looked up by exact company name and type in the current Customer Export. Missing companies do not match.</div>
+    {available.length ? available.map(col => <label className="check-label" key={col.id}>
+      <input type="checkbox" checked={selected.includes(col.id)} onChange={e => onChange(e.target.checked ? [...selected, col.id] : selected.filter(id => id !== col.id))} />
+      {col.name} ({col.column_type === 'distributor' ? 'Distributor' : 'End User'})
+    </label>) : <div className="muted result-meta">Add a Distributor or End User column to use company Brand dependencies.</div>}
+  </div>;
+}
+
+function BrandCCRulesEditor({ rules, onChange, dependencies, columns, columnId, savedRules }: {
+  rules: BrandCCRule[];
+  onChange: (rules: BrandCCRule[]) => void;
+  dependencies: string[];
+  columns: ProblemColumn[];
   columnId?: string;
-  savedRules?: DistributorCCRule[];
+  savedRules?: BrandCCRule[];
 }) {
   const router = useRouter();
   const [sendingRule, setSendingRule] = useState<string | null>(null);
   const [reportError, setReportError] = useState('');
-  const update = (index: number, changes: Partial<DistributorCCRule>) =>
+  const [labSelectionRule, setLabSelectionRule] = useState<BrandCCRule | null>(null);
+  const [labs, setLabs] = useState<{id:number;name:string;code:string}[]>([]);
+  const [loadingLabs, setLoadingLabs] = useState(false);
+  const [allLabs, setAllLabs] = useState(false);
+  const [selectedLabIds, setSelectedLabIds] = useState<number[]>([]);
+  const update = (index: number, changes: Partial<BrandCCRule>) =>
     onChange(rules.map((rule, i) => i === index ? { ...rule, ...changes } : rule));
 
-  const isSaved = (rule: DistributorCCRule) => {
+  const isSaved = (rule: BrandCCRule) => {
     if (!columnId || !rule.id) return false;
     const saved = (savedRules || []).find(item => item.id === rule.id);
     return Boolean(saved && saved.send_monthly_reports &&
       saved.match_type === rule.match_type && saved.pattern === rule.pattern &&
+      !rule.pending_brand_review && !saved.pending_brand_review &&
+      JSON.stringify(saved.sources || ['ticket']) === JSON.stringify(rule.sources || ['ticket']) &&
       JSON.stringify(saved.cc_emails || []) === JSON.stringify((rule.cc_emails || []).filter(Boolean)));
   };
 
-  async function sendNow(rule: DistributorCCRule) {
+  async function openMonthlyLabPicker(rule: BrandCCRule) {
+    if (!isSaved(rule) || sendingRule) return;
+    if (activeLabCode() !== 'ALL') {
+      await sendNow(rule);
+      return;
+    }
+    setReportError('');
+    setSelectedLabIds([]);
+    setAllLabs(false);
+    setLabSelectionRule(rule);
+    setLoadingLabs(true);
+    try {
+      const available: {id:number;name:string;code:string}[] = await api('/auth/labs/');
+      setLabs(Array.isArray(available) ? available : []);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Could not load labs.');
+      setLabSelectionRule(null);
+    } finally {
+      setLoadingLabs(false);
+    }
+  }
+
+  async function sendNow(rule: BrandCCRule, selection?: {all_labs: boolean; lab_ids?: number[]}) {
     if (!columnId || !rule.id || !isSaved(rule) || sendingRule) return;
+    if (activeLabCode() === 'ALL' && (!selection || (!selection.all_labs && !selection.lab_ids?.length))) {
+      setReportError('Select at least one lab or All Labs.');
+      return;
+    }
     setReportError('');
     setSendingRule(rule.id);
     try {
-      const result: {email_id: string} = await api('/system-emails/queue-now/', {
+      const result: {email_id: string; email_ids?: string[]} = await api('/system-emails/queue-now/', {
         method: 'POST',
-        body: JSON.stringify({column_id: columnId, rule_id: rule.id, request_id: crypto.randomUUID()}),
+        body: JSON.stringify({column_id: columnId, rule_id: rule.id, request_id: crypto.randomUUID(), ...(selection || {})}),
         errorMessage: 'Could not prepare monthly report',
       });
-      router.push(`/send-system-emails?email=${encodeURIComponent(result.email_id)}`);
+      setLabSelectionRule(null);
+      // Multi-lab selections produce one separate pending draft per lab.
+      // Show the entire queue rather than opening just the first draft.
+      if ((result.email_ids || []).length > 1) router.push('/send-system-emails');
+      else router.push(`/send-system-emails?email=${encodeURIComponent(result.email_id)}`);
     } catch (error) {
       setReportError(error instanceof Error ? error.message : 'Could not prepare monthly report.');
     } finally {
@@ -389,20 +440,28 @@ function DistributorCCRulesEditor({ rules, onChange, columnId, savedRules }: {
   }
 
   return <div className="field" style={{gridColumn:'1 / -1'}}>
-    <label>Distributor CC recipients and monthly reports</label>
+    <label>Brand CC recipients and monthly reports</label>
     <div className="muted result-meta" style={{marginBottom:8}}>
-      When this Distributor value matches a rule, add its recipients in Cc of the tracking email draft.
+      When any selected Brand source matches, add its recipients in Cc only when sending a tracking link (new tickets or tracking-link resends). Regular customer emails do not automatically CC these recipients.
       Rules are case-insensitive; all matching rules are combined, with duplicates removed.
-      Wildcards: * matches any characters; ? matches one character. Enable Send Monthly Reports to queue a monthly summary for these same recipients, filtered to matching Distributor tickets. Reports are reviewed and sent manually under Send System Emails.
+      Wildcards: * matches any characters; ? matches one character. Enable Send Monthly Reports to queue a monthly summary for these same recipients, filtered to matching Brand tickets. A migrated Distributor rule is inactive until an admin reviews its new Brand filter and saves this column. Reports are reviewed and sent manually under Send System Emails.
     </div>
     <div className="stack">
       {rules.map((rule, i) => <div className="intercolumn-rule-card stack" key={i}>
+        {rule.pending_brand_review && <div className="error">Migrated Distributor-name rule: its pattern previously matched the company name, not its Brand. Review the Brand pattern and selected sources, then save this column to activate it. It is temporarily inactive to prevent incorrect CC emails.</div>}
         <div className="intercolumn-rule-header"><strong>CC rule {i + 1}</strong>
           <button className="button danger" type="button" onClick={() => onChange(rules.filter((_, j) => j !== i))}>Remove</button>
         </div>
         <div className="intercolumn-rule-grid">
-          <div className="field"><label htmlFor={`distributor-rule-mode-${i}`}>Match type</label>
-            <select id={`distributor-rule-mode-${i}`} className="select" value={rule.match_type} onChange={e => update(i, {match_type: e.target.value as DistributorCCRule['match_type']})}>
+          <div className="field" style={{gridColumn:'1 / -1'}}>
+            <label>Match any of these Brand sources (OR)</label>
+            {[{id:'ticket',name:'Ticket Brand'}, ...columns.filter(col => dependencies.includes(col.id)).map(col => ({id:col.id,name:`Brand of ${col.name}`}))].map(source => <label key={source.id} className="check-label">
+              <input type="checkbox" checked={(rule.sources || ['ticket']).includes(source.id)} onChange={e => update(i, {sources: e.target.checked ? [...(rule.sources || ['ticket']), source.id] : (rule.sources || ['ticket']).filter(id => id !== source.id)})}/>
+              {source.name}
+            </label>)}
+          </div>
+          <div className="field"><label htmlFor={`brand-rule-mode-${i}`}>Match type</label>
+            <select id={`brand-rule-mode-${i}`} className="select" value={rule.match_type} onChange={e => update(i, {match_type: e.target.value as BrandCCRule['match_type']})}>
               <option value="exact">Exactly equals</option>
               <option value="contains">Contains</option>
               <option value="starts_with">Starts with</option>
@@ -410,12 +469,12 @@ function DistributorCCRulesEditor({ rules, onChange, columnId, savedRules }: {
               <option value="wildcard">Wildcard (* and ?)</option>
             </select>
           </div>
-          <div className="field"><label htmlFor={`distributor-rule-pattern-${i}`}>Distributor pattern</label>
-            <input id={`distributor-rule-pattern-${i}`} className="input" maxLength={160} value={rule.pattern} onChange={e => update(i, {pattern: e.target.value})} placeholder="e.g. Acme*" />
+          <div className="field"><label htmlFor={`brand-rule-pattern-${i}`}>Brand pattern</label>
+            <input id={`brand-rule-pattern-${i}`} className="input" maxLength={160} value={rule.pattern} onChange={e => update(i, {pattern: e.target.value})} placeholder="e.g. Acme*" />
           </div>
         </div>
-        <div className="field"><label htmlFor={`distributor-rule-cc-${i}`}>CC email addresses (one per line)</label>
-          <textarea id={`distributor-rule-cc-${i}`} className="textarea compact-textarea" rows={3} value={(rule.cc_emails || []).join('\n')}
+        <div className="field"><label htmlFor={`brand-rule-cc-${i}`}>CC email addresses (one per line)</label>
+          <textarea id={`brand-rule-cc-${i}`} className="textarea compact-textarea" rows={3} value={(rule.cc_emails || []).join('\n')}
             onChange={e => update(i, {cc_emails: e.target.value.split(/[\n;,]+/).map(x => x.trim())})}
             placeholder={'support@example.com\nmanager@example.com'} />
         </div>
@@ -425,14 +484,45 @@ function DistributorCCRulesEditor({ rules, onChange, columnId, savedRules }: {
         </label>
         {rule.send_monthly_reports && <div className="stack" style={{gap:8}}>
           <div className="muted result-meta">On the 1st of each month, queue one report for the prior calendar month. To send immediately, prepare a month-to-date report (from the 1st through today), then review and send it in Send System Emails.</div>
-          <div><button type="button" className="button secondary" disabled={!isSaved(rule) || Boolean(sendingRule)} onClick={() => void sendNow(rule)}>
-            {sendingRule === rule.id ? 'Preparing report…' : 'Send Monthly Report Now'}
+          <div><button type="button" className="button secondary" disabled={!isSaved(rule) || Boolean(sendingRule)} onClick={() => void openMonthlyLabPicker(rule)}>
+            {sendingRule === rule.id ? 'Preparing report…' : 'Send Monthly Email Now'}
           </button></div>
-          {!isSaved(rule) && <div className="muted result-meta">Save this Distributor column and its CC rules before generating a report.</div>}
+          {!isSaved(rule) && <div className="muted result-meta">Save this Brand column and its CC rules before generating a report.</div>}
         </div>}
       </div>)}
-      {reportError && <p className="error" role="alert">{reportError}</p>}
-      {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {match_type:'contains', pattern:'', cc_emails:[], send_monthly_reports:false}])}>+ Add CC rule</button></div>}
+      {labSelectionRule && <div className="change-reason-overlay" role="presentation" onMouseDown={event => {
+        if (event.target === event.currentTarget && !sendingRule) setLabSelectionRule(null);
+      }}>
+        <section className="change-reason-dialog" role="dialog" aria-modal="true" aria-labelledby="monthly-lab-selection-title" style={{maxHeight:'85vh',overflowY:'auto'}}>
+          <h2 id="monthly-lab-selection-title">Send Monthly Email Now — Choose Labs</h2>
+          <p className="change-reason-copy">Choose the labs to include. The app will prepare a separate month-to-date email for each selected lab. Emails remain pending for staff review and sending.</p>
+          {loadingLabs ? <p className="muted">Loading labs…</p> : <fieldset className="field" disabled={Boolean(sendingRule)}>
+            <legend>Report labs</legend>
+            <label className="check-label" style={{fontWeight:600}}>
+              <input type="checkbox" checked={allLabs} onChange={event => {
+                setAllLabs(event.target.checked);
+                if (event.target.checked) setSelectedLabIds([]);
+              }} /> All Labs ({labs.length})
+            </label>
+            {!labs.length && <p className="muted">No labs available.</p>}
+            {labs.map(lab => <label className="check-label" key={lab.id}>
+              <input type="checkbox" disabled={allLabs} checked={allLabs || selectedLabIds.includes(lab.id)} onChange={event =>
+                setSelectedLabIds(current => event.target.checked ? [...current, lab.id] : current.filter(id => id !== lab.id))
+              } /> {lab.name} ({lab.code})
+            </label>)}
+          </fieldset>}
+          {reportError && <p className="error" role="alert">{reportError}</p>}
+          <div className="change-reason-actions">
+            <button type="button" className="button secondary" disabled={Boolean(sendingRule)} onClick={() => setLabSelectionRule(null)}>Cancel</button>
+            <button type="button" className="button" disabled={loadingLabs || Boolean(sendingRule) || !labs.length || (!allLabs && !selectedLabIds.length)}
+              onClick={() => void sendNow(labSelectionRule, allLabs ? {all_labs:true} : {all_labs:false, lab_ids:selectedLabIds})}>
+              {sendingRule ? 'Preparing reports…' : `Prepare ${allLabs ? labs.length : selectedLabIds.length} report(s)`}
+            </button>
+          </div>
+        </section>
+      </div>}
+      {reportError && !labSelectionRule && <p className="error" role="alert">{reportError}</p>}
+      {rules.length < 30 && <div><button type="button" className="button secondary" onClick={() => onChange([...rules, {sources:['ticket'], match_type:'contains', pattern:'', cc_emails:[], send_monthly_reports:false}])}>+ Add CC rule</button></div>}
     </div>
   </div>;
 }
@@ -447,7 +537,12 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
   const [dependencyIds, setDependencyIds] = useState<string[]>(column.client_email_dependencies || (column.depends_on_column ? [column.depends_on_column] : []));
   const [intercolumnRules, setIntercolumnRules] = useState<IntercolumnRule[]>(column.intercolumn_rules || []);
   const [maskRules, setMaskRules] = useState<ProblemTypeRules>(column.form_mask_rules || {});
-  const [distributorCCRules, setDistributorCCRules] = useState<DistributorCCRule[]>(column.distributor_cc_rules || []);
+  const [brandCCRules, setBrandCCRules] = useState<BrandCCRule[]>(column.brand_cc_rules || []);
+  const [companyBrandDependencies, setCompanyBrandDependencies] = useState<string[]>(column.company_brand_dependencies || []);
+  useEffect(() => {
+    setBrandCCRules(column.brand_cc_rules || []);
+    setCompanyBrandDependencies(column.company_brand_dependencies || []);
+  }, [column.brand_cc_rules, column.company_brand_dependencies]);
   const [required, setRequired] = useState(column.required);
   const [searchable, setSearchable] = useState(column.searchable);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(column.include_in_customer_notification);
@@ -480,7 +575,8 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
         intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
         form_mask_rules: type === 'problem_type' ? Object.fromEntries(Object.entries(maskRules).filter(([choice]) => choiceList.includes(choice))) : {},
-        distributor_cc_rules: type === 'distributor' ? distributorCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
+        company_brand_dependencies: type === 'brand' ? companyBrandDependencies : [],
+        brand_cc_rules: type === 'brand' ? brandCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
         default_value: (type === 'row_creator' || type === 'recent_row_modifier' || type === 'date_today') ? null : (type === 'client_email' && dependencyIds.length ? null : normalizeDefault(type, defaultValue)),
       }), successMessage:'Column updated successfully.', errorMessage:'Could not update column'});
       await onChanged();
@@ -502,7 +598,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
     setDependencyIds([]);
     if (next !== 'intercolumn_controller') setIntercolumnRules([]);
     if (next !== 'problem_type') setMaskRules({});
-    if (next !== 'distributor') setDistributorCCRules([]);
+    if (next !== 'brand') { setBrandCCRules([]); setCompanyBrandDependencies([]); }
   }
 
   return <div className="column-editor">
@@ -515,11 +611,14 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       {type === 'problem_type' && <MaskRulesEditor choices={choiceList} rules={maskRules} onChange={setMaskRules} columns={allColumns} excludeId={column.id} />}
-      {type === 'distributor' && <DistributorCCRulesEditor rules={distributorCCRules} onChange={setDistributorCCRules} columnId={column.id} savedRules={column.distributor_cc_rules || []} />}
+      {type === 'brand' && <>
+        <BrandCompanyDependencies columns={allColumns} selected={companyBrandDependencies} onChange={next => {setCompanyBrandDependencies(next); setBrandCCRules(rules => rules.map(rule => ({...rule, sources: (rule.sources || ['ticket']).filter(source => source === 'ticket' || next.includes(source))})));}} />
+        <BrandCCRulesEditor rules={brandCCRules} onChange={setBrandCCRules} dependencies={companyBrandDependencies} columns={allColumns} columnId={column.id} savedRules={column.brand_cc_rules || []} />
+      </>}
       <DefaultValueField type={type} choices={choiceList} value={defaultValue} onChange={setDefaultValue} idSuffix={column.id} groupRole={groupRole} dependencyConfigured={type === 'client_email' && dependencyIds.length > 0} />
       <div className="column-flags"><label className="check-label"><input type="checkbox" checked={type === 'fixed' ? true : (type === 'row_creator' || type === 'recent_row_modifier') ? false : required} disabled={type === 'fixed' || type === 'row_creator' || type === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required</label><label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include in search</label><label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer email</label></div>
     </div>
-    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'date_today' ? 'Editable like a normal Date field. New tickets start with the current date automatically; changing this column setting does not overwrite existing valid dates.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is Distributor. Suggestions do not restrict what can be saved.' : type === 'end_user' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is End User. Suggestions do not restrict what can be saved.' : type === 'brand' ? 'Each row uses fuzzy autocomplete against distinct Brand values in the current Customer Export.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
+    <div className="muted result-meta" style={{marginTop:6}}>{type === 'fixed' ? 'This value is read-only on rows. Changing it here updates every existing row in this table.' : type === 'row_creator' ? 'Read-only on rows. The server stores the email of the user who originally created each row, and that value cannot be changed later.' : type === 'recent_row_modifier' ? 'Read-only on rows. The server shows the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link.' : type === 'date_today' ? 'Editable like a normal Date field. New tickets start with the current date automatically; changing this column setting does not overwrite existing valid dates.' : type === 'intercolumn_controller' ? 'This field stores a normal text value and can automatically set or be set by another supported field according to the rules above.' : type === 'group' ? 'Each row can select one user who currently belongs to the configured group.' : type === 'distributor' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is Distributor. Suggestions do not restrict what can be saved.' : type === 'end_user' ? 'Free-text field with fuzzy suggestions from companies whose CoyType is End User. Suggestions do not restrict what can be saved.' : type === 'brand' ? 'Match this ticket Brand and optionally the imported Brand of a Distributor or End User for CC and monthly reports.' : type === 'client_email' ? (dependencyIds.length ? 'The row loads the active dependency company’s emails into a selectable list. Users can keep/delete selected addresses, clear all, add an email, and fuzzy-filter the list.' : 'Client Email is a multi-address list. Without dependencies, fuzzy search can discover imported emails and Keep Selected stores the chosen addresses.') : 'The default is used for newly created rows. Changing it here does not overwrite existing row values.'}</div>
     <div className="column-actions"><button className="button secondary" onClick={save} disabled={busy}>Save</button><button className="button danger" onClick={remove} disabled={busy}>Delete</button></div>
   </div>;
 }
@@ -542,7 +641,8 @@ export default function TableSettings() {
   const [colDependencyIds, setColDependencyIds] = useState<string[]>([]);
   const [colIntercolumnRules, setColIntercolumnRules] = useState<IntercolumnRule[]>([]);
   const [colMaskRules, setColMaskRules] = useState<ProblemTypeRules>({});
-  const [colDistributorCCRules, setColDistributorCCRules] = useState<DistributorCCRule[]>([]);
+  const [colBrandCCRules, setColBrandCCRules] = useState<BrandCCRule[]>([]);
+  const [colCompanyBrandDependencies, setColCompanyBrandDependencies] = useState<string[]>([]);
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
@@ -580,7 +680,8 @@ export default function TableSettings() {
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
         intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
         form_mask_rules: colType === 'problem_type' ? Object.fromEntries(Object.entries(colMaskRules).filter(([choice]) => choiceList.includes(choice))) : {},
-        distributor_cc_rules: colType === 'distributor' ? colDistributorCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
+        company_brand_dependencies: colType === 'brand' ? colCompanyBrandDependencies : [],
+        brand_cc_rules: colType === 'brand' ? colBrandCCRules.map(rule => ({...rule, cc_emails: rule.cc_emails.filter(Boolean)})) : [],
         default_value: (colType === 'row_creator' || colType === 'recent_row_modifier' || colType === 'date_today') ? null : (colType === 'client_email' && colDependencyIds.length ? null : normalizeDefault(colType, defaultValue)),
         fill_existing_with: ['fixed', 'row_creator', 'recent_row_modifier', 'date_today'].includes(colType) ? null : normalizeDefault(colType, fillExistingWith),
       }), successMessage:'Column added successfully.', errorMessage:'Could not add column'});
@@ -594,7 +695,8 @@ export default function TableSettings() {
       setColDependencyIds([]);
       setColIntercolumnRules([]);
       setColMaskRules({});
-      setColDistributorCCRules([]);
+      setColBrandCCRules([]);
+      setColCompanyBrandDependencies([]);
       setRequired(false);
       setSearchable(true);
       setIncludeInCustomerNotification(false);
@@ -648,7 +750,7 @@ export default function TableSettings() {
     setColDependencyIds([]);
     if (next !== 'intercolumn_controller') setColIntercolumnRules([]);
     if (next !== 'problem_type') setColMaskRules({});
-    if (next !== 'distributor') setColDistributorCCRules([]);
+    if (next !== 'brand') { setColBrandCCRules([]); setColCompanyBrandDependencies([]); }
   }
 
   if (!table) return <div>{error || 'Loading…'}</div>;
@@ -724,13 +826,16 @@ export default function TableSettings() {
             {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); setFillExistingWith(''); }} columns={table.columns} />}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             {colType === 'problem_type' && <MaskRulesEditor choices={newChoiceList} rules={colMaskRules} onChange={setColMaskRules} columns={table.columns} />}
-            {colType === 'distributor' && <DistributorCCRulesEditor rules={colDistributorCCRules} onChange={setColDistributorCCRules} />}
+            {colType === 'brand' && <>
+              <BrandCompanyDependencies columns={table.columns} selected={colCompanyBrandDependencies} onChange={next => {setColCompanyBrandDependencies(next); setColBrandCCRules(rules => rules.map(rule => ({...rule, sources: (rule.sources || ['ticket']).filter(source => source === 'ticket' || next.includes(source))})));}} />
+              <BrandCCRulesEditor rules={colBrandCCRules} onChange={setColBrandCCRules} dependencies={colCompanyBrandDependencies} columns={table.columns} />
+            </>}
             <DefaultValueField type={colType} choices={newChoiceList} value={defaultValue} onChange={setDefaultValue} groupRole={colGroupRole} dependencyConfigured={colType === 'client_email' && colDependencyIds.length > 0} />
             {!['fixed', 'row_creator', 'recent_row_modifier', 'date_today'].includes(colType) && <>
               <DefaultValueField type={colType} choices={newChoiceList} value={fillExistingWith} onChange={setFillExistingWith} label="Fill existing with" idSuffix="fill-existing-new" groupRole={colGroupRole} dependencyConfigured={false} />
               <div className="muted result-meta">Optional: fill this column on tickets already in this table, once when the column is added. This does not prefill future tickets. For required columns with existing tickets, a value is required here.</div>
             </>}
-            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from distinct Brand values in the current Customer Export.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'Default value prefills future tickets only. Fill existing with populates existing tickets once when this column is added.'}</div>
+            <div className="muted result-meta">{colType === 'fixed' ? 'The fixed value is applied to every existing row and every future row, and cannot be edited from a ticket.' : colType === 'row_creator' ? 'The value is filled automatically with the email of the user who created each row. Existing rows are backfilled from their recorded creator, and users cannot edit this field.' : colType === 'recent_row_modifier' ? 'The value is filled automatically with the staff email/username that most recently saved the row, or Customer when the latest change came from the public tracking link. Existing rows are backfilled from their recorded modifier, and users cannot edit this field.' : colType === 'date_today' ? 'Existing rows are filled with today when the column is added. Every new ticket starts with that day’s current date, and staff can edit the date afterward.' : colType === 'intercolumn_controller' ? 'This field stores a normal text value. Add one or more rules to synchronize it with another supported field in either direction or both.' : colType === 'group' ? 'Choose which employee group this column draws from. Row values are users registered in that group.' : colType === 'distributor' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = Distributor.' : colType === 'end_user' ? 'Row values use fuzzy company-name suggestions restricted to CoyType = End User.' : colType === 'brand' ? 'Row values use fuzzy suggestions from Customer Export Brands. Configure CC/monthly rules here and select Company fields whose imported Brands should also match.' : colType === 'client_email' ? (colDependencyIds.length ? 'Dependencies are checked from highest to lowest priority. The first company with imported emails seeds a multi-email list that users can keep, remove, clear, or extend manually.' : 'Without dependencies, users can fuzzy-search the imported customer directory and keep multiple email addresses.') : 'Default value prefills future tickets only. Fill existing with populates existing tickets once when this column is added.'}</div>
             <label className="check-label"><input type="checkbox" checked={colType === 'fixed' ? true : (colType === 'row_creator' || colType === 'recent_row_modifier') ? false : required} disabled={colType === 'fixed' || colType === 'row_creator' || colType === 'recent_row_modifier'} onChange={e=>setRequired(e.target.checked)}/> Required value</label>
             <label className="check-label"><input type="checkbox" checked={searchable} onChange={e=>setSearchable(e.target.checked)}/> Include this column in fuzzy search</label>
             <label className="check-label"><input type="checkbox" checked={includeInCustomerNotification} onChange={e=>setIncludeInCustomerNotification(e.target.checked)}/> Include in customer email</label>

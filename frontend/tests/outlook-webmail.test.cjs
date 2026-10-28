@@ -14,7 +14,7 @@ function loadLibrary(environment = {}) {
   const exports = {};
   vm.runInNewContext(code, {
     exports,
-    require: () => ({}),
+    require: (name) => name === '@/lib/problemTables' ? { displayCustomValue: (_, value) => value == null ? '' : String(value) } : {},
     URL,
     CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
     ...environment,
@@ -51,7 +51,7 @@ test('short email uses mailto including To, Cc, Subject, Body', () => {
   assert.equal(draft.manualBody, false);
 });
 
-test('short messages with Distributor CC launch immediately using registered mailto handler', () => {
+test('short messages with Brand CC launch immediately using registered mailto handler', () => {
   const env = recordedLauncher();
   const mod = loadLibrary(env);
   const full = mod.mailtoForCustomerEmail(message(['customer@example.com'], 'Status', 'Hello', ['distributor@example.org']));
@@ -71,15 +71,16 @@ test('short messages without CC still launch immediately', () => {
   assert.equal(env.events.length, 1);
 });
 
-test('oversized email is not opened before manual review; full body remains available', () => {
+test('oversized email opens safe shortened link without blocking countdown and keeps full body available', () => {
   const env = recordedLauncher();
   const mod = loadLibrary(env);
   const body = 'ABC and a link: https://example.com/?id=2\n'.repeat(160);
   const full = mod.mailtoForCustomerEmail(message(['to@example.com'],'Monthly report',body,['cc@example.com']));
   mod.invokeCustomerEmail(full);
-  assert.equal(env.links.length, 0);
+  assert.equal(env.links.length, 1);
   assert.equal(env.events.length, 1);
   const draft = env.events[0].detail;
+  assert.equal(env.links[0], draft.link);
   assert.equal(draft.body, body);
   assert.equal(draft.mailtoLink,full);
   assert.equal(draft.manualBody,true);
@@ -120,24 +121,47 @@ test('non-ASCII content percent-encodes and counts toward length cap', () => {
   assert.ok(draft.fullLinkLength>body.length);
 });
 
-test('actual Distributor rule matching is retained in mailto Cc with de-duplication', () => {
+test('ticket Brand rules add matching Cc with de-duplication; company Brand CC is server-resolved', () => {
   const mod = loadLibrary();
-  const table = {columns:[{field_key:'distributor',column_type:'distributor',distributor_cc_rules:[
-    {match_type:'wildcard',pattern:'Brandt*',cc_emails:['accounting@example.org','customer@example.org']},
-    {match_type:'contains',pattern:'brandt',cc_emails:['ACCOUNTING@example.org','manager@example.org']},
+  const table = {columns:[{field_key:'brand',column_type:'brand',brand_cc_rules:[
+    {sources:['ticket'],match_type:'wildcard',pattern:'Brandt*',cc_emails:['accounting@example.org','customer@example.org']},
+    {sources:['ticket'],match_type:'contains',pattern:'brandt',cc_emails:['ACCOUNTING@example.org','manager@example.org']},
+    {sources:['company-id'],match_type:'contains',pattern:'brandt',cc_emails:['company@example.org']},
   ]}]};
-  const cc = mod.findDistributorCCRecipients(table,{distributor:'Brandt Equipment'},['customer@example.org']);
+  const cc = mod.findBrandCCRecipients(table,{brand:'Brandt Equipment'},['customer@example.org']);
   assert.deepEqual(Array.from(cc), ['accounting@example.org','manager@example.org']);
   const draft = mod.outlookWebDraftForMailto(mod.mailtoForCustomerEmail(message(['customer@example.org'],'Ticket update','Body',cc)));
   assert.equal(new URL(draft.link).searchParams.get('cc'),'accounting@example.org,manager@example.org');
 });
 
-test('fallback UI launches mailto directly and requires no extra Cc confirmation checkbox', () => {
+test('Brand CC applies to initial and resent tracking-link drafts, but not ordinary email', () => {
+  const mod = loadLibrary();
+  const table = { columns: [{ name:'Brand', position:0, field_key: 'brand', column_type: 'brand', brand_cc_rules: [
+    {sources:['ticket'], match_type:'contains', pattern:'northstar', cc_emails:['brand@example.org','customer@example.org']},
+  ]}]};
+  const values = {brand:'Northstar Supplies'};
+  const makeDraft = options => mod.buildCustomerEmailContent(
+    'customer@example.org', {table, values, ...options},
+    {subject_template:'Ticket',body_template:'Hello {{tracking_link}}'},
+  );
+  const initialTracking = makeDraft({trackingUrl:'https://example.org/track/initial'});
+  const resentTracking = makeDraft({trackingUrl:'https://example.org/track/resent'});
+  const ordinaryEmail = makeDraft({});
+  assert.deepEqual(Array.from(initialTracking.cc), ['brand@example.org']);
+  assert.deepEqual(Array.from(resentTracking.cc), ['brand@example.org']);
+  assert.deepEqual(Array.from(ordinaryEmail.cc), []);
+  const manuallyCopied = makeDraft({cc:['manual@example.org']});
+  assert.deepEqual(Array.from(manuallyCopied.cc), ['manual@example.org']);
+});
+
+test('oversized fallback is non-modal, preserves copying and never shows the old prompt', () => {
   const source = fs.readFileSync(path.join(__dirname,'../components/OutlookEmailManualCompose.tsx'),'utf8');
   assert.match(source,/href={draft.link}/);
-  assert.match(source,/browser.*handler/);
   assert.match(source,/Copy Cc recipients/);
-  assert.doesNotMatch(source,/ccAcknowledged/);
+  assert.match(source,/outlook-manual-notice/);
+  assert.match(source,/manualBody \? next : null/);
+  assert.doesNotMatch(source,/Check your email draft/);
+  assert.doesNotMatch(source,/role="dialog"|aria-modal|outlook-manual-backdrop/);
   assert.doesNotMatch(source,/target="_blank"[^>]*href={draft.link}/);
 });
 

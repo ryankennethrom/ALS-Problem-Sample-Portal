@@ -1213,19 +1213,16 @@ a.result:hover{background:#f7f9fb}
 .reopen-container-fit-actions .button{width:100%;height:auto;min-height:42px;white-space:normal;text-align:center;overflow-wrap:anywhere}
 
 /* Outlook's compose deep link cannot safely carry large, URL-encoded email bodies. */
-.outlook-manual-backdrop{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.67);display:flex;justify-content:center;align-items:center;padding:16px}
-.outlook-manual-dialog{background:var(--surface, #fff);color:#17212c;width:min(700px,100%);max-height:92dvh;overflow:auto;border-radius:14px;box-shadow:0 12px 50px #0006;padding:22px}
-.outlook-manual-heading,.outlook-manual-actions,.outlook-manual-copy{display:flex;align-items:center;gap:10px}
+.outlook-manual-notice{position:fixed;bottom:16px;right:16px;z-index:100000;background:var(--surface,#fff);color:var(--text,#17212c);width:min(490px,calc(100vw - 32px));max-height:min(75dvh,620px);overflow:auto;padding:16px;border:2px solid #b97700;border-radius:12px;box-shadow:0 6px 28px #0004}
+.outlook-manual-notice p{margin:9px 0;font-size:.93rem}
+.outlook-manual-heading,.outlook-manual-actions{display:flex;align-items:center;gap:8px}
 .outlook-manual-heading{justify-content:space-between}
-.outlook-manual-heading h2{font-size:1.25rem;line-height:1.35;margin:0}
-.outlook-manual-fields{display:flex;flex-direction:column;gap:8px;margin:16px 0}
-.outlook-manual-fields label{font-weight:600;font-size:.9rem}
-.outlook-manual-copy input{min-width:0;flex:1}
-.outlook-manual-body{min-height:180px;resize:vertical}
-.outlook-manual-actions{flex-wrap:wrap}
-.outlook-cc-acknowledgement{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid #ba7d16;border-radius:10px;background:#fff8e7;color:#37280a;font-weight:600;cursor:pointer}
-.outlook-cc-acknowledgement input{flex:0 0 auto;margin-top:4px;accent-color:#7b4e00}
-@media(max-width:540px){.outlook-manual-dialog{padding:14px}.outlook-manual-copy{flex-wrap:wrap}.outlook-manual-copy input{flex-basis:100%}}
+.outlook-manual-heading strong{font-size:1rem}
+.outlook-manual-actions{flex-wrap:wrap;margin:12px 0}
+.outlook-manual-notice details{margin:8px 0}
+.outlook-manual-notice summary{cursor:pointer}
+.outlook-manual-body{margin-top:8px;min-height:120px;resize:vertical;width:100%}
+@media(max-width:540px){.outlook-manual-notice{bottom:8px;right:8px;width:calc(100vw - 16px);padding:12px}}
 
 /* Lab selector and independently scrolling sidebar navigation. */
 .admin-shell .sidebar{

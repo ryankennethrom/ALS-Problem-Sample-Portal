@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
+import { useEffect, useState } from 'react';
+import { useWebmailSendCountdown, WebmailOpeningStatus } from '@/components/useWebmailSendCountdown';
 import { api } from '@/lib/api';
 import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 
@@ -39,11 +39,10 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
   const [recipient, setRecipient] = useState('');
   const [recipientError, setRecipientError] = useState('');
   const [additional, setAdditional] = useState('');
-  const [seconds, setSeconds] = useState<number | null>(null);
+  const { seconds, start } = useWebmailSendCountdown();
   const [copied, setCopied] = useState('');
   const [showNotSentReason, setShowNotSentReason] = useState(false);
   const [notSentReason, setNotSentReason] = useState('Email unknown');
-  const countdownEndsAt = useRef(0);
   useEffect(() => {
     let active = true;
     api('/email-templates/edmonton-recipient/')
@@ -51,16 +50,6 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
       .catch(() => { if (active) setRecipientError('Could not load the NA.EDM recipient. Close and reopen this email preview.'); });
     return () => { active = false; };
   }, []);
-  useEffect(() => {
-    if (seconds === null || seconds === 0) return;
-
-    const updateCountdown = () => {
-      setSeconds(Math.max(0, Math.ceil((countdownEndsAt.current - Date.now()) / 1000)));
-    };
-    const timer = window.setInterval(updateCountdown, 200);
-    updateCountdown();
-    return () => window.clearInterval(timer);
-  }, [seconds]);
 
   const isBulk = Boolean(batchSamples?.length);
   const count = batchSamples?.length || 0;
@@ -104,10 +93,8 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
   }
   function proceed() {
     // Guard against a fast double click launching two drafts for one batch.
-    if (!recipient || body.length > 10000 || countdownEndsAt.current) return;
-    countdownEndsAt.current = Date.now() + 5000;
-    setSeconds(5);
-    invokeCustomerEmail(mailtoForCustomerEmail({ to: [recipient], cc: [], subject, body }));
+    if (!recipient || body.length > 10000 || seconds !== null) return;
+    start({ to: [recipient], cc: [], subject, body });
   }
   return <div className="email-confirm-overlay" role="presentation">
     <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="testing-email-title">
@@ -126,14 +113,14 @@ export default function BackToTestingEmailModal({ details, batchSamples, showRac
       {error && <p className="error" role="alert">{error}</p>}
       {body.length > 10000 && <p className="error" role="alert">The email is too long. Select fewer tickets.</p>}
       {recipientError && <p className="error" role="alert">{recipientError}</p>}
-      {seconds !== null && <p className="customer-email-send-prompt" role="status">Send the email now{seconds > 0 ? `. You can confirm in ${seconds} second${seconds === 1 ? '' : 's'}.` : '.'}</p>}
+      <WebmailOpeningStatus seconds={seconds} />
       {showNotSentReason && <div className="field" style={{marginBottom: 16}}>
         <label htmlFor="testing-email-not-sent-reason">Why wasn&apos;t the email sent? <span aria-hidden="true">*</span></label>
         <textarea id="testing-email-not-sent-reason" className="textarea" required maxLength={500} autoFocus value={notSentReason} onChange={event => setNotSentReason(event.target.value)} disabled={busy} />
         {!notSentReason.trim() && <span className="error" role="alert">A reason is required.</span>}
       </div>}
       <div className="email-confirm-actions">
-        {!showNotSentReason && seconds === null && <button type="button" className="button" onClick={proceed} disabled={busy || !recipient || body.length > 10000}>Proceed</button>}
+        {!showNotSentReason && seconds === null && <button type="button" className="button" onClick={proceed} disabled={busy || !recipient || body.length > 10000}>Send Email</button>}
         {!showNotSentReason && seconds === 0 && <button type="button" className="button" onClick={() => onConfirm(true, body, recipient)} disabled={busy}>{busy ? 'Saving…' : 'I sent the email'}</button>}
         {!showNotSentReason && seconds === 0 && <button type="button" className="button secondary" onClick={() => setShowNotSentReason(true)} disabled={busy}>{"I didn't send the email"}</button>}
         {showNotSentReason && <button type="button" className="button" onClick={() => onConfirm(false, body, recipient, notSentReason.trim())} disabled={busy || !notSentReason.trim()}>{busy ? 'Saving…' : 'Confirm email not sent'}</button>}

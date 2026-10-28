@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
+import { useWebmailSendCountdown, WebmailOpeningStatus } from '@/components/useWebmailSendCountdown';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import styles from './systemEmails.module.css';
 
@@ -29,7 +30,9 @@ export default function SendSystemEmailsPage() {
   const [emails, setEmails] = useState<SystemEmail[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [selected, setSelected] = useState<SystemEmail | null>(null);
-  const [opened, setOpened] = useState(false);
+  const [webmailError, setWebmailError] = useState('');
+  const attemptedDraftId = useRef('');
+  const { seconds, start, reset } = useWebmailSendCountdown();
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -57,7 +60,7 @@ export default function SendSystemEmailsPage() {
   }, []);
 
   async function preview(id: string) {
-    setBusy(true); setError(''); setOpened(false); setSuccess('');
+    setBusy(true); setError(''); setWebmailError(''); attemptedDraftId.current = ''; reset(); setSuccess('');
     try {
       const detail: SystemEmail = await api(`/system-emails/${id}/`);
       if (detail.status !== 'pending') throw new Error('This email has already been marked sent.');
@@ -67,22 +70,33 @@ export default function SendSystemEmailsPage() {
     } finally { setBusy(false); }
   }
 
-  function openMailApp() {
-    if (!selected?.to_emails?.length || !selected.body || opened) return;
-    invokeCustomerEmail(mailtoForCustomerEmail({
-      to: selected.to_emails, cc: [], subject: selected.subject, body: selected.body,
-    }));
-    setOpened(true);
+  // "Review and send" is the user's decision to prepare this already-finalized
+  // report. Launch webmail as soon as the draft loads, without another Send Email.
+  useEffect(() => {
+    if (!selected || attemptedDraftId.current === selected.id || !selected.to_emails?.length || !selected.body) return;
+    attemptedDraftId.current = selected.id;
+    try { start({ to: selected.to_emails, cc: [], subject: selected.subject, body: selected.body }); }
+    catch { setWebmailError('Web Mail could not be opened automatically. Try opening it again.'); }
+  }, [selected, start]);
+
+  function retryWebmail() {
+    if (!selected?.to_emails?.length || !selected.body) return;
+    setWebmailError('');
+    const message = { to: selected.to_emails, cc: [], subject: selected.subject, body: selected.body };
+    try {
+      if (seconds === null) start(message);
+      else invokeCustomerEmail(mailtoForCustomerEmail(message));
+    } catch { setWebmailError('Web Mail could not be opened. Check your email handler settings.'); }
   }
 
   async function confirmSent() {
-    if (!selected || !opened) return;
+    if (!selected || seconds !== 0) return;
     setBusy(true); setError('');
     try {
       await api(`/system-emails/${selected.id}/confirm-sent/`, {
         method: 'POST', body: JSON.stringify({confirmation: 'sent'}),
       });
-      setSelected(null); setOpened(false);
+      setSelected(null); reset();
       setSuccess('Email marked as sent. Its delivery is confirmed by staff, not verified by the mail app.');
       await load();
     } catch (e) {
@@ -103,7 +117,7 @@ export default function SendSystemEmailsPage() {
   return <main className={styles.page}>
     <div className={styles.titleRow}>
       <div><h1 className="page-heading">Send System Emails</h1>
-        <p className={styles.help}>Review scheduled and on-demand Distributor reports before sending them with your email application. No system email is sent automatically.</p>
+        <p className={styles.help}>Review scheduled and on-demand Brand reports before sending them with your email application. No system email is sent automatically.</p>
       </div>
       <div className={styles.actions}>
         <button type="button" className="button secondary" disabled={busy || loading} onClick={() => void load()}>Refresh</button>
@@ -124,7 +138,7 @@ export default function SendSystemEmailsPage() {
         {emails.map(mail => <article key={mail.id} className={styles.mailCard}>
           <div className={styles.mailDetails}>
             <strong>{mail.subject}</strong>
-            <div className={styles.meta}>{mail.table} · Distributor pattern: {mail.distributor_pattern} · {mail.period_start.slice(0,7)} · {mail.generation_mode === 'manual' ? 'Manual month-to-date' : 'Scheduled monthly'}</div>
+            <div className={styles.meta}>{mail.table} · Brand pattern: {mail.distributor_pattern} · {mail.period_start.slice(0,7)} · {mail.generation_mode === 'manual' ? 'Manual month-to-date' : 'Scheduled monthly'}</div>
             <div className={styles.meta}>{mail.matched_ticket_count} matching ticket(s) · {mail.recipient_count} recipient(s) · {mail.status === 'sent' ? 'Sent' : 'Pending'}</div>
           </div>
           {mail.status === 'pending' && <button type="button" className="button" disabled={busy} onClick={() => void preview(mail.id)}>Review and send</button>}
@@ -132,23 +146,24 @@ export default function SendSystemEmailsPage() {
       </div>
     </section>
 
-    {selected && <div className={styles.overlay} role="presentation" onMouseDown={event => {if (event.target === event.currentTarget) {setSelected(null);setOpened(false);}}}>
+    {selected && <div className={styles.overlay} role="presentation" onMouseDown={event => {if (event.target === event.currentTarget) {setSelected(null);reset();}}}>
       <section className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="system-email-dialog-title">
         <div className={styles.titleRow}>
-          <h2 id="system-email-dialog-title">Review Distributor monthly report</h2>
-          <button type="button" className="button secondary" onClick={() => {setSelected(null);setOpened(false);}}>Close</button>
+          <h2 id="system-email-dialog-title">Review Brand monthly report</h2>
+          <button type="button" className="button secondary" onClick={() => {setSelected(null);reset();}}>Close</button>
         </div>
         <p className={styles.help}>Opening an email draft does not send it. Only confirm below after actually sending it in Outlook webmail.</p>
         <div className={styles.field}><label htmlFor="system-email-to">To</label><input id="system-email-to" className="input" readOnly value={selected.to_emails?.join(', ') || ''}/></div>
         <div className={styles.field}><label htmlFor="system-email-subject">Subject</label><input id="system-email-subject" className="input" readOnly value={selected.subject}/></div>
         <div className={styles.field}><label htmlFor="system-email-body">Message</label><textarea id="system-email-body" rows={14} className="textarea" readOnly value={selected.body || ''}/></div>
-        {opened && <p className={styles.success} role="status">Draft opened in Outlook webmail. Did you actually send it?</p>}
+        {webmailError && <p role="alert" className={styles.error}>{webmailError}</p>}
+        <WebmailOpeningStatus seconds={seconds} />
         <div className={styles.actions}>
-          {!opened ? <button type="button" className="button" onClick={openMailApp}>Open Outlook webmail to send</button> : <>
-            <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>
-            <button type="button" className="button secondary" disabled={busy} onClick={() => setOpened(false)}>I didn’t send it</button>
-          </>}
-          <button type="button" className="button secondary" onClick={() => {setSelected(null);setOpened(false);}}>Cancel</button>
+          {webmailError && seconds === null && <button type="button" className="button" onClick={retryWebmail}>Try Opening Web Mail</button>}
+          {seconds === 0 && <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>}
+          {seconds === 0 && <button type="button" className="button secondary" disabled={busy} onClick={() => {setSelected(null);reset();}}>I didn't send the email</button>}
+          {seconds === 0 && <button type="button" className="button secondary" onClick={retryWebmail}>Open Web Mail again</button>}
+          <button type="button" className="button secondary" onClick={() => {setSelected(null);reset();}}>Cancel</button>
         </div>
       </section>
     </div>}

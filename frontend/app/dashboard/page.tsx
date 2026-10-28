@@ -226,7 +226,7 @@ export default function Dashboard() {
         <div>
           <div className={styles.label}>Pending System Emails</div>
           <div className={styles.value}>{pendingSystemEmails == null ? '…' : format(pendingSystemEmails)}</div>
-          <div className={styles.note}>Distributor monthly reports awaiting staff review and sending</div>
+          <div className={styles.note}>Brand monthly reports awaiting staff review and sending</div>
         </div>
         <Link href="/send-system-emails#pending-system-emails" className={styles.seeAll}>See all &gt;</Link>
       </section>

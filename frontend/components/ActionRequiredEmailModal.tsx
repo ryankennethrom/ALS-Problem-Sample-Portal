@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
+import { useWebmailSendCountdown, WebmailOpeningStatus } from '@/components/useWebmailSendCountdown';
 import styles from './actionRequiredEmail.module.css';
 
 type MentionOption = {
@@ -29,7 +30,9 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [opened, setOpened] = useState(false);
+  const [webmailError, setWebmailError] = useState('');
+  const attemptedDraft = useRef<Draft | null>(null);
+  const { seconds, start, reset } = useWebmailSendCountdown();
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -58,7 +61,8 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
     setRecipients(previous => previous.some(selected => selected.id === option.id) ? previous : [...previous, option]);
     setQuery('');
     setDraft(null);
-    setOpened(false);
+    reset();
+    setWebmailError('');
     setError('');
     setShowSuggestions(false);
     input.current?.focus();
@@ -67,7 +71,7 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
   function removeRecipient(id: MentionOption['id']) {
     setRecipients(previous => previous.filter(option => option.id !== id));
     setDraft(null);
-    setOpened(false);
+    reset();
   }
 
   async function preview() {
@@ -80,7 +84,8 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
         body: JSON.stringify({ recipients: recipients.map(option => `@${option.username}`), message: note }),
       });
       setDraft(result);
-      setOpened(false);
+      setWebmailError('');
+      reset();
       setShowSuggestions(false);
     } catch (e) {
       setDraft(null);
@@ -90,15 +95,23 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
     }
   }
 
-  function openEmail() {
+  // Choosing Send Email after editing recipients/message already authorizes
+  // preparation of the draft. Skip the extra Send Email preview step.
+  useEffect(() => {
+    if (!draft || attemptedDraft.current === draft || !draft.recipients.length) return;
+    attemptedDraft.current = draft;
+    try { start({ to: draft.recipients, cc: [], subject: draft.subject, body: draft.body }); }
+    catch { setWebmailError('Web Mail could not be opened automatically. Try opening it again.'); }
+  }, [draft, start]);
+
+  function retryWebmail() {
     if (!draft) return;
-    invokeCustomerEmail(mailtoForCustomerEmail({
-      to: draft.recipients,
-      cc: [],
-      subject: draft.subject,
-      body: draft.body,
-    }));
-    setOpened(true);
+    setWebmailError('');
+    const message = { to: draft.recipients, cc: [], subject: draft.subject, body: draft.body };
+    try {
+      if (seconds === null) start(message);
+      else invokeCustomerEmail(mailtoForCustomerEmail(message));
+    } catch { setWebmailError('Web Mail could not be opened. Check your email handler settings.'); }
   }
 
   return <div className={styles.overlay} role="presentation" onMouseDown={event => {
@@ -158,12 +171,12 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className={styles.actions}>
           <button type="button" className="button" disabled={busy || !recipients.length} onClick={preview}>
-            {busy ? 'Preparing…' : 'Preview email'}
+            {busy ? 'Preparing…' : 'Send Email'}
           </button>
           <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
         </div>
       </> : <>
-        <p className={styles.help}>Review this snapshot before opening Outlook webmail. The tracker does not send it automatically.</p>
+        <p className={styles.help}>Webmail is requested with this snapshot. The tracker does not mark it sent automatically.</p>
         <div className={styles.preview}>
           <div><strong>To:</strong> {draft.recipients.join(', ')}</div>
           <div><strong>Selected:</strong> {draft.mentions.join(', ')}</div>
@@ -172,11 +185,15 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
           <label className={styles.label} htmlFor="action-update-body">Message</label>
           <textarea id="action-update-body" className="textarea" rows={13} value={draft.body} readOnly />
         </div>
-        {opened && <p className={styles.success} role="status">Your mail app was opened with this draft. Please send it there to finish.</p>}
+        {webmailError && <p className={styles.error} role="alert">{webmailError}</p>}
+        <WebmailOpeningStatus seconds={seconds} />
         <div className={styles.actions}>
-          <button type="button" className="button" onClick={openEmail}>{opened ? 'Open email draft again' : 'Open email draft to send'}</button>
-          <button type="button" className="button secondary" onClick={() => { setDraft(null); setOpened(false); }}>Edit recipients or message</button>
-          <button type="button" className="button secondary" onClick={onClose}>Close</button>
+          {webmailError && seconds === null && <button type="button" className="button" onClick={retryWebmail}>Try Opening Web Mail</button>}
+          {seconds === 0 && <button type="button" className="button" onClick={onClose}>I sent the email</button>}
+          {seconds === 0 && <button type="button" className="button secondary" onClick={onClose}>I didn't send the email</button>}
+          <button type="button" className="button secondary" onClick={() => { setDraft(null); reset(); }}>Edit recipients or message</button>
+          {seconds === 0 && <button type="button" className="button secondary" onClick={retryWebmail}>Open Web Mail again</button>}
+          <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
         </div>
       </>}
     </div>

@@ -1,0 +1,11 @@
+# Brand CC and monthly-report rules (migration 0098)
+
+Admin → Manage Tables → edit a Brand column. Choose optional Distributor and End User company columns under **Other Company fields to check their Brand**. Add rules with pattern, match type, recipients, monthly option and one or more sources (Ticket Brand / Brand of Distributor / Brand of End User). Matching is case-insensitive; sources are OR-combined; all matching rules deduplicate recipients. Wildcard `*` and `?` are supported.
+
+Company Brands come from the most recent Customer Export (`customers_customer`) with exact company-name + customer-type match. Companies absent from that export never match. The lookup is performed when a new tracking-link email is prepared, when an existing ticket is loaded for a tracking-link resend, and when monthly reports are generated. Automatic Brand CC is not applied to ordinary customer emails or their downloadable email drafts.
+
+**Migration safety:** Existing Distributor CC rules move to the first Brand column in their table, preserving recipients, pattern, rule IDs and monthly enabling timestamps, scoped to the migrated Distributor's Brand. If no Brand column exists, a new optional Brand column is created. The old field is removed. Migrated rules are marked `pending_brand_review` and **inactive** until an admin checks and saves them. This is necessary because a Distributor-name pattern cannot automatically be converted to a Brand pattern safely. Previously generated monthly emails retain their content and status; their source-column references follow the migrated rule so that the scheduler does not duplicate a period already queued. No historical ticket data or Customer Export entries are modified.
+
+Monthly reports remain reviewable drafts and are not automatically sent. Saving a Brand column acknowledges and activates its migrated rules. Take a database backup before running migration 0098.
+
+**Scope:** Brand matching automatically adds CC recipients **only** to tracking-link emails (new tickets and tracking-link resends). Other correspondence does not gain Brand CC recipients. Manually supplied CC addresses remain allowed. Monthly-report recipients, matching rules, and scheduling are unchanged.

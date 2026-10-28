@@ -54,7 +54,9 @@ export type ClientEmailDependency = {
   column_type_label: string;
 };
 
-export type DistributorCCRule = {
+export type BrandCCRule = {
+  pending_brand_review?: boolean;
+  sources: string[];
   id?: string;
   send_monthly_reports?: boolean;
   match_type: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'wildcard';
@@ -113,7 +115,8 @@ export type ProblemColumn = {
   client_email_dependency_details: ClientEmailDependency[];
   intercolumn_rules: IntercolumnRule[];
   form_mask_rules: ProblemTypeRules;
-  distributor_cc_rules: DistributorCCRule[];
+  company_brand_dependencies: string[];
+  brand_cc_rules: BrandCCRule[];
   position: number;
   is_system: boolean;
 };

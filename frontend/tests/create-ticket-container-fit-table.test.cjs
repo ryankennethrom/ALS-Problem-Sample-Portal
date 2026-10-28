@@ -60,11 +60,11 @@ function mount() {
   const api = async (url, opts = {}) => {
     apiCalls.push({ url, opts });
     if (url === '/problem-tables/') return tables;
+    if (url === '/problem-containers/' && opts.method === 'POST') return { container_id: 'PC-200' };
     if (url === '/problem-containers/') return [{ container_id: 'PC-101' }];
     if (url === '/ticket-creation-timing/start/') return {id:'new-session'};
     if (url === '/problem-samples/prepare-new/') return { id: 'prepared', problem_number: 17, tracking_url: 'https://example.com/track' };
     if (url === '/problem-samples/create-prepared/') return {id:'created-ticket'};
-    if (url === '/problem-containers/' && opts.method === 'POST') return { container_id: 'PC-200' };
     throw Error('Unexpected API ' + url);
   };
   const router = { replace(url) { redirects.push(url); selectedTable = new URL(url, 'http://localhost').searchParams.get('table'); }, push(url) { sent.push(url); } };
@@ -168,10 +168,25 @@ test('Creation timing starts once on Create Ticket click and completes with emai
   app.fitModal().props.onFits(); await flush(); app.render();
   const customerModal = app.find(n => n && typeof n.props?.onDidNotSend === 'function');
   assert.ok(customerModal, 'Prepared ticket must require final email confirmation');
+  assert.equal(customerModal.props.autoStart, true, 'The fit-check confirmation must open webmail without a second Send Email step');
   await customerModal.props.onDidNotSend('Email address unavailable');
   const completion = app.apiCalls.find(call => call.url === '/problem-samples/create-prepared/');
   assert.ok(completion, 'Only confirmation should create a real ticket');
   assert.equal(completion.opts.body.get('creation_timing_id'), 'new-session');
   assert.equal(completion.opts.body.get('sent'), 'false');
   assert.equal(app.apiCalls.filter(call => call.url === '/ticket-creation-timing/start/').length, 1);
+});
+
+
+test('new-container ticket creation also starts the tracking email immediately after preparation', async () => {
+  const app = mount(); await flush(); app.render();
+  const radio = app.find(n => n.type === 'input' && n.props.type === 'radio' && n.props.name === 'container-mode' && !n.props.checked);
+  assert.ok(radio);
+  radio.props.onChange(); app.render();
+  app.clickButton('Create New Container'); await flush(); app.render();
+  await app.submit(); await flush(); app.render();
+  assert.equal(app.fitModal(), undefined, 'new containers do not need a fit-check prompt');
+  const customerModal = app.find(n => n && typeof n.props?.onDidNotSend === 'function');
+  assert.ok(customerModal);
+  assert.equal(customerModal.props.autoStart, true);
 });

@@ -177,6 +177,7 @@ export default function ProblemForm() {
           problemNumber: prepared.problem_number,
           tableName: table.name,
           trackingUrl: prepared.tracking_url,
+          cc: prepared.brand_cc_recipients || [],
           problemTypePrompts: prepared.problem_type_prompts || [],
         };
         const draft = await prepareCustomerEmail(customerEmails, emailContext);
@@ -361,6 +362,7 @@ export default function ProblemForm() {
     onDismiss={() => setShowFitConfirmation(false)}
   />}
   {pendingCreation && <CustomerEmailModal
+    autoStart
     content={pendingCreation.emailContent}
     onSent={() => finalizeCreation(true)}
     onDidNotSend={(reason) => finalizeCreation(false, reason)}
