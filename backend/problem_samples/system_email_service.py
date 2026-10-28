@@ -1,4 +1,4 @@
-"""Generate reviewable monthly Distributor emails. This module NEVER sends email."""
+"""Generate reviewable monthly Brand emails. This module NEVER sends email."""
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 import re
@@ -13,23 +13,7 @@ from .models import ProblemColumn, ProblemSample, SystemEmail
 from accounts.models import Lab
 
 
-def distributor_matches(value, rule):
-    name = str(value or '').strip().casefold()
-    pattern = str(rule.get('pattern') or '').strip().casefold()
-    if not name or not pattern:
-        return False
-    match_type = rule.get('match_type')
-    if match_type == 'exact':
-        return name == pattern
-    if match_type == 'contains':
-        return pattern in name
-    if match_type == 'starts_with':
-        return name.startswith(pattern)
-    if match_type == 'ends_with':
-        return name.endswith(pattern)
-    if match_type == 'wildcard':
-        return re.fullmatch(re.escape(pattern).replace(r'\*', '.*').replace(r'\?', '.'), name) is not None
-    return False
+from .brand_email_rules import rule_matches
 
 
 def previous_month(today=None):
@@ -53,11 +37,9 @@ def normalize_addresses(values):
 def create_monthly_report(column, rule, start, end, ticket_rows, *, as_of=None, lab=None):
     """Snapshot the selected tickets into an email draft for a single matching rule."""
     matches = []
+    company_cache = {}
     for row in ticket_rows:
-        raw = (row.custom_values or {}).get(column.field_key)
-        if raw in ('', None) and column.field_key == 'distributor':
-            raw = row.distributor
-        if distributor_matches(raw, rule):
+        if rule_matches(column, row.custom_values or {}, rule, company_cache=company_cache):
             matches.append(row)
 
     month_label = start.strftime('%B %Y')
@@ -72,10 +54,10 @@ def create_monthly_report(column, rule, start, end, ticket_rows, *, as_of=None, 
         'Hello,', '',
         f'Please find the {"month-to-date" if as_of else "monthly"} problem sample report for {month_label}.',
         f'Table: {table_name}',
-        f'Distributor filter ({rule["match_type"]}): {pattern}',
+        f'Brand filter ({rule["match_type"]}): {pattern}',
         f'Report period: {start.isoformat()} through {(end - timedelta(days=1)).isoformat()} (Edmonton time)',
         *([f'Snapshot prepared: {as_of.strftime("%Y-%m-%d %H:%M %Z")}'] if as_of else []),
-        'Scope: tickets created during the report period whose Distributor matches this rule.',
+        'Scope: tickets created during the report period whose selected Brand sources match this rule.',
         f'Total matching tickets: {count}', '',
         'Current workflow breakdown (at report generation):',
     ]
@@ -152,11 +134,11 @@ def queue_due_monthly_reports(today=None):
     examined = 0
     # Query per table only once; use table+column selection to prevent cross-table data leakage.
     table_tickets = {}
-    for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_DISTRIBUTOR).select_related('table'):
+    for column in ProblemColumn.objects.filter(column_type=ProblemColumn.TYPE_BRAND).select_related('table'):
       for lab in Lab.objects.all():
-          rules = column.distributor_cc_rules or []
+          rules = column.brand_cc_rules or []
           for index, rule in enumerate(rules):
-              if not isinstance(rule, dict) or rule.get('send_monthly_reports') is not True:
+              if not isinstance(rule, dict) or rule.get('pending_brand_review') or rule.get('send_monthly_reports') is not True:
                   continue
               if not rule.get('pattern') or not normalize_addresses(rule.get('cc_emails')):
                   continue

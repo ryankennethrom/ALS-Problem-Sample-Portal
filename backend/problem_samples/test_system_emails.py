@@ -1,4 +1,4 @@
-"""Monthly Distributor reporting: scopes, immutability, duplicate protection, and manual confirmation."""
+"""Monthly Brand reporting: scopes, immutability, duplicate protection, and manual confirmation."""
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from django.contrib.auth.models import User
@@ -6,39 +6,41 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import UserProfile
+from accounts.models import UserProfile, Lab
 from .models import ProblemColumn, ProblemSample, ProblemTable, SystemEmail
 from .serializers import ProblemColumnSerializer
 from .system_email_service import queue_due_monthly_reports
 
 
 @override_settings(FRONTEND_URL='https://tracker.example.test')
-class MonthlyDistributorReportTests(TestCase):
+class MonthlyBrandReportTests(TestCase):
     def setUp(self):
+        self.lab, _ = Lab.objects.get_or_create(code='EDM', defaults={'name': 'Edmonton'})
         self.table = ProblemTable.objects.create(name='Monthly table')
         self.other_table = ProblemTable.objects.create(name='Private table')
-        self.column = ProblemColumn.objects.create(table=self.table, name='Distributor', field_key='distributor', column_type='distributor')
-        self.other_column = ProblemColumn.objects.create(table=self.other_table, name='Distributor', field_key='distributor', column_type='distributor')
+        self.column = ProblemColumn.objects.create(table=self.table, name='Brand', field_key='brand', column_type='brand')
+        self.other_column = ProblemColumn.objects.create(table=self.other_table, name='Brand', field_key='brand', column_type='brand')
         self.user = User.objects.create_user(username='staff', email='staff@alsglobal.com')
         self.admin = User.objects.create_user(username='admin', email='admin@alsglobal.com')
-        UserProfile.objects.create(user=self.admin, is_admin=True)
+        UserProfile.objects.create(user=self.admin, is_admin=True, lab=self.lab)
+        UserProfile.objects.create(user=self.user, role=UserProfile.ROLE_CUSTOMER_SERVICE, lab=self.lab)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
     def configure(self, column=None, **kwargs):
         column = column or self.column
         rules = kwargs.get('rules', [
-            {'match_type': 'wildcard', 'pattern': 'ACME*', 'cc_emails': ['one@example.com', 'ONE@example.com', 'two@example.com'], 'send_monthly_reports': True},
+            {'sources':['ticket'],'match_type': 'wildcard', 'pattern': 'ACME*', 'cc_emails': ['one@example.com', 'ONE@example.com', 'two@example.com'], 'send_monthly_reports': True},
         ])
-        serializer = ProblemColumnSerializer(column, data={'distributor_cc_rules': rules}, partial=True)
+        serializer = ProblemColumnSerializer(column, data={'brand_cc_rules': rules}, partial=True)
         self.assertTrue(serializer.is_valid(), serializer.errors)
         serializer.save()
         column.refresh_from_db()
-        return column.distributor_cc_rules
+        return column.brand_cc_rules
 
     def ticket(self, table, number, distributor, year, month, day, workflow='Follow Up Required'):
-        row = ProblemSample.objects.create(table=table, problem_number=number, current_workflow=workflow,
-                                            custom_values={'distributor': distributor})
+        row = ProblemSample.objects.create(lab=self.lab, table=table, problem_number=number, current_workflow=workflow,
+                                            custom_values={'brand': distributor})
         created_at = timezone.make_aware(datetime(year, month, day, 12), ZoneInfo('America/Edmonton'))
         ProblemSample.objects.filter(pk=row.pk).update(created_at=created_at)
         return row
@@ -68,14 +70,14 @@ class MonthlyDistributorReportTests(TestCase):
 
     def test_multiple_rules_generate_separate_emails_and_enabling_time_is_retained(self):
         rules = self.configure(rules=[
-            {'match_type': 'contains', 'pattern': 'acme', 'cc_emails': ['a@example.com'], 'send_monthly_reports': True},
-            {'match_type': 'contains', 'pattern': 'acme', 'cc_emails': ['b@example.com'], 'send_monthly_reports': True},
+            {'sources':['ticket'],'match_type': 'contains', 'pattern': 'acme', 'cc_emails': ['a@example.com'], 'send_monthly_reports': True},
+            {'sources':['ticket'],'match_type': 'contains', 'pattern': 'acme', 'cc_emails': ['b@example.com'], 'send_monthly_reports': True},
         ])
         original_ids = [r['id'] for r in rules]
         original_enabled = [r['monthly_reports_enabled_at'] for r in rules]
         self.configure(rules=rules[::-1])
-        self.assertEqual([r['id'] for r in self.column.distributor_cc_rules], original_ids[::-1])
-        self.assertEqual([r['monthly_reports_enabled_at'] for r in self.column.distributor_cc_rules], original_enabled[::-1])
+        self.assertEqual([r['id'] for r in self.column.brand_cc_rules], original_ids[::-1])
+        self.assertEqual([r['monthly_reports_enabled_at'] for r in self.column.brand_cc_rules], original_enabled[::-1])
         self.ticket(self.table, 20, 'ACME', 2026, 10, 11)
         self.assertEqual(self.queue()['created'], 2)
         self.assertEqual(self.queue()['created'], 0)
@@ -181,8 +183,73 @@ class MonthlyDistributorReportTests(TestCase):
         self.client.force_authenticate(self.admin)
         self.assertEqual(self.client.post('/api/system-emails/queue-now/', {**payload, 'rule_id': 'not-a-uuid'}, format='json').status_code, 400)
         self.assertEqual(self.client.post('/api/system-emails/queue-now/', {**payload, 'rule_id': str(__import__('uuid').uuid4())}, format='json').status_code, 400)
-        rules = self.column.distributor_cc_rules
+        rules = self.column.brand_cc_rules
         rules[0]['send_monthly_reports'] = False
         self.configure(rules=rules)
         self.assertEqual(self.client.post('/api/system-emails/queue-now/', payload, format='json').status_code, 400)
+        self.assertEqual(SystemEmail.objects.count(), 0)
+
+    def test_manual_report_all_lab_selection_creates_one_draft_per_lab(self):
+        rules = self.configure()
+        second = Lab.objects.create(name='Calgary', code='YYC')
+        self.ticket(self.table, 70, 'ACME Edmonton', 2026, 10, 5)
+        ProblemSample.objects.create(lab=second, table=self.table, problem_number=71,
+                                     current_workflow='Follow Up Required', custom_values={'brand':'ACME Calgary'})
+        self.client.force_authenticate(self.admin)
+        payload = {'column_id': str(self.column.pk), 'rule_id': rules[0]['id'],
+                   'request_id': '7bf47c99-30b0-478b-823c-c4f252a7b41a', 'all_labs': True}
+        first = self.client.post('/api/system-emails/queue-now/', payload, format='json', HTTP_X_ACTIVE_LAB='ALL')
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(first.data['created_count'], 2)
+        self.assertEqual(len(first.data['email_ids']), 2)
+        self.assertEqual(set(SystemEmail.objects.values_list('lab_id', flat=True)), {self.lab.id, second.id})
+        self.assertEqual(SystemEmail.objects.filter(status=SystemEmail.STATUS_PENDING).count(), 2)
+        second_call = self.client.post('/api/system-emails/queue-now/', payload, format='json', HTTP_X_ACTIVE_LAB='ALL')
+        self.assertEqual(second_call.status_code, 200, second_call.data)
+        self.assertEqual(second_call.data['created_count'], 0)
+        self.assertEqual(first.data['email_ids'], second_call.data['email_ids'])
+
+    def test_manual_report_selected_labs_do_not_include_unselected_labs(self):
+        rules = self.configure()
+        other = Lab.objects.create(name='Calgary', code='YYC')
+        ignored = Lab.objects.create(name='Toronto', code='YYZ')
+        self.client.force_authenticate(self.admin)
+        response = self.client.post('/api/system-emails/queue-now/', {
+            'column_id': str(self.column.pk), 'rule_id': rules[0]['id'],
+            'request_id': '165467b9-06a9-4999-abcc-fd7d7e478bf5', 'lab_ids':[other.id, self.lab.id],
+        }, format='json', HTTP_X_ACTIVE_LAB='ALL')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual([r['lab_id'] for r in response.data['reports']], [other.id, self.lab.id])
+        self.assertFalse(SystemEmail.objects.filter(lab=ignored).exists())
+
+    def test_manual_report_lab_all_requires_valid_explicit_selection(self):
+        rules = self.configure()
+        self.client.force_authenticate(self.admin)
+        payload = {'column_id': str(self.column.pk), 'rule_id': rules[0]['id'],
+                   'request_id': 'd397b1dd-84fa-4b80-931a-0c13aee71aca'}
+        for selection in ({}, {'lab_ids':[]}, {'lab_ids':[123456]}, {'lab_ids':[self.lab.id,self.lab.id]},
+                          {'lab_ids':[True]}, {'lab_ids':['1']}, {'all_labs':'true'},
+                          {'all_labs':True, 'lab_ids':[self.lab.id]}):
+            result = self.client.post('/api/system-emails/queue-now/', {**payload, **selection},
+                                      format='json', HTTP_X_ACTIVE_LAB='ALL')
+            self.assertEqual(result.status_code, 400, (selection, result.data))
+        self.assertFalse(SystemEmail.objects.exists())
+
+    def test_manual_report_multi_lab_selection_is_admin_only(self):
+        rules = self.configure()
+        result = self.client.post('/api/system-emails/queue-now/', {
+            'column_id': str(self.column.pk), 'rule_id': rules[0]['id'],
+            'request_id': '8f3d4d41-57a2-49df-8638-43d876eaa1ad', 'all_labs': True,
+        }, format='json', HTTP_X_ACTIVE_LAB='ALL')
+        self.assertEqual(result.status_code, 403)
+        self.assertEqual(SystemEmail.objects.count(), 0)
+
+    def test_manual_report_single_lab_rejects_multi_lab_arguments(self):
+        rules = self.configure()
+        self.client.force_authenticate(self.admin)
+        result = self.client.post('/api/system-emails/queue-now/', {
+            'column_id': str(self.column.pk), 'rule_id': rules[0]['id'],
+            'request_id': '62b73880-e25a-408d-bf33-d6c0f2e18c23', 'all_labs': True,
+        }, format='json')
+        self.assertEqual(result.status_code, 400)
         self.assertEqual(SystemEmail.objects.count(), 0)

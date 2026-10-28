@@ -72,16 +72,16 @@ class TrackingLinkControlsTests(TestCase):
             'to': ['invalid'], 'subject': 'Hi', 'body': 'Hello',
         }, format='json').status_code, 400)
 
-    def test_general_email_automatically_includes_distributor_cc_and_logs_it(self):
+    def test_general_email_never_automatically_includes_brand_cc(self):
         ProblemColumn.objects.create(
-            table=self.ticket.table, name='Distributor', field_key='distributor',
-            column_type=ProblemColumn.TYPE_DISTRIBUTOR,
-            distributor_cc_rules=[
-                {'match_type': 'wildcard', 'pattern': 'ACME*', 'cc_emails': ['shipping@example.com', 'customer@example.com']},
-                {'match_type': 'contains', 'pattern': 'SUPPLIES', 'cc_emails': ['SHIPPING@example.com', 'regional@example.com']},
+            table=self.ticket.table, name='Brand', field_key='brand',
+            column_type=ProblemColumn.TYPE_BRAND,
+            brand_cc_rules=[
+                {'sources':['ticket'],'match_type': 'wildcard', 'pattern': 'ACME*', 'cc_emails': ['shipping@example.com', 'customer@example.com']},
+                {'sources':['ticket'],'match_type': 'contains', 'pattern': 'SUPPLIES', 'cc_emails': ['SHIPPING@example.com', 'regional@example.com']},
             ],
         )
-        self.ticket.custom_values = {'distributor': 'Acme Supplies'}
+        self.ticket.custom_values = {'brand': 'Acme Supplies'}
         self.ticket.save(update_fields=['custom_values'])
         result = self.client.post(self.base + 'customer-message-sent/', {
             'to': ['customer@example.com'], 'cc': ['regional@example.com', 'manual@example.com'],
@@ -89,17 +89,54 @@ class TrackingLinkControlsTests(TestCase):
         }, format='json')
         self.assertEqual(result.status_code, 201, result.data)
         entry = self.ticket.history.get(summary='Sent an email to the customer')
-        self.assertEqual(entry.details['cc'], ['regional@example.com', 'manual@example.com', 'shipping@example.com'])
+        self.assertEqual(entry.details['cc'], ['regional@example.com', 'manual@example.com'])
         self.assertEqual(entry.details['recipients'], ['customer@example.com'])
         self.assertFalse(ProblemTrackingLink.objects.filter(ticket=self.ticket).exists())
 
-    def test_general_email_without_matching_distributor_has_no_automatic_cc(self):
+    def test_general_email_with_matching_brand_and_no_manual_cc_has_no_cc(self):
         ProblemColumn.objects.create(
-            table=self.ticket.table, name='Distributor', field_key='distributor',
-            column_type=ProblemColumn.TYPE_DISTRIBUTOR,
-            distributor_cc_rules=[{'match_type': 'exact', 'pattern': 'ACME', 'cc_emails': ['cc@example.com']}],
+            table=self.ticket.table, name='Brand', field_key='brand',
+            column_type=ProblemColumn.TYPE_BRAND,
+            brand_cc_rules=[{'sources': ['ticket'], 'match_type': 'exact',
+                             'pattern': 'ACME', 'cc_emails': ['brand@example.com']}],
         )
-        self.ticket.custom_values = {'distributor': 'Other Company'}
+        self.ticket.custom_values = {'brand': 'ACME'}
+        self.ticket.save(update_fields=['custom_values'])
+        result = self.client.post(self.base + 'customer-message-sent/', {
+            'to': ['customer@example.com'], 'subject': 'Status', 'body': 'Checking in.',
+        }, format='json')
+        self.assertEqual(result.status_code, 201, result.data)
+        entry = self.ticket.history.get(summary='Sent an email to the customer')
+        self.assertEqual(entry.details['cc'], [])
+
+    def test_general_email_eml_draft_uses_only_explicit_cc(self):
+        ProblemColumn.objects.create(
+            table=self.ticket.table, name='Brand', field_key='brand',
+            column_type=ProblemColumn.TYPE_BRAND,
+            brand_cc_rules=[{'sources': ['ticket'], 'match_type': 'exact',
+                             'pattern': 'ACME', 'cc_emails': ['brand@example.com']}],
+        )
+        self.ticket.custom_values = {'brand': 'ACME'}
+        self.ticket.save(update_fields=['custom_values'])
+        for cc, expected in [([], None), (['manual@example.com'], 'manual@example.com')]:
+            with self.subTest(cc=cc):
+                result = self.client.post(self.base + 'customer-notification-draft/', {
+                    'to': ['customer@example.com'], 'cc': cc,
+                    'subject': 'Sample update', 'body': 'Please see attached.',
+                }, format='json')
+                self.assertEqual(result.status_code, 200)
+                from email import policy
+                from email.parser import BytesParser
+                draft = BytesParser(policy=policy.default).parsebytes(result.content)
+                self.assertEqual(draft['Cc'], expected)
+
+    def test_general_email_without_matching_brand_has_no_automatic_cc(self):
+        ProblemColumn.objects.create(
+            table=self.ticket.table, name='Brand', field_key='brand',
+            column_type=ProblemColumn.TYPE_BRAND,
+            brand_cc_rules=[{'sources':['ticket'],'match_type': 'exact', 'pattern': 'ACME', 'cc_emails': ['cc@example.com']}],
+        )
+        self.ticket.custom_values = {'brand': 'Other Company'}
         self.ticket.save(update_fields=['custom_values'])
         result = self.client.post(self.base + 'customer-message-sent/', {
             'to': ['customer@example.com'], 'subject': 'Sample status', 'body': 'An update.',

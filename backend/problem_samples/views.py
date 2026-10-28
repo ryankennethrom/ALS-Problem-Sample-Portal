@@ -367,35 +367,14 @@ def _email_values(value):
     return _validated_email_list(expanded)
 
 
-def _distributor_auto_cc(problem):
-    """Configured CC recipients for this ticket's current Distributor values."""
-    values = problem.custom_values or {}
-    recipients = []
-    seen = set()
-    for column in problem.table.columns.filter(column_type=ProblemColumn.TYPE_DISTRIBUTOR):
-        # Older tickets without this field must not inherit the future-ticket default.
-        value = str(values.get(column.field_key) or '').strip().casefold()
-        if not value:
-            continue
-        for rule in column.distributor_cc_rules or []:
-            pattern = str(rule.get('pattern') or '').strip().casefold()
-            mode = rule.get('match_type')
-            if not pattern:
-                continue
-            matches = {
-                'exact': lambda: value == pattern,
-                'contains': lambda: pattern in value,
-                'starts_with': lambda: value.startswith(pattern),
-                'ends_with': lambda: value.endswith(pattern),
-                'wildcard': lambda: re.fullmatch(re.escape(pattern).replace(r'\*', '.*').replace(r'\?', '.'), value) is not None,
-            }
-            if mode not in matches or not matches[mode]():
-                continue
-            for address in _validated_email_list(rule.get('cc_emails')):
-                if address.casefold() not in seen:
-                    recipients.append(address)
-                    seen.add(address.casefold())
-    return recipients
+def _brand_email_cc_for_values(table, values):
+    from .brand_email_rules import brand_cc_recipients
+    return _validated_email_list(brand_cc_recipients(table, values))
+
+
+def _brand_auto_cc(problem):
+    """Recipients for the current ticket Brand or matched company Brand(s)."""
+    return _brand_email_cc_for_values(problem.table, problem.custom_values)
 
 
 def _customer_email_recipients(problem):
@@ -775,6 +754,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'id': str(prepared.pk), 'problem_number': number,
             'custom_values': serializer.validated_data.get('custom_values', {}),
             'problem_type_prompts': problem_type_prompts,
+            'brand_cc_recipients': _brand_email_cc_for_values(table, serializer.validated_data.get('custom_values') or {}),
             'tracking_url': f'{base}/track/{prepared.tracking_token}' if base else f'/track/{prepared.tracking_token}',
         }, status=status.HTTP_201_CREATED)
 
@@ -1758,13 +1738,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         """Record ordinary correspondence without creating or changing a tracking link."""
         problem = self.get_object()
         recipients = _validated_email_list(request.data.get('to'))
-        # General "Email Customer" correspondence honors the same automatic
-        # Distributor CC rules as tracking-link emails.  Deduplicate against To
-        # and validate again on the server so saved history is consistent.
-        cc_recipients = _validated_email_list([
-            *_validated_email_list(request.data.get('cc')),
-            *_distributor_auto_cc(problem),
-        ])
+        # Automatic Brand CC is exclusive to tracking-link emails. Respect only
+        # explicitly supplied CC addresses for ordinary customer correspondence.
+        cc_recipients = _validated_email_list(request.data.get('cc'))
         to_keys = {email.casefold() for email in recipients}
         cc_recipients = [email for email in cc_recipients if email.casefold() not in to_keys]
         subject = str(request.data.get('subject') or '').strip()
@@ -1785,10 +1761,8 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
     def customer_notification_draft(self, request, pk=None):
         problem = self.get_object()
         to_recipients = _validated_email_list(request.data.get('to'))
-        cc_recipients = _validated_email_list([
-            *_validated_email_list(request.data.get('cc')),
-            *_distributor_auto_cc(problem),
-        ])
+        # Downloadable general correspondence drafts do not enforce Brand CC.
+        cc_recipients = _validated_email_list(request.data.get('cc'))
         cc_recipients = [address for address in cc_recipients if address.casefold() not in {email.casefold() for email in to_recipients}]
         subject = str(request.data.get('subject') or f'Ticket #{problem.problem_number}')[:500]
         body = str(request.data.get('body') or '')

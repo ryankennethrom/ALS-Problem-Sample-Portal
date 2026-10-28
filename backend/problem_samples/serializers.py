@@ -40,7 +40,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
             'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'fill_existing_with', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
-            'client_email_dependencies', 'client_email_dependency_details', 'intercolumn_rules', 'form_mask_rules', 'distributor_cc_rules', 'position', 'is_system',
+            'client_email_dependencies', 'client_email_dependency_details', 'company_brand_dependencies', 'intercolumn_rules', 'form_mask_rules', 'brand_cc_rules', 'position', 'is_system',
             'created_at', 'modified_at',
         ]
         read_only_fields = ['field_key', 'is_system', 'group_users', 'depends_on_column_name', 'depends_on_field_key', 'client_email_dependency_details', 'created_at', 'modified_at']
@@ -269,36 +269,50 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         else:
             attrs['choices'] = []
 
-        # Automatic customer-notification CC rules belong only to Distributor fields.
+        dependencies = attrs.get('company_brand_dependencies', getattr(self.instance, 'company_brand_dependencies', [])) or []
+        if column_type == ProblemColumn.TYPE_BRAND:
+            if not isinstance(dependencies, list) or len(dependencies) > 30 or len(set(str(x) for x in dependencies)) != len(dependencies):
+                raise serializers.ValidationError({'company_brand_dependencies': 'Select up to 30 different company fields.'})
+            table = attrs.get('table', getattr(self.instance, 'table', None))
+            allowed_company_ids = {str(col.id) for col in table.columns.all() if col.column_type in {ProblemColumn.TYPE_DISTRIBUTOR, ProblemColumn.TYPE_END_USER} and (not self.instance or col.pk != self.instance.pk)} if table else set()
+            dependencies = [str(item) for item in dependencies]
+            if any(item not in allowed_company_ids for item in dependencies):
+                raise serializers.ValidationError({'company_brand_dependencies': 'Select Distributor or End User columns from this table.'})
+            attrs['company_brand_dependencies'] = dependencies
+        else:
+            dependencies = []
+            attrs['company_brand_dependencies'] = []
+
+        # Brand rules use ticket Brand and/or the imported Brand of selected company columns.
         # Validate on the server so admins cannot persist invalid addresses/patterns.
-        if column_type == ProblemColumn.TYPE_DISTRIBUTOR:
-            rules = attrs.get('distributor_cc_rules', getattr(self.instance, 'distributor_cc_rules', [])) or []
+        if column_type == ProblemColumn.TYPE_BRAND:
+            rules = attrs.get('brand_cc_rules', getattr(self.instance, 'brand_cc_rules', [])) or []
             if not isinstance(rules, list) or len(rules) > 30:
-                raise serializers.ValidationError({'distributor_cc_rules': 'Provide up to 30 matching rules.'})
+                raise serializers.ValidationError({'brand_cc_rules': 'Provide up to 30 matching rules.'})
             cleaned_rules = []
             modes = {'exact', 'contains', 'starts_with', 'ends_with', 'wildcard'}
             for index, rule in enumerate(rules, start=1):
                 if not isinstance(rule, dict):
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index} must be an object.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index} must be an object.'})
                 mode = rule.get('match_type')
                 pattern = rule.get('pattern')
                 addresses = rule.get('cc_emails')
                 if mode not in modes:
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: select a matching method.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: select a matching method.'})
                 if not isinstance(pattern, str) or not pattern.strip() or len(pattern.strip()) > 160:
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: pattern must be 1 to 160 characters.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: pattern must be 1 to 160 characters.'})
                 if not isinstance(addresses, list) or not 1 <= len(addresses) <= 20:
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: enter 1 to 20 CC addresses.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: enter 1 to 20 CC addresses.'})
                 cleaned = []
                 seen = set()
                 for address in addresses:
                     if not isinstance(address, str):
-                        raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid CC address.'})
+                        raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: invalid CC address.'})
                     address = address.strip()
                     try:
                         validate_email(address)
                     except DjangoValidationError:
-                        raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid CC address: {address}.'})
+                        raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: invalid CC address: {address}.'})
                     if address.casefold() not in seen:
                         cleaned.append(address)
                         seen.add(address.casefold())
@@ -307,25 +321,30 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                 try:
                     rule_id = str(uuid.UUID(str(rule_id))) if rule_id else str(uuid.uuid4())
                 except (TypeError, ValueError, AttributeError):
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: invalid rule identifier.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: invalid rule identifier.'})
                 if any(item['id'] == rule_id for item in cleaned_rules):
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: duplicate rule identifier.'})
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: duplicate rule identifier.'})
                 monthly = rule.get('send_monthly_reports', False)
                 if not isinstance(monthly, bool):
-                    raise serializers.ValidationError({'distributor_cc_rules': f'Rule {index}: Send Monthly Reports must be true or false.'})
-                existing = next((old for old in (getattr(self.instance, 'distributor_cc_rules', []) or [])
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: Send Monthly Reports must be true or false.'})
+                existing = next((old for old in (getattr(self.instance, 'brand_cc_rules', []) or [])
                                  if isinstance(old, dict) and old.get('id') == rule_id), None)
                 enabled_at = (existing or {}).get('monthly_reports_enabled_at') if (existing or {}).get('send_monthly_reports') else None
                 if monthly and not enabled_at:
                     enabled_at = timezone.now().isoformat()
                 if not monthly:
                     enabled_at = None
-                cleaned_rules.append({'id': rule_id, 'match_type': mode, 'pattern': pattern.strip(),
+                sources = rule.get('sources', ['ticket'])
+                allowed = {'ticket', *dependencies}
+                if not isinstance(sources, list) or not sources or not all(isinstance(source, str) and source in allowed for source in sources):
+                    raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: select at least one enabled Brand source.'})
+                sources = list(dict.fromkeys(sources))
+                cleaned_rules.append({'id': rule_id, 'match_type': mode, 'pattern': pattern.strip(), 'sources': sources,
                                       'cc_emails': cleaned, 'send_monthly_reports': monthly,
                                       'monthly_reports_enabled_at': enabled_at})
-            attrs['distributor_cc_rules'] = cleaned_rules
+            attrs['brand_cc_rules'] = cleaned_rules
         else:
-            attrs['distributor_cc_rules'] = []
+            attrs['brand_cc_rules'] = []
 
         # A mask is a choice field whose selections define explicit creation-time
         # visibility. Column keys are stable UUIDs, not mutable field names.
@@ -952,11 +971,19 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     acknowledgement_url = serializers.SerializerMethodField()
     tracking_url = serializers.SerializerMethodField()
     tracking_link_expiry = serializers.SerializerMethodField()
+    brand_cc_recipients = serializers.SerializerMethodField()
 
     class Meta:
         model = ProblemSample
         fields = '__all__'
         read_only_fields = ['problem_number', 'container', 'lab', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
+
+    def get_brand_cc_recipients(self, obj):
+        view = self.context.get('view')
+        if getattr(view, 'action', None) != 'retrieve':
+            return []
+        from .brand_email_rules import brand_cc_recipients
+        return brand_cc_recipients(obj.table, obj.custom_values)
 
     def get_expires_at(self, obj):
         return obj.expires_at
