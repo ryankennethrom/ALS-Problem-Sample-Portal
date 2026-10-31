@@ -44,16 +44,28 @@ class CustomerReturnMethodTests(TestCase):
         return ProblemHistory.objects.filter(problem=self.problem, details__customer_action='ship_back').first()
 
     def test_courier_account_queues_shipping_and_records_account(self):
-        result = self.respond(shipping_method='courier_account', courier_account_number='AB-123456')
+        result = self.respond(shipping_method='courier_account', courier_name='Purolator', courier_account_number='AB-123456')
         self.assertEqual(result.status_code, 200)
         self.problem.refresh_from_db()
         self.assertEqual(self.problem.workflow_status, PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
         history = self.latest_selection()
         self.assertEqual(history.details['customer_shipping_method'], 'courier_account')
+        self.assertEqual(history.details['customer_courier_name'], 'Purolator')
         self.assertEqual(history.details['customer_courier_account_number'], 'AB-123456')
         self.assertIn('courier account', history.summary.lower())
-        self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Provide a courier account number')
+        self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Provide your courier name and account number')
         self.assertEqual(history.details['customer_action_label'], result.data['customer_action_label'])
+
+    def test_courier_fields_trim_and_normalize_whitespace(self):
+        result = self.respond(
+            shipping_method='courier_account',
+            courier_name='  Federal   Express ',
+            courier_account_number=' AB  123 ',
+        )
+        self.assertEqual(result.status_code, 200)
+        history = self.latest_selection()
+        self.assertEqual(history.details['customer_courier_name'], 'Federal Express')
+        self.assertEqual(history.details['customer_courier_account_number'], 'AB 123')
 
     def test_pickup_queues_shipping_and_records_method(self):
         result = self.respond(shipping_method='pickup')
@@ -62,6 +74,7 @@ class CustomerReturnMethodTests(TestCase):
         self.assertEqual(self.problem.workflow_status, PROBLEM_STATUS_TO_BE_SHIPPED_BACK)
         history = self.latest_selection()
         self.assertEqual(history.details['customer_shipping_method'], 'pickup')
+        self.assertNotIn('customer_courier_name', history.details)
         self.assertNotIn('customer_courier_account_number', history.details)
         self.assertEqual(result.data['customer_action_label'], 'I want these sample(s) back — Pick up in person')
 
@@ -91,10 +104,16 @@ class CustomerReturnMethodTests(TestCase):
     def test_invalid_account_and_unexpected_account_are_rejected(self):
         for fields in (
             {'shipping_method': 'courier_account'},
+            {'shipping_method': 'courier_account', 'courier_account_number': 'ABC123'},
+            {'shipping_method': 'courier_account', 'courier_name': 'FedEx'},
+            {'shipping_method': 'courier_account', 'courier_name': 'X' * 201, 'courier_account_number': 'ABC123'},
+            {'shipping_method': 'pickup', 'courier_name': 'UPS'},
+            {'shipping_method': 'shipping_quote', 'courier_name': 'UPS'},
+            {'shipping_method': 'dispose', 'courier_name': 'UPS'},
             {'shipping_method': 'pickup', 'courier_account_number': 'ABC123'},
             {'shipping_method': 'shipping_quote', 'courier_account_number': 'ABC123'},
             {'shipping_method': 'wrong'},
-            {'shipping_method': 'courier_account', 'courier_account_number': 'X' * 201},
+            {'shipping_method': 'courier_account', 'courier_name': 'UPS', 'courier_account_number': 'X' * 201},
         ):
             with self.subTest(fields=fields):
                 self.assertEqual(self.respond(**fields).status_code, 400)

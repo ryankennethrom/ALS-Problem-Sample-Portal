@@ -59,6 +59,7 @@ export type BrandCCRule = {
   sources: string[];
   id?: string;
   send_monthly_reports?: boolean;
+  report_column_ids?: string[] | null; // null / omitted = all eligible table columns
   match_type: 'exact' | 'contains' | 'starts_with' | 'ends_with' | 'wildcard';
   pattern: string;
   cc_emails: string[];
@@ -127,6 +128,7 @@ export type ProblemTable = {
   description: string;
   pt_days: number;
   acknowledgement_link_days: number;
+  terminal_tracking_link_days: number | null;
   is_default: boolean;
   columns: ProblemColumn[];
   row_count: number;

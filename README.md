@@ -341,7 +341,7 @@ The first confirmed customer email turns **Dispose Automatically** from **No** t
 
 `Current Workflow = To be shipped back to client` records a pending return. The public tracking page offers **I want these sample(s) back**, which explains that ALS does not charge a client handling fee but shipping charges still apply. The customer must choose one of three methods:
 
-- **Provide a courier account number:** the number is required and saved in ticket history; route to **To be shipped back to client**.
+- **Provide a courier name and account number:** both fields are required and saved in ticket history; route to **To be shipped back to client**.
 - **Pick up in person:** record the method in ticket history; route to **To be shipped back to client**.
 - **Receive a quote for the shipping charges:** record the request in ticket history; route to **Follow Up Required** for the team to prepare a quote.
 

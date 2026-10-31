@@ -6,7 +6,6 @@ import { api } from '@/lib/api';
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import WorkflowQueueAdvancedSearch from '@/components/WorkflowQueueAdvancedSearch';
-import BackToTestingEmailModal, { type TestingEmailBatchSample } from '@/components/BackToTestingEmailModal';
 import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import { useCurrentUser } from '@/components/CurrentUserContext';
 import { QueueAdvancedFilter, QueueMatchMode, matchesWorkflowQueueAdvanced, matchesWorkflowQueueSearch } from '@/lib/workflowQueueSearch';
@@ -50,7 +49,6 @@ export default function ToBeBackToTestingPage() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
-  const [pendingSelection, setPendingSelection] = useState<{ ids: string[]; samples: TestingEmailBatchSample[]; reason: string } | null>(null);
   const [error, setError] = useState('');
   const [advancedFilters, setAdvancedFilters] = useState<QueueAdvancedFilter[]>([]);
   const [advancedMatch, setAdvancedMatch] = useState<QueueMatchMode>('all');
@@ -98,35 +96,16 @@ export default function ToBeBackToTestingPage() {
     const noun = selectedCount === 1 ? 'ticket' : 'tickets';
     const reason = await requestChangeReason(`Why are you making this change to ${selectedCount} selected ${noun}?`);
     if (reason === null) return;
-    const tickets = items.filter(item => selected.has(item.id));
-    setPendingSelection({
-      ids: tickets.map(item => item.id),
-      samples: tickets.map(item => ({
-        problemNumber: item.problem_number,
-        tableName: item.table_name || '',
-        containerId: item.container_id || '',
-        trackingNumber: rowValue(item, item.als_tracking_number, ['als-tracking-number', 'als_tracking_number']),
-      })),
-      reason,
-    });
-    setError('');
-  }
-
-  async function completeSelection(sent: boolean, body: string, recipient: string, notSentReason?: string) {
-    if (!pendingSelection || updating) return;
+    const ids = items.filter(item => selected.has(item.id)).map(item => item.id);
     setUpdating(true); setError('');
     try {
       await api('/problem-samples/bulk-back-to-testing/', {
         method: 'POST',
-        headers: changeReasonHeaders(pendingSelection.reason),
-        body: JSON.stringify({ problem_ids: pendingSelection.ids,
-          back_to_testing_email_sent: sent, back_to_testing_email_body: sent ? body : '',
-          email_recipient: recipient, ...(!sent ? { back_to_testing_not_sent_reason: notSentReason } : {}),
-        }),
-        successMessage: `${pendingSelection.ids.length} ticket${pendingSelection.ids.length === 1 ? '' : 's'} moved Back to testing. ${rackRemovalReminder(pendingSelection.ids.length)}`,
+        headers: changeReasonHeaders(reason),
+        body: JSON.stringify({ problem_ids: ids }),
+        successMessage: `${ids.length} ticket${ids.length === 1 ? '' : 's'} moved Back to testing. ${rackRemovalReminder(ids.length)}`,
         errorMessage: 'Could not update the selected tickets',
       });
-      setPendingSelection(null);
       await load();
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not update the selected tickets.');
@@ -140,11 +119,11 @@ export default function ToBeBackToTestingPage() {
       <div>
         <div className="eyebrow">Testing</div>
         <h1 className="page-heading" style={{marginBottom: 2}}>To be back to testing</h1>
-        <div className="muted table-description">{isCustomerService ? 'Only Lab staff can move tickets Back to testing. You can still view the queue.' : 'Select one or more tickets awaiting testing, then confirm the NA.EDM email to move them Back to testing together.'}</div>
+        <div className="muted table-description">{isCustomerService ? 'Only Lab staff can move tickets Back to testing. You can still view the queue.' : 'Select one or more tickets awaiting testing, then choose Move Selected to complete the workflow. No email is required.'}</div>
         {!isCustomerService && <p className="rack-removal-warning"><strong>Rack reminder:</strong> Before completing this workflow, remove each ticket from the problem sample rack to prevent accidental disposal.</p>}
       </div>
       <div className="toolbar-actions">
-        <button className="button" type="button" onClick={moveSelected} disabled={isCustomerService || !selectedCount || updating || Boolean(pendingSelection)}>
+        <button className="button" type="button" onClick={moveSelected} disabled={isCustomerService || !selectedCount || updating}>
           {updating ? 'Updating…' : selectedCount ? `Move Selected (${selectedCount})` : 'Move Selected'}
         </button>
       </div>
@@ -180,7 +159,7 @@ export default function ToBeBackToTestingPage() {
           <thead>
             <tr>
               <th className="shipping-select-column">
-                <input type="checkbox" aria-label="Select all visible samples" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={isCustomerService || filtered.length === 0 || updating || Boolean(pendingSelection)} />
+                <input type="checkbox" aria-label="Select all visible samples" checked={allVisibleSelected} onChange={toggleAllVisible} disabled={isCustomerService || filtered.length === 0 || updating} />
               </th>
               <th>Ticket ID</th>
               <th>Date Created</th>
@@ -197,7 +176,7 @@ export default function ToBeBackToTestingPage() {
             {!loading && filtered.length === 0 && <tr><td colSpan={10} className="empty-table">{items.length ? 'No tickets match your search.' : 'No tickets are awaiting testing.'}</td></tr>}
             {loading && <tr><td colSpan={10} className="empty-table">Loading samples…</td></tr>}
             {!loading && filtered.map(item => <tr key={item.id} className={selected.has(item.id) ? 'shipping-row-selected' : ''}>
-              <td className="shipping-select-column"><input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={isCustomerService || updating || Boolean(pendingSelection)} /></td>
+              <td className="shipping-select-column"><input type="checkbox" aria-label={`Select problem ${item.problem_number}`} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} disabled={isCustomerService || updating} /></td>
               <td><Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link></td>
               <td>{item.created_at ? new Date(item.created_at).toLocaleString() : '—'}</td>
               <td>{item.table_name || '—'}</td>
@@ -213,6 +192,5 @@ export default function ToBeBackToTestingPage() {
       </div>
     </section>
     {changeReasonModal}
-    {pendingSelection && <BackToTestingEmailModal batchSamples={pendingSelection.samples} onConfirm={completeSelection} onCancel={() => { setPendingSelection(null); setError(''); }} busy={updating} error={error} />}
   </div>;
 }

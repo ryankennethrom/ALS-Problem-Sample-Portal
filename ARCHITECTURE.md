@@ -158,7 +158,7 @@ Acknowledgement tokens are not model defaults. `ProblemSample.acknowledgement_to
 ## Shipping-back and disposal behavior
 
 - Fixed Current Workflow `To be shipped back to client` represents a pending customer return.
-- The public **I want these sample(s) back** action requires a return method: courier account (with account number) or pickup routes to the pending shipping workflow; a request for a shipping quote routes to **Follow Up Required** instead. Every option, and the courier number when provided, is written to `ProblemHistory.details` and displayed in staff ticket history.
+- The public **I want these sample(s) back** action requires a return method: courier account (with courier name and account number) or pickup routes to the pending shipping workflow; a request for a shipping quote routes to **Follow Up Required** instead. Every option, and the courier name and account number when provided, is written to `ProblemHistory.details` and displayed in staff ticket history.
 - `Shipped back to client` samples leave their container when shipping completes.
 - Container disposal checks all attached tickets and changes only `To be Disposed` tickets to `Disposed`.
 

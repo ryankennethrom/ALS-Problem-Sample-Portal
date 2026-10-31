@@ -112,6 +112,17 @@ class ProblemTable(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(3650)],
         help_text='How many days an acknowledged customer link continues to show the acknowledgement confirmation.',
     )
+    terminal_tracking_link_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=30,
+        validators=[MinValueValidator(0), MaxValueValidator(3650)],
+        help_text=(
+            'How many days a tracking link remains active after entering a completed '
+            'terminal workflow (Back to Testing, Disposed, Shipped Back to Client). '
+            'Null means never expire. Changes affect future workflow transitions only.'
+        ),
+    )
     def workflow_choices(self):
         return list(CURRENT_WORKFLOW_CHOICES)
 
@@ -641,6 +652,10 @@ class ProblemSample(models.Model):
         anchor = self.acknowledgement_status_changed_at
         if not anchor or self.workflow_status not in TRACKING_LINK_EXPIRING_STATUSES:
             return None
+        if self.workflow_status in TERMINAL_PROBLEM_STATUSES:
+            days = self.table.terminal_tracking_link_days if self.table_id else TRACKING_LINK_DAYS
+            return None if days is None else anchor + timedelta(days=days)
+        # Pending routed workflows retain their existing 30-day behavior.
         return anchor + timedelta(days=TRACKING_LINK_DAYS)
 
     def set_tracking_link_expiration(self, expires_at):
@@ -732,7 +747,8 @@ class ProblemSample(models.Model):
                 self.customer_acknowledgement_action = ''
                 update_fields.append('customer_acknowledgement_action')
 
-        # Protected workflow states start/reset the 30-day tracking-link window.
+        # Routed workflows retain the 30-day link window, while completed terminal
+        # workflows use the table's admin-configured duration (or never expire).
         # Returning to an active follow-up workflow makes the link accessible again,
         # regardless of the Dispose Automatically value.
         if status_changed:
@@ -742,7 +758,7 @@ class ProblemSample(models.Model):
             if current_status in TRACKING_LINK_EXPIRING_STATUSES:
                 self.acknowledgement_status_changed_at = changed_at
                 update_fields.append('acknowledgement_status_changed_at')
-                self.set_tracking_link_expiration(changed_at + timedelta(days=TRACKING_LINK_DAYS))
+                self.set_tracking_link_expiration(self.expected_tracking_link_expiration())
             else:
                 if self.acknowledgement_status_changed_at is not None:
                     self.acknowledgement_status_changed_at = None
@@ -1080,6 +1096,11 @@ class SystemEmail(models.Model):
     subject = models.CharField(max_length=255)
     body = models.TextField()
     matched_ticket_count = models.PositiveIntegerField(default=0)
+    # A report is a frozen, shareable snapshot: links are independent of staff sessions.
+    public_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    public_expires_at = models.DateTimeField(null=True, blank=True)
+    public_revoked_at = models.DateTimeField(null=True, blank=True)
+    report_snapshot = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=12, default=STATUS_PENDING, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     sent_at = models.DateTimeField(null=True, blank=True)

@@ -8,6 +8,7 @@ import { displayProblemValue, systemColumnHint, ProblemTable } from '@/lib/probl
 import AdvancedSearch, { AdvancedFilter, MatchMode } from '@/components/AdvancedSearch';
 import ColumnInfo from '@/components/ColumnInfo';
 import { useCurrentUser } from '@/components/CurrentUserContext';
+import TrackingLinkDisplay from '@/components/TrackingLinkDisplay';
 
 type ProblemImage = {
   id: number;
@@ -245,8 +246,8 @@ function HomeContent() {
             {items.map(p => <tr key={p.id}>
               <td className="row-action-column"><Link className="row-open-link" href={`/problems/${p.id}`} title="Open ticket">›</Link>{p.search_score != null && <div className="score">{Math.round(p.search_score)}</div>}</td>
               <td>{p.created_at ? new Date(p.created_at).toLocaleString() : '—'}</td>
-              {selectedTable.columns.map(c => <td key={c.id}>{c.field_key === 'system-tracking-link' && p.tracking_url
-                ? <a className="table-link" href={p.tracking_url} target="_blank" rel="noreferrer">Open tracking link</a>
+              {selectedTable.columns.map(c => <td key={c.id}>{c.field_key === 'system-tracking-link'
+                ? (<TrackingLinkDisplay url={p.tracking_url} canOpen={Boolean(currentUser?.is_admin)} />)
                 : displayProblemValue(c, p)}</td>)}
             </tr>)}
           </tbody>

@@ -90,6 +90,7 @@ export default function ProblemSampleTrackingPage() {
   const [requestedInfoOpen, setRequestedInfoOpen] = useState(false);
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [shippingMethod, setShippingMethod] = useState<ShippingMethod>('');
+  const [courierName, setCourierName] = useState('');
   const [courierAccountNumber, setCourierAccountNumber] = useState('');
   const [requestedInformation, setRequestedInformation] = useState('');
   const [requestedImages, setRequestedImages] = useState<File[]>([]);
@@ -152,6 +153,7 @@ export default function ProblemSampleTrackingPage() {
     attachments: File[] = [],
     returnMethod: ShippingMethod = '',
     returnCourierAccount = '',
+    returnCourierName = '',
   ) {
     const signedName = effectiveSignature;
     if (busy || !signedName) return;
@@ -173,7 +175,7 @@ export default function ProblemSampleTrackingPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action, signature: signedName, requested_information: requestedInfo.trim(),
-            ...(action === 'ship_back' ? { shipping_method: returnMethod, courier_account_number: returnMethod === 'courier_account' ? returnCourierAccount.trim() : '' } : {}),
+            ...(action === 'ship_back' ? { shipping_method: returnMethod, courier_name: returnMethod === 'courier_account' ? returnCourierName.trim() : '', courier_account_number: returnMethod === 'courier_account' ? returnCourierAccount.trim() : '' } : {}),
           }),
         });
       }
@@ -186,6 +188,7 @@ export default function ProblemSampleTrackingPage() {
       if (action === 'ship_back') {
         setReturnDialogOpen(false);
         setShippingMethod('');
+        setCourierName('');
         setCourierAccountNumber('');
       }
       if (action === 'requested_info') {
@@ -280,7 +283,7 @@ export default function ProblemSampleTrackingPage() {
             <button className="button" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about the issue</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => {
-              setError(''); setShippingMethod(''); setCourierAccountNumber(''); setReturnDialogOpen(true);
+              setError(''); setShippingMethod(''); setCourierName(''); setCourierAccountNumber(''); setReturnDialogOpen(true);
             }}>I want these sample(s) back</button>
           </div>
         </div>}
@@ -303,9 +306,11 @@ export default function ProblemSampleTrackingPage() {
             <p><strong>Please let us know which option you prefer:</strong></p>
             <div className="public-return-options" role="radiogroup" aria-label="Return method">
               <label><input type="radio" name="return-method" checked={shippingMethod === 'courier_account'} disabled={busy} onChange={() => setShippingMethod('courier_account')} />
-                <span>1. Provide your courier account number, if available.</span>
+                <span>1. Provide your courier name and account number.</span>
               </label>
               {shippingMethod === 'courier_account' && <div className="public-return-account">
+                <label htmlFor="return-courier-name">Courier name <strong aria-hidden="true">*</strong></label>
+                <input id="return-courier-name" type="text" maxLength={200} value={courierName} onChange={event => setCourierName(event.target.value)} autoComplete="organization" disabled={busy} required placeholder="e.g. FedEx, UPS, Purolator" />
                 <label htmlFor="return-courier-account">Courier account number <strong aria-hidden="true">*</strong></label>
                 <input id="return-courier-account" type="text" maxLength={200} value={courierAccountNumber} onChange={event => setCourierAccountNumber(event.target.value)} autoComplete="off" disabled={busy} required placeholder="Enter your courier account number" />
               </div>}
@@ -320,7 +325,7 @@ export default function ProblemSampleTrackingPage() {
             <div className="public-requested-info-signature">Submitting as: <strong>{effectiveSignature}</strong></div>
             <div className="public-requested-info-actions">
               <button className="button secondary" type="button" disabled={busy} onClick={() => setReturnDialogOpen(false)}>Cancel</button>
-              <button className="button" type="button" disabled={busy || !effectiveSignature || !shippingMethod || (shippingMethod === 'courier_account' && !courierAccountNumber.trim())} onClick={() => chooseAction('ship_back', '', [], [], shippingMethod, courierAccountNumber)}>{busy ? 'Saving…' : 'Confirm return method'}</button>
+              <button className="button" type="button" disabled={busy || !effectiveSignature || !shippingMethod || (shippingMethod === 'courier_account' && (!courierName.trim() || !courierAccountNumber.trim()))} onClick={() => chooseAction('ship_back', '', [], [], shippingMethod, courierAccountNumber, courierName)}>{busy ? 'Saving…' : 'Confirm return method'}</button>
             </div>
           </section>
         </div>}

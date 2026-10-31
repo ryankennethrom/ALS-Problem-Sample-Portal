@@ -388,7 +388,8 @@ function BrandCCRulesEditor({ rules, onChange, dependencies, columns, columnId, 
       saved.match_type === rule.match_type && saved.pattern === rule.pattern &&
       !rule.pending_brand_review && !saved.pending_brand_review &&
       JSON.stringify(saved.sources || ['ticket']) === JSON.stringify(rule.sources || ['ticket']) &&
-      JSON.stringify(saved.cc_emails || []) === JSON.stringify((rule.cc_emails || []).filter(Boolean)));
+      JSON.stringify(saved.cc_emails || []) === JSON.stringify((rule.cc_emails || []).filter(Boolean)) &&
+      JSON.stringify(saved.report_column_ids ?? null) === JSON.stringify(rule.report_column_ids ?? null));
   };
 
   async function openMonthlyLabPicker(rule: BrandCCRule) {
@@ -444,7 +445,7 @@ function BrandCCRulesEditor({ rules, onChange, dependencies, columns, columnId, 
     <div className="muted result-meta" style={{marginBottom:8}}>
       When any selected Brand source matches, add its recipients in Cc only when sending a tracking link (new tickets or tracking-link resends). Regular customer emails do not automatically CC these recipients.
       Rules are case-insensitive; all matching rules are combined, with duplicates removed.
-      Wildcards: * matches any characters; ? matches one character. Enable Send Monthly Reports to queue a monthly summary for these same recipients, filtered to matching Brand tickets. A migrated Distributor rule is inactive until an admin reviews its new Brand filter and saves this column. Reports are reviewed and sent manually under Send System Emails.
+      Wildcards: * matches any characters; ? matches one character. Enable Send Monthly Reports to queue a monthly summary for these same recipients, filtered to matching Brand tickets. A migrated Distributor rule is inactive until an admin reviews its new Brand filter and saves this column. Reports are linked Excel downloads. Admins can select the ticket columns to include below. Reports are reviewed and sent manually under Send System Emails.
     </div>
     <div className="stack">
       {rules.map((rule, i) => <div className="intercolumn-rule-card stack" key={i}>
@@ -483,7 +484,20 @@ function BrandCCRulesEditor({ rules, onChange, dependencies, columns, columnId, 
           <strong>Send Monthly Reports</strong>
         </label>
         {rule.send_monthly_reports && <div className="stack" style={{gap:8}}>
-          <div className="muted result-meta">On the 1st of each month, queue one report for the prior calendar month. To send immediately, prepare a month-to-date report (from the 1st through today), then review and send it in Send System Emails.</div>
+          <fieldset className="field" style={{border:'1px solid var(--border-color, #c8cdd5)', borderRadius:8, padding:12}}>
+            <legend><strong>Excel report — ticket columns</strong></legend>
+            <div className="muted result-meta" style={{marginBottom:8}}>The workbook always includes ticket number, current workflow, creation date, and Brand match source. Choose any additional non-sensitive ALS Tickets columns.</div>
+            <label className="check-label"><input type="radio" name={`report-columns-${i}`} checked={rule.report_column_ids == null}
+              onChange={() => update(i, {report_column_ids:null})}/> All eligible columns (default)</label>
+            <label className="check-label"><input type="radio" name={`report-columns-${i}`} checked={rule.report_column_ids != null}
+              onChange={() => update(i, {report_column_ids:columns.filter(col => !/tracking[ -]?link|tracking[ _-]?token|password|secret|api key|courier account|client email|contact email|email address|access[ -]?token/i.test(`${col.name} ${col.field_key}`) && col.column_type !== 'client_email').map(col => col.id)})}/> Select columns</label>
+            {rule.report_column_ids != null && <div className="choice-list" style={{maxHeight:220, overflowY:'auto', paddingTop:8}}>
+              {columns.filter(col => !/tracking[ -]?link|tracking[ _-]?token|password|secret|api key|courier account|client email|contact email|email address|access[ -]?token/i.test(`${col.name} ${col.field_key}`) && col.column_type !== 'client_email').map(col => <label className="check-label" key={col.id}>
+                <input type="checkbox" checked={(rule.report_column_ids || []).includes(col.id)} onChange={event => update(i, {report_column_ids:event.target.checked ? [...(rule.report_column_ids || []), col.id] : (rule.report_column_ids || []).filter(id => id !== col.id)})}/>{col.name}
+              </label>)}
+            </div>}
+          </fieldset>
+          <div className="muted result-meta">On the 1st of each month, queue one Excel report for the prior calendar month. To send immediately, prepare a month-to-date report (from the 1st through today), then review and send it in Send System Emails.</div>
           <div><button type="button" className="button secondary" disabled={!isSaved(rule) || Boolean(sendingRule)} onClick={() => void openMonthlyLabPicker(rule)}>
             {sendingRule === rule.id ? 'Preparing report…' : 'Send Monthly Email Now'}
           </button></div>
@@ -631,6 +645,7 @@ export default function TableSettings() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [ptDays, setPtDays] = useState(30);
+  const [terminalTrackingDays, setTerminalTrackingDays] = useState<number | null>(30);
   const [colName, setColName] = useState('');
   const [colDescription, setColDescription] = useState('');
   const [colType, setColType] = useState<ColumnType>('text');
@@ -652,13 +667,14 @@ export default function TableSettings() {
   async function load() {
     const d: ProblemTable = await api(`/problem-tables/${id}/`);
     setTable(d); setName(d.name); setDescription(d.description || ''); setPtDays(d.pt_days ?? 30);
+    setTerminalTrackingDays(d.terminal_tracking_link_days === undefined ? 30 : d.terminal_tracking_link_days);
     setColumnOrder(d.columns.map(column => column.id));
   }
   useEffect(() => { load().catch(e=>setError(e instanceof Error ? e.message : 'Failed')); }, [id]);
 
   async function saveTable(e: React.FormEvent) {
     e.preventDefault();
-    await api(`/problem-tables/${id}/`, {method:'PATCH', body:JSON.stringify({name, description, pt_days: ptDays}), errorMessage:'Could not save table details'});
+    await api(`/problem-tables/${id}/`, {method:'PATCH', body:JSON.stringify({name, description, pt_days: ptDays, terminal_tracking_link_days: terminalTrackingDays}), errorMessage:'Could not save table details'});
     queueToastForReload('success', 'Table details saved successfully.');
     window.location.reload();
   }
@@ -799,7 +815,15 @@ export default function TableSettings() {
             <div className="field"><label>Name</label><input className="input" value={name} onChange={e=>setName(e.target.value)} required/></div>
             <div className="field"><label>Description</label><textarea className="textarea" value={description} onChange={e=>setDescription(e.target.value)}/></div>
             <div className="field"><label>Ticket Expiration Period (days)</label><input className="input" type="number" min={0} max={3650} value={ptDays} onChange={e=>{ const value = Number(e.target.value); setPtDays(Number.isFinite(value) ? Math.min(3650, Math.max(0, value)) : 0); }} required/><div className="muted result-meta">Each time Dispose Automatically changes from No to Yes, a new expiration period of this many days starts. When it ends, Current Workflow automatically changes to To be Disposed. Enter 0 for an immediate transition.</div></div>
-            <div className="muted result-meta">Ticket Tracking Links remain available for 30 days after the most recent change to a routed disposal, shipping, or back-to-testing Current Workflow. Returning Current Workflow to Follow Up Required clears that expiry clock and makes the tracking link accessible again.</div>
+            <div className="field"><label>Tracking Link Expiration After Terminal Workflow</label>
+              <select className="select" value={terminalTrackingDays === null ? 'never' : 'days'} onChange={e => setTerminalTrackingDays(e.target.value === 'never' ? null : 30)}>
+                <option value="days">Expire after a specified number of days</option>
+                <option value="never">Never expire</option>
+              </select>
+              {terminalTrackingDays !== null && <div style={{marginTop:8}}><label>Days after reaching terminal workflow</label><input className="input" type="number" min={0} max={3650} required value={terminalTrackingDays} onChange={e => { const value = Number(e.target.value); setTerminalTrackingDays(Number.isFinite(value) ? Math.max(0, Math.min(3650, Math.trunc(value))) : 30); }}/></div>}
+              <div className="muted result-meta">Applies when a ticket enters Back to Testing, Disposed, or Shipped Back to Client. Zero expires immediately; Never keeps the tracking link available until it is revoked or the ticket is deleted. Changes apply to future workflow transitions only, not existing links.</div>
+            </div>
+            <div className="muted result-meta">While tickets are in a pending disposal, shipping, or back-to-testing workflow, tracking links still expire after 30 days. Returning to Follow Up Required clears the expiration clock and makes a non-revoked link accessible again.</div>
             <div><button className="button">Save Table Details</button></div>
           </form>
         </section>

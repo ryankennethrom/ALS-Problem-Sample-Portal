@@ -32,6 +32,9 @@ def serialize_mail(message, detail=False):
         'created_at': message.created_at.isoformat(),
         'sent_at': message.sent_at.isoformat() if message.sent_at else None,
     }
+    if message.report_snapshot and message.public_expires_at and not message.public_revoked_at:
+        from .monthly_report_portal import report_url
+        item['report_url'] = report_url(message)
     if detail:
         item['to_emails'] = message.to_emails
         item['body'] = message.body
@@ -150,3 +153,21 @@ class QueueManualDistributorReportView(APIView):
                          'reports': reports, 'created': count > 0, 'created_count': count,
                          'status': reports[0]['status']},
                         status=status.HTTP_201_CREATED if count else status.HTTP_200_OK)
+
+
+class RevokeMonthlyReportLinkView(APIView):
+    """Admins can invalidate a leaked monthly report URL without deleting history."""
+    def post(self, request, email_id):
+        if not is_admin(request.user):
+            return Response({'detail': 'Administrator access is required.'}, status=403)
+        lab = active_lab(request)
+        qs = SystemEmail.objects.filter(pk=email_id)
+        if lab: qs = qs.filter(lab=lab)
+        with transaction.atomic():
+            mail = get_object_or_404(qs.select_for_update())
+            if not mail.report_snapshot:
+                return Response({'detail': 'This is a legacy email without a hosted report.'}, status=400)
+            if not mail.public_revoked_at:
+                mail.public_revoked_at = timezone.now()
+                mail.save(update_fields=['public_revoked_at'])
+        return Response({'revoked': True})

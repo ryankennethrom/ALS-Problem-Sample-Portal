@@ -7,7 +7,6 @@ from .models import (
     PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING,
     SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, ProblemContainer, ProblemHistory, ProblemSample,
 )
-from .notification_recipient import get_edmonton_recipient
 from .views import get_default_table
 
 
@@ -33,73 +32,41 @@ class BulkBackToTestingTests(TestCase):
     def payload(self, **changes):
         return {'problem_ids': [str(self.first.pk), str(self.second.pk)], **changes}
 
-    def test_bulk_completion_requires_email_decision_and_is_atomic(self):
-        self.assertEqual(self.client.post(self.url, self.payload(), format='json').status_code, 400)
-        self.assertEqual(self.client.post(self.url, self.payload(back_to_testing_email_sent=False), format='json').status_code, 400)
-        self.assertEqual(self.client.post(self.url, self.payload(back_to_testing_email_sent=True,
-            back_to_testing_email_body='Please retest.'), format='json').status_code, 400)
+    def test_bulk_completion_requires_no_email_and_records_only_workflow_changes(self):
+        response = self.client.post(self.url, self.payload(), format='json', HTTP_X_CHANGE_REASON='Ready for testing')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['count'], 2)
+        self.assertNotIn('emails_sent_confirmed', response.data)
+        self.assertNotIn('email_batch_id', response.data)
+        for sample in (self.first, self.second):
+            sample.refresh_from_db()
+            self.assertEqual(sample.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
+            self.assertIsNone(sample.container_id)
+            self.assertIsNone(sample.back_to_testing_notified_at)
+            entry = ProblemHistory.objects.get(problem=sample, summary='Moved back to testing')
+            self.assertEqual(entry.details['reason'], 'Ready for testing')
+            self.assertNotIn('email_status', entry.details)
+            self.assertNotIn('email_batch_id', entry.details)
+        self.assertFalse(ProblemHistory.objects.filter(summary__icontains='Back to Testing email').exists())
+        self.assertEqual(len(self.client.get('/api/problem-samples/to-be-back-to-testing/').data), 0)
+
+    def test_stale_ticket_blocks_entire_batch(self):
         stale = self.sample(3)
         stale.current_workflow = 'Follow Up Required'
         stale.custom_values = {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: 'Follow Up Required'}
         stale.save(update_fields=['current_workflow', 'custom_values'])
-        self.assertEqual(self.client.post(self.url, {
-            'problem_ids': [str(self.first.pk), str(stale.pk)], 'back_to_testing_email_sent': False,
-            'back_to_testing_not_sent_reason': 'Email unknown',
-        }, format='json').status_code, 409)
+        response = self.client.post(self.url, {'problem_ids': [str(self.first.pk), str(stale.pk)]}, format='json')
+        self.assertEqual(response.status_code, 409)
         self.first.refresh_from_db()
         self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
         self.assertEqual(self.first.container_id, self.container.pk)
-
-        response = self.client.post(self.url, self.payload(back_to_testing_email_sent=True,
-            back_to_testing_email_body='Please retest both samples.',
-            email_recipient=get_edmonton_recipient().email), format='json', HTTP_X_CHANGE_REASON='Samples are ready')
-        self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data['count'], 2)
-        self.first.refresh_from_db()
-        self.second.refresh_from_db()
-        for sample in (self.first, self.second):
-            self.assertEqual(sample.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
-            self.assertIsNone(sample.container_id)
-            self.assertIsNotNone(sample.back_to_testing_notified_at)
-            self.assertTrue(ProblemHistory.objects.filter(problem=sample, summary='Moved back to testing',
-                                                           details__reason='Samples are ready').exists())
-            workflow = ProblemHistory.objects.get(problem=sample, summary='Moved back to testing')
-            self.assertEqual(workflow.details['email_status'], 'sent')
-            self.assertEqual(workflow.details['email_batch_id'], response.data['email_batch_id'])
-        email_events = ProblemHistory.objects.filter(
-            problem__in=[self.first, self.second],
-            summary='Sent consolidated Back to Testing email to NA.EDM',
-        )
-        self.assertEqual(email_events.count(), 1)
-        self.assertEqual(email_events.get().details['ticket_count'], 2)
-        self.assertEqual(email_events.get().details['ticket_numbers'], [1, 2])
-        self.assertEqual(response.data['emails_sent_confirmed'], 1)
-        self.assertEqual(len(self.client.get('/api/problem-samples/to-be-back-to-testing/').data), 0)
-
-    def test_no_email_keeps_notification_pending_and_requires_reason(self):
-        response = self.client.post(self.url, self.payload(back_to_testing_email_sent=False,
-            back_to_testing_not_sent_reason='Email unknown'), format='json')
-        self.assertEqual(response.status_code, 200, response.data)
-        self.first.refresh_from_db()
-        self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
-        self.assertIsNone(self.first.container_id)
-        self.assertIsNone(self.first.back_to_testing_notified_at)
-        not_sent = ProblemHistory.objects.get(problem=self.first,
-            summary='Consolidated Back to Testing email not sent to NA.EDM')
-        self.assertEqual(not_sent.details['reason'], 'Email unknown')
-        self.assertEqual(not_sent.details['ticket_count'], 2)
-        self.assertEqual(response.data['emails_sent_confirmed'], 0)
-        self.assertFalse(ProblemHistory.objects.filter(
-            problem=self.second,
-            summary__icontains='email to NA.EDM',
-        ).exists())
+        self.assertFalse(ProblemHistory.objects.filter(problem=self.first).exists())
 
     def test_disposed_container_blocks_entire_batch(self):
         another = ProblemContainer.objects.create(created_by=self.user, disposed_at=timezone.now())
         self.second.container = another
         self.second.save(update_fields=['container'])
-        response = self.client.post(self.url, self.payload(back_to_testing_email_sent=False,
-            back_to_testing_not_sent_reason='Email unknown'), format='json')
+        response = self.client.post(self.url, self.payload(), format='json')
         self.assertEqual(response.status_code, 409, response.data)
         self.first.refresh_from_db()
         self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING)
@@ -107,32 +74,21 @@ class BulkBackToTestingTests(TestCase):
 
     def test_batch_handles_tickets_with_nullable_container_and_table(self):
         """PostgreSQL rejects FOR UPDATE applied to nullable outer-joined tables."""
-        # Two nullable foreign keys must not be joined in the locked SELECT.
         self.first.container = None
         self.first.table = None
         self.first.save(update_fields=['container', 'table'])
         self.second.container = None
         self.second.save(update_fields=['container'])
-        response = self.client.post(
-            self.url,
-            self.payload(back_to_testing_email_sent=False,
-                         back_to_testing_not_sent_reason='Recipient unavailable'),
-            format='json',
-        )
+        response = self.client.post(self.url, self.payload(), format='json')
         self.assertEqual(response.status_code, 200, response.data)
         self.first.refresh_from_db()
         self.second.refresh_from_db()
         self.assertEqual(self.first.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
         self.assertEqual(self.second.workflow_status, PROBLEM_STATUS_BACK_TO_TESTING)
 
-    def test_repeat_submission_does_not_record_another_email(self):
-        payload = self.payload(
-            back_to_testing_email_sent=True,
-            back_to_testing_email_body='Please retest both samples.',
-            email_recipient=get_edmonton_recipient().email,
-        )
+    def test_repeat_submission_is_rejected_without_extra_history(self):
+        payload = self.payload()
         self.assertEqual(self.client.post(self.url, payload, format='json').status_code, 200)
         self.assertEqual(self.client.post(self.url, payload, format='json').status_code, 409)
-        self.assertEqual(ProblemHistory.objects.filter(
-            summary='Sent consolidated Back to Testing email to NA.EDM',
-        ).count(), 1)
+        self.assertEqual(ProblemHistory.objects.filter(summary='Moved back to testing').count(), 2)
+        self.assertFalse(ProblemHistory.objects.filter(summary__icontains='Back to Testing email').exists())

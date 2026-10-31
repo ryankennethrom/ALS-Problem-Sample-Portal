@@ -225,7 +225,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   useEffect(() => {
-    const publicRoute = pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/');
+    const publicRoute = pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || (pathname.startsWith('/track/') || pathname.startsWith('/reports/monthly/'));
     if (publicRoute) return;
     if (!getToken()) {
       router.replace(loginUrl(currentReturnPath()));
@@ -287,7 +287,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [user?.id, user?.needs_email, pathname]);
 
-  if (pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || pathname.startsWith('/track/')) return <>{children}</>;
+  if (pathname === '/login' || pathname.startsWith('/login/') || pathname.startsWith('/acknowledge/') || (pathname.startsWith('/track/') || pathname.startsWith('/reports/monthly/'))) return <>{children}</>;
 
   async function logout() {
     closeMobileDrawer();

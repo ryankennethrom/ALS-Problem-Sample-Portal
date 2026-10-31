@@ -11,7 +11,7 @@ from django.conf import settings
 from django.utils.text import slugify
 from rest_framework import serializers
 from accounts.models import UserProfile
-from .labs import active_lab, create_container
+from .labs import active_lab, create_container, admin_user
 from .models import ProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, CURRENT_WORKFLOW_DEFAULT, TERMINAL_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, PROBLEM_STATUS_SHIPPED_BACK, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_BACK_TO_TESTING, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, apply_intercolumn_rules_to_values, resolve_problem_type, FORM_MASK_STATES, INTERCOLUMN_RULE_DIRECTIONS, INTERCOLUMN_RULE_OTHER_TO_CONTROLLER, INTERCOLUMN_RULE_CONTROLLER_TO_OTHER, INTERCOLUMN_RULE_BOTH
 
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
@@ -339,8 +339,22 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
                 if not isinstance(sources, list) or not sources or not all(isinstance(source, str) and source in allowed for source in sources):
                     raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: select at least one enabled Brand source.'})
                 sources = list(dict.fromkeys(sources))
+                # Per-rule Excel columns, stored in the existing Brand JSON field.
+                # None (the default for existing rules) means all safe table columns;
+                # [] explicitly requests only the required ticket identifiers.
+                selected_columns = rule.get('report_column_ids', None)
+                if selected_columns is not None:
+                    if (not isinstance(selected_columns, list) or len(selected_columns) > 160 or
+                            any(not isinstance(item, str) for item in selected_columns) or
+                            len(set(selected_columns)) != len(selected_columns)):
+                        raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: invalid Excel report columns.'})
+                    from .monthly_report_portal import reportable_column
+                    eligible_ids = {str(field.pk) for field in table.columns.all() if reportable_column(field)} if table else set()
+                    if not set(selected_columns).issubset(eligible_ids):
+                        raise serializers.ValidationError({'brand_cc_rules': f'Rule {index}: select valid, non-sensitive columns from this ticket table.'})
                 cleaned_rules.append({'id': rule_id, 'match_type': mode, 'pattern': pattern.strip(), 'sources': sources,
                                       'cc_emails': cleaned, 'send_monthly_reports': monthly,
+                                      'report_column_ids': selected_columns,
                                       'monthly_reports_enabled_at': enabled_at})
             attrs['brand_cc_rules'] = cleaned_rules
         else:
@@ -526,7 +540,7 @@ class ProblemTableSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemTable
         fields = [
-            'id', 'name', 'description', 'pt_days', 'acknowledgement_link_days', 'is_default', 'columns', 'row_count',
+            'id', 'name', 'description', 'pt_days', 'acknowledgement_link_days', 'terminal_tracking_link_days', 'is_default', 'columns', 'row_count',
             'created_by_email', 'created_at', 'modified_at',
         ]
         read_only_fields = ['acknowledgement_link_days', 'is_default', 'created_by_email', 'created_at', 'modified_at']
@@ -590,7 +604,17 @@ class AttachmentSerializer(serializers.ModelSerializer):
         fields = ['id', 'file', 'original_name', 'content_type', 'size_bytes', 'include_in_customer_notification', 'uploaded_by_email', 'uploaded_at']
 
 
+def _can_view_tracking_links(context):
+    """Cache the role check for every row/history entry in one API response."""
+    if '_can_view_tracking_links' not in context:
+        request = context.get('request')
+        context['_can_view_tracking_links'] = bool(request and admin_user(request.user))
+    return context['_can_view_tracking_links']
+
+
+
 class HistorySerializer(serializers.ModelSerializer):
+    details = serializers.SerializerMethodField()
     actor_email = serializers.EmailField(source='actor.email', read_only=True)
     actor_name = serializers.SerializerMethodField()
     action_label = serializers.SerializerMethodField()
@@ -599,6 +623,11 @@ class HistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = ProblemHistory
         fields = ['id', 'action', 'action_label', 'summary', 'details', 'actor_email', 'actor_name', 'created_at']
+
+    def get_details(self, obj):
+        # History is viewable to staff. The frontend must not linkify tracking URLs
+        # for non-admin users; never rewrite stored audit history.
+        return obj.details or {}
 
     def get_summary(self, obj):
         if obj.action == ProblemHistory.ACTION_CREATED:
@@ -938,6 +967,7 @@ class ShippingProblemSampleSerializer(serializers.ModelSerializer):
         return obj.days_until_automatic_disposal
 
     def get_tracking_url(self, obj):
+        # Staff may read the URL, but the UI only renders it as non-interactive text.
         if not obj.acknowledgement_token:
             return ''
         base = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
@@ -975,7 +1005,8 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProblemSample
-        fields = '__all__'
+        # This temporary secret is only returned by the dedicated email-preparation endpoint.
+        exclude = ['pending_tracking_token']
         read_only_fields = ['problem_number', 'container', 'lab', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
 
     def get_brand_cc_recipients(self, obj):
@@ -991,10 +1022,15 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
     def get_expiration_status(self, obj):
         return obj.expiration_status
 
+    def _can_view_tracking_link(self):
+        return _can_view_tracking_links(self.context)
+
     def get_acknowledgement_token(self, obj):
-        return obj.acknowledgement_token
+        return obj.acknowledgement_token if self._can_view_tracking_link() else None
 
     def get_acknowledgement_url(self, obj):
+        # Displayable URLs are available to staff; the standalone raw token
+        # field stays restricted to admins.
         if not obj.acknowledgement_token:
             return ''
         base = str(getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')

@@ -3,7 +3,7 @@
 import { ProblemColumn } from '@/lib/problemTables';
 import DistributorAutocomplete from '@/components/DistributorAutocomplete';
 import EndUserAutocomplete from '@/components/EndUserAutocomplete';
-import ClientEmailAutocomplete from '@/components/ClientEmailAutocomplete';
+import ClientEmailAutocomplete, { ClientEmailSelectionHandle } from '@/components/ClientEmailAutocomplete';
 import BrandAutocomplete from '@/components/BrandAutocomplete';
 import ColumnInfo from '@/components/ColumnInfo';
 import { useCurrentUser } from '@/components/CurrentUserContext';
@@ -25,7 +25,7 @@ function ColumnFieldLabel({
   </div>;
 }
 
-export default function DynamicField({ column, value, allValues = {}, onChange }: { column: ProblemColumn; value: unknown; allValues?: Record<string, unknown>; onChange: (value: unknown) => void }) {
+export default function DynamicField({ column, value, allValues = {}, onChange, clientEmailRef }: { column: ProblemColumn; value: unknown; allValues?: Record<string, unknown>; onChange: (value: unknown) => void; clientEmailRef?: (editor: ClientEmailSelectionHandle | null) => void }) {
   const currentUser = useCurrentUser();
   const noBackToTesting = column.field_key === 'current-workflow' && currentUser?.role === 'customer_service';
   const id = `custom-${column.id}`;
@@ -65,6 +65,7 @@ export default function DynamicField({ column, value, allValues = {}, onChange }
     }));
     return <div className="field client-email-field"><ColumnFieldLabel column={column} htmlFor={id}/><ClientEmailAutocomplete
       id={id}
+      ref={clientEmailRef}
       required={column.required}
       value={value}
       onChange={next => onChange(next)}

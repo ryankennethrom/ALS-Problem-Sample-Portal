@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { applyIntercolumnRules, CustomValues, initialValue, ProblemTable, resolveProblemTypeMask, MaskFieldState } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
+import ClientEmailSelectionPrompt from '@/components/ClientEmailSelectionPrompt';
+import { ClientEmailSelectionHandle } from '@/components/ClientEmailAutocomplete';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import CameraCapture from '@/components/CameraCapture';
 import CreateTicketContainerFitModal from '@/components/CreateTicketContainerFitModal';
@@ -35,6 +37,25 @@ export default function ProblemForm() {
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [pendingCreation, setPendingCreation] = useState<PendingTicketCreation | null>(null);
+  const [clientEmailPrompt, setClientEmailPrompt] = useState<{ selectedCount: number; fieldCount: number } | null>(null);
+  const clientEmailEditors = useRef(new Map<string, ClientEmailSelectionHandle>());
+  function registerClientEmailEditor(fieldKey: string, editor: ClientEmailSelectionHandle | null) {
+    if (editor) clientEmailEditors.current.set(fieldKey, editor);
+    else clientEmailEditors.current.delete(fieldKey);
+  }
+  function unresolvedClientEmails() {
+    const counts = [...clientEmailEditors.current.values()].map(editor => editor.pendingCount()).filter(Boolean);
+    return { selectedCount: counts.reduce((total, count) => total + count, 0), fieldCount: counts.length };
+  }
+  function applyEmailDecision(action: 'keep' | 'delete') {
+    const resolvedValues = { ...customValues };
+    for (const [fieldKey, editor] of clientEmailEditors.current) {
+      if (editor.pendingCount()) resolvedValues[fieldKey] = editor.resolve(action);
+    }
+    setCustomValues(resolvedValues);
+    setClientEmailPrompt(null);
+    void continueSubmit(resolvedValues);
+  }
   // A server timestamp is recorded on the first Create Ticket click, including
   // time spent on the physical container check and customer email preview.
   // Only a successfully finalized ticket is included in the admin totals.
@@ -118,9 +139,19 @@ export default function ProblemForm() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (saving || pendingCreation) return;
+    if (saving || pendingCreation || clientEmailPrompt) return;
     // Keyboard Enter submits also start at the initial Create Ticket action.
     void ensureCreationTimer().catch(() => {});
+    const pending = unresolvedClientEmails();
+    if (pending.selectedCount) {
+      setClientEmailPrompt(pending);
+      return;
+    }
+    await continueSubmit(customValues);
+  }
+
+  async function continueSubmit(values: CustomValues) {
+    if (saving || pendingCreation) return;
     setError('');
     if (!table) {
       setError('No ticket table is available.');
@@ -145,10 +176,10 @@ export default function ProblemForm() {
       setShowFitConfirmation(true);
       return;
     }
-    await prepareTicket(containerId.trim());
+    await prepareTicket(containerId.trim(), values);
   }
 
-  async function prepareTicket(assignedContainerId: string) {
+  async function prepareTicket(assignedContainerId: string, values: CustomValues = customValues) {
     if (saving || pendingCreation) return;
     if (!table) { setError('No ticket table is available.'); return; }
     setSaving(true);
@@ -163,17 +194,17 @@ export default function ProblemForm() {
     try {
       const prepared = await api('/problem-samples/prepare-new/', {
         method: 'POST',
-        body: JSON.stringify({ table: tableId, container_code: assignedContainerId, custom_values: customValues, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
+        body: JSON.stringify({ table: tableId, container_code: assignedContainerId, custom_values: values, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
         errorMessage: 'Could not prepare ticket',
       });
       preparedId = String(prepared.id || '');
 
-      const customerEmails = findCustomerEmails(table, customValues);
+      const customerEmails = findCustomerEmails(table, values);
       let emailContent: CustomerEmailContent | null = null;
       if (customerEmails.length) {
         const emailContext: CustomerEmailContext = {
           table,
-          values: customValues,
+          values,
           problemNumber: prepared.problem_number,
           tableName: table.name,
           trackingUrl: prepared.tracking_url,
@@ -312,7 +343,7 @@ export default function ProblemForm() {
     {table ? <>
       <div className="grid">
         {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key)) && (c.column_type === 'problem_type' || mask[c.field_key] !== 'hidden')).map(column =>
-          <DynamicField key={column.id} column={{...column, required: mask[column.field_key] === 'required' || (mask[column.field_key] !== 'shown' && column.required)}} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)}/>) }
+          <DynamicField key={column.id} column={{...column, required: mask[column.field_key] === 'required' || (mask[column.field_key] !== 'shown' && column.required)}} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)}/>) }
       </div>
       {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key))).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
     </> : null}
@@ -339,6 +370,13 @@ export default function ProblemForm() {
     {error && <div className="error">{error}</div>}
     {table ? <div><button className="button" onClick={() => { void ensureCreationTimer().catch(() => {}); }} disabled={saving || Boolean(pendingCreation)}>{saving ? 'Preparing…' : 'Create Ticket'}</button></div> : null}
   </form>
+  {clientEmailPrompt && <ClientEmailSelectionPrompt
+    selectedCount={clientEmailPrompt.selectedCount}
+    fieldCount={clientEmailPrompt.fieldCount}
+    onKeep={() => applyEmailDecision('keep')}
+    onDelete={() => applyEmailDecision('delete')}
+    onCancel={() => setClientEmailPrompt(null)}
+  />}
   {showFitConfirmation && containerMode === 'existing' && <CreateTicketContainerFitModal
     containerId={containerId.trim()}
     onFits={() => {

@@ -6,14 +6,17 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { applyIntercolumnRules, automaticDisposalDisplay, CustomValues, displayCustomValue, ProblemTable } from '@/lib/problemTables';
 import DynamicField from '@/components/DynamicField';
+import ClientEmailSelectionPrompt from '@/components/ClientEmailSelectionPrompt';
+import { ClientEmailSelectionHandle } from '@/components/ClientEmailAutocomplete';
 import ReopenContainerModal from '@/components/ReopenContainerModal';
 import { CustomerEmailContent, CustomerEmailContext, findCustomerEmails, prepareCustomerEmail } from '@/lib/customerEmail';
 import CustomerEmailModal from '@/components/CustomerEmailModal';
 import GeneralCustomerEmailModal from '@/components/GeneralCustomerEmailModal';
-import BackToTestingEmailModal, { TestingEmailDetails } from '@/components/BackToTestingEmailModal';
 import { changeReasonHeaders } from '@/lib/changeReason';
 import { useChangeReasonModal } from '@/components/ChangeReasonModal';
 import { useCurrentUser } from '@/components/CurrentUserContext';
+import TrackingLinkDisplay from '@/components/TrackingLinkDisplay';
+import { TrackingLinkInlineText } from '@/components/TrackingLinkPreviewText';
 import { rackRemovalReminder } from '@/lib/rackRemovalReminder';
 import CameraCapture from '@/components/CameraCapture';
 import StaffImage from '@/components/StaffImage';
@@ -41,12 +44,15 @@ type HistoryEntry = {
     customer_requested_information?: string;
     customer_shipping_method?: 'courier_account' | 'pickup' | 'shipping_quote';
     customer_shipping_method_label?: string;
+    customer_courier_name?: string;
     customer_courier_account_number?: string;
     customer_uploaded_images?: { id:number; name:string; size_bytes:number }[];
     customer_uploaded_attachments?: { id:number; name:string; size_bytes:number; content_type?:string }[];
     replied_to_history_id?: number;
     customer_message?: string;
     staff_reply?: string;
+    staff_reply_images?: { id:number; name:string; size_bytes:number }[];
+    staff_reply_attachments?: { id:number; name:string; size_bytes:number; content_type?:string }[];
     recipients?: string[];
     cc?: string[];
     tracking_url?: string;
@@ -107,6 +113,25 @@ export default function Detail() {
   const [p, setP] = useState<Problem | null>(null);
   const [table, setTable] = useState<ProblemTable | null>(null);
   const [customValues, setCustomValues] = useState<CustomValues>({});
+  const [clientEmailPrompt, setClientEmailPrompt] = useState<{ selectedCount: number; fieldCount: number } | null>(null);
+  const clientEmailEditors = useRef(new Map<string, ClientEmailSelectionHandle>());
+  function registerClientEmailEditor(fieldKey: string, editor: ClientEmailSelectionHandle | null) {
+    if (editor) clientEmailEditors.current.set(fieldKey, editor);
+    else clientEmailEditors.current.delete(fieldKey);
+  }
+  function unresolvedClientEmails() {
+    const counts = [...clientEmailEditors.current.values()].map(editor => editor.pendingCount()).filter(Boolean);
+    return { selectedCount: counts.reduce((total, count) => total + count, 0), fieldCount: counts.length };
+  }
+  function applyEmailDecision(action: 'keep' | 'delete') {
+    const resolvedValues = { ...customValues };
+    for (const [fieldKey, editor] of clientEmailEditors.current) {
+      if (editor.pendingCount()) resolvedValues[fieldKey] = editor.resolve(action);
+    }
+    setCustomValues(resolvedValues);
+    setClientEmailPrompt(null);
+    void saveCustom(resolvedValues, true);
+  }
   const [containerCode, setContainerCode] = useState('');
   const [changeContainerOpen, setChangeContainerOpen] = useState(false);
   const [pendingContainerChoice, setPendingContainerChoice] = useState<{ mode:'existing' | 'new'; containerId:string } | null>(null);
@@ -121,9 +146,11 @@ export default function Detail() {
   const [mentionEmailDraft, setMentionEmailDraft] = useState<{ body: string; emails: MentionEmailDraft[]; confirmationToken: string } | null>(null);
   const [historyReplyTarget, setHistoryReplyTarget] = useState<HistoryEntry | null>(null);
   const [historyReplyText, setHistoryReplyText] = useState('');
+  const [historyReplyImages, setHistoryReplyImages] = useState<File[]>([]);
+  const [historyReplyAttachments, setHistoryReplyAttachments] = useState<File[]>([]);
   const [preparingHistoryReply, setPreparingHistoryReply] = useState(false);
   const [savingHistoryReply, setSavingHistoryReply] = useState(false);
-  const [historyReplyEmailDraft, setHistoryReplyEmailDraft] = useState<{ historyId:number; reply:string; email:CustomerHistoryReplyEmail; confirmationToken:string } | null>(null);
+  const [historyReplyEmailDraft, setHistoryReplyEmailDraft] = useState<{ historyId:number; reply:string; email:CustomerHistoryReplyEmail; confirmationToken:string; images:File[]; attachments:File[] } | null>(null);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -138,11 +165,6 @@ export default function Detail() {
   const [generalEmailOpen, setGeneralEmailOpen] = useState(false);
   const [recordingGeneralEmail, setRecordingGeneralEmail] = useState(false);
   const [revokingTrackingLink, setRevokingTrackingLink] = useState(false);
-  const [testingEmailDraft, setTestingEmailDraft] = useState<{
-    mode: 'transition' | 'notify'; values: CustomValues; containerCode: string; reason: string;
-  } | null>(null);
-  const [testingEmailBusy, setTestingEmailBusy] = useState(false);
-  const [testingEmailError, setTestingEmailError] = useState('');
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deletingProblem, setDeletingProblem] = useState(false);
   const initialHashHandled = useRef(false);
@@ -251,18 +273,32 @@ export default function Detail() {
     setError('');
     setHistoryReplyTarget(entry);
     setHistoryReplyText('');
+    setHistoryReplyImages([]);
+    setHistoryReplyAttachments([]);
   }
 
   async function prepareHistoryReply() {
     if (!historyReplyTarget || preparingHistoryReply || savingHistoryReply) return;
     const reply = historyReplyText.trim();
     if (!reply) return;
+    const allFiles = [...historyReplyImages, ...historyReplyAttachments];
+    if (allFiles.length > 12 || allFiles.some(file => file.size === 0 || file.size > 25 * 1024 * 1024 || file.name.length > 255)
+        || allFiles.reduce((size, file) => size + file.size, 0) > 50 * 1024 * 1024) {
+      setError('Select at most 12 files, each up to 25 MB and 50 MB total.');
+      return;
+    }
     setPreparingHistoryReply(true);
     setError('');
     try {
       const preview: CustomerHistoryReplyPreview = await api(`/problem-samples/${id}/prepare-customer-history-reply/`, {
         method: 'POST',
-        body: JSON.stringify({ history_id: historyReplyTarget.id, reply }),
+        body: JSON.stringify({
+          history_id: historyReplyTarget.id, reply,
+          reply_files: {
+            images: historyReplyImages.map(file => ({ name: file.name, size: file.size })),
+            attachments: historyReplyAttachments.map(file => ({ name: file.name, size: file.size })),
+          },
+        }),
         errorMessage: 'Could not prepare customer reply email',
       });
       setHistoryReplyEmailDraft({
@@ -270,6 +306,8 @@ export default function Detail() {
         reply,
         email: preview.email,
         confirmationToken: preview.confirmation_token,
+        images: historyReplyImages,
+        attachments: historyReplyAttachments,
       });
       setHistoryReplyTarget(null);
     } catch (e) {
@@ -284,18 +322,22 @@ export default function Detail() {
     setSavingHistoryReply(true);
     setError('');
     try {
+      const payload = new FormData();
+      payload.append('history_id', String(historyReplyEmailDraft.historyId));
+      payload.append('reply', historyReplyEmailDraft.reply);
+      payload.append('confirmation_token', historyReplyEmailDraft.confirmationToken);
+      historyReplyEmailDraft.images.forEach(file => payload.append('images', file));
+      historyReplyEmailDraft.attachments.forEach(file => payload.append('attachments', file));
       await api(`/problem-samples/${id}/customer-history-reply-sent/`, {
         method: 'POST',
-        body: JSON.stringify({
-          history_id: historyReplyEmailDraft.historyId,
-          reply: historyReplyEmailDraft.reply,
-          confirmation_token: historyReplyEmailDraft.confirmationToken,
-        }),
+        body: payload,
         successMessage: 'Customer reply recorded.',
         errorMessage: 'Could not save customer reply',
       });
       setHistoryReplyEmailDraft(null);
       setHistoryReplyText('');
+      setHistoryReplyImages([]);
+      setHistoryReplyAttachments([]);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save customer reply');
@@ -321,8 +363,15 @@ export default function Detail() {
     setSaved('');
   }
 
-  async function saveCustom() {
+  async function saveCustom(values: CustomValues = customValues, clientEmailsResolved = false) {
     setSaved(''); setError('');
+    if (!clientEmailsResolved) {
+      const pending = unresolvedClientEmails();
+      if (pending.selectedCount) {
+        setClientEmailPrompt(pending);
+        return;
+      }
+    }
     // A workflow rule may also change Current Workflow indirectly. Never bypass the modal.
     if (reopeningTerminalTicket && !reopenContainerConfirmed) {
       setPendingReopenWorkflow(String(customValues['current-workflow']));
@@ -351,19 +400,17 @@ export default function Detail() {
         : {};
     const reason = await requestChangeReason('Why are you changing this ticket?');
     if (reason === null) return;
-    if (p && p.custom_values?.['current-workflow'] !== 'Back to testing' && customValues['current-workflow'] === 'Back to testing') {
-      setTestingEmailError('');
-      setTestingEmailDraft({ mode: 'transition', values: { ...customValues }, containerCode: requestedContainer, reason });
-      return;
+    if (p && p.custom_values?.['current-workflow'] !== 'Back to testing' && values['current-workflow'] === 'Back to testing') {
+      if (!window.confirm(`Before moving this ticket Back to testing:\n\n${rackRemovalReminder()}\n\nContinue saving?`)) return;
     }
-    if (p && p.custom_values?.['current-workflow'] !== 'Shipped back to client' && customValues['current-workflow'] === 'Shipped back to client') {
+    if (p && p.custom_values?.['current-workflow'] !== 'Shipped back to client' && values['current-workflow'] === 'Shipped back to client') {
       if (!window.confirm(`Before marking this ticket Shipped back to client:\n\n${rackRemovalReminder()}\n\nContinue saving?`)) return;
     }
     try {
       const updated = await api(`/problem-samples/${id}/`, {
         method:'PATCH',
         headers: changeReasonHeaders(reason),
-        body:JSON.stringify({custom_values:customValues, ...containerSelection}),
+        body:JSON.stringify({custom_values:values, ...containerSelection}),
         successMessage:'Ticket saved successfully.',
         errorMessage:'Could not save ticket',
       });
@@ -572,65 +619,6 @@ export default function Detail() {
     }
   }
 
-  function testingDetails(): TestingEmailDetails {
-    const values = testingEmailDraft?.values || p?.custom_values || {};
-    const valueFor = (keys: string[]) => {
-      const column = table?.columns.find(item => keys.includes(item.field_key) || keys.includes(item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')));
-      return String((column && values[column.field_key]) || '').trim();
-    };
-    const customerMessages = (p?.history || [])
-      .filter(entry => typeof entry.details?.customer_requested_information === 'string' && entry.details.customer_requested_information.trim())
-      .slice()
-      .reverse()
-      .map(entry => ({
-        message: entry.details.customer_requested_information!.trim(),
-        signature: String(entry.details.customer_signature || '').trim(),
-        createdAt: entry.created_at,
-      }));
-    return {
-      problemNumber: p?.problem_number || 0, tableName: p?.table_name || '',
-      containerId: testingEmailDraft?.containerCode || p?.container_id || '',
-      trackingNumber: valueFor(['als-sample-tracking-number', 'als-tracking-number', 'sample-tracking-number']) || String(values['als-tracking-number'] || ''),
-      problemType: valueFor(['problem-type']),
-      reasonForHold: valueFor(['reason-for-hold', 'issue-description']),
-      customerMessages,
-      ticketUrl: typeof window !== 'undefined' ? `${window.location.origin}/problems/${p?.id || id}` : `/problems/${p?.id || id}`,
-    };
-  }
-
-  async function finishTestingEmail(sent: boolean, body: string, recipient: string, notSentReason?: string) {
-    if (!testingEmailDraft || testingEmailBusy) return;
-    setTestingEmailBusy(true); setTestingEmailError('');
-    try {
-      if (testingEmailDraft.mode === 'transition') {
-        await api(`/problem-samples/${id}/`, {
-          method: 'PATCH', headers: changeReasonHeaders(testingEmailDraft.reason),
-          body: JSON.stringify({ custom_values: testingEmailDraft.values, container_code: testingEmailDraft.containerCode,
-            back_to_testing_email_sent: sent, back_to_testing_email_body: sent ? body : '', email_recipient: recipient,
-            ...(!sent ? { back_to_testing_not_sent_reason: notSentReason } : {}) }),
-          successMessage: sent ? 'Workflow updated and NA.EDM notification recorded.' : 'Workflow updated. NA.EDM still needs to be notified.',
-          errorMessage: 'Could not update ticket',
-        });
-      } else if (sent) {
-        await api(`/problem-samples/${id}/back-to-testing-notification/`, {
-          method: 'POST', body: JSON.stringify({ email_body: body, email_recipient: recipient }),
-          successMessage: 'NA.EDM notification recorded.', errorMessage: 'Could not record notification',
-        });
-      } else {
-        await api(`/problem-samples/${id}/email-not-sent/`, {
-          method: 'POST', body: JSON.stringify({ kind: 'back_to_testing', reason: notSentReason }),
-          successMessage: 'Reason for not sending the NA.EDM email recorded.',
-          errorMessage: 'Could not record why the email was not sent',
-        });
-      }
-      setTestingEmailDraft(null);
-      setSaved(sent ? 'NA.EDM notification recorded.' : 'NA.EDM still needs to be notified.');
-      await load();
-    } catch (e) {
-      setTestingEmailError(e instanceof Error ? e.message : 'Could not save email confirmation.');
-    } finally { setTestingEmailBusy(false); }
-  }
-
   return <div>
     <div className="row" style={{marginBottom:14}}>
       <div style={{marginRight:'auto'}}><div className="eyebrow">{p.table_name || 'Tickets'}</div><h1 className="page-heading" style={{marginBottom:0}}>{rowTitle}</h1></div>
@@ -645,16 +633,11 @@ export default function Detail() {
         {preparingCustomerEmail ? 'Preparing…' : 'Send Tracking Link'}
       </button>
       <button type="button" className="button secondary" onClick={() => setGeneralEmailOpen(true)} disabled={!customerEmails.length} title={!customerEmails.length ? 'No customer email is available for this ticket.' : undefined}>Email Customer</button>
-      {p.tracking_url && <button type="button" className="button danger" onClick={revokeTrackingLink} disabled={revokingTrackingLink}>{revokingTrackingLink ? 'Revoking…' : 'Revoke Tracking Link'}</button>}
+      {currentUser?.is_admin && p.tracking_url && <button type="button" className="button danger" onClick={revokeTrackingLink} disabled={revokingTrackingLink}>{revokingTrackingLink ? 'Revoking…' : 'Revoke Tracking Link'}</button>}
       {currentUser?.is_admin && <button type="button" className="button danger" onClick={() => setDeleteConfirmationOpen(true)}>Delete Ticket</button>}
     </div>
     {error && <div className="card error" style={{marginBottom:14}}>{error}</div>}
     {saved && <div className="card success" style={{marginBottom:14}}>{saved}</div>}
-    {p.custom_values?.['current-workflow'] === 'Back to testing' && !p.back_to_testing_notified_at && <section className="card" style={{marginBottom:14, padding:16}}>
-      <strong>NA.EDM needs to be notified.</strong> Send the Back to Testing email from your company email account.
-      <button type="button" className="button" style={{marginLeft:12}} onClick={() => { setTestingEmailError(''); setTestingEmailDraft({ mode:'notify', values:p.custom_values, containerCode:p.container_id || '', reason:'' }); }}>Notify NA.EDM</button>
-    </section>}
-
     <section className={`sample-expiration-banner sample-expiration-${p.expiration_status}`} style={{marginBottom:14}}>
       <div>
         <div className="sample-expiration-title">
@@ -696,6 +679,7 @@ export default function Detail() {
               {entry.details?.customer_signature && <div className="history-signature"><strong>Customer signature:</strong> {entry.details.customer_signature}</div>}
               {entry.details?.customer_shipping_method && <div className="history-customer-information">
                 <strong>Return method:</strong> {entry.details.customer_shipping_method_label || entry.details.customer_shipping_method}
+                {entry.details.customer_courier_name && <div><strong>Courier name:</strong> {entry.details.customer_courier_name}</div>}
                 {entry.details.customer_courier_account_number && <div><strong>Courier account number:</strong> {entry.details.customer_courier_account_number}</div>}
               </div>}
               {(entry.details?.customer_requested_information || (entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-information">
@@ -705,6 +689,21 @@ export default function Detail() {
               </div>}
               {entry.action === 'customer_notification' && entry.summary === 'Sent an email to the customer' && (entry.details?.recipients?.length || entry.details?.cc?.length) ? <div className="history-customer-information">{entry.details?.recipients?.length ? <div><strong>To:</strong> {entry.details.recipients.join('; ')}</div> : null}{entry.details?.cc?.length ? <div><strong>Cc:</strong> {entry.details.cc.join('; ')}</div> : null}</div> : null}
               {entry.details?.staff_reply && <div className="history-customer-information"><strong>Staff reply:</strong><div>{entry.details.staff_reply}</div>{entry.details.customer_message && <div className="muted" style={{marginTop:6}}><strong>Replying to:</strong> {entry.details.customer_message}</div>}{entry.details.recipients?.length ? <div className="muted" style={{marginTop:4}}>Emailed to {entry.details.recipients.join('; ')}</div> : null}</div>}
+              {((entry.details?.staff_reply_images?.length || 0) > 0 || (entry.details?.staff_reply_attachments?.length || 0) > 0) && <div className="history-customer-files">
+                <strong>Files included in the customer chat reply</strong>
+                {(entry.details?.staff_reply_images || []).length > 0 && <div className="history-customer-image-grid">
+                  {entry.details!.staff_reply_images!.map(image => <div className="history-customer-image" key={`staff-reply-image-${entry.id}-${image.id}`}>
+                    <StaffImage problemId={p.id} imageId={image.id} className="history-customer-image-preview" alt={image.name || 'Staff reply image'} openInNewTab />
+                    <div className="history-customer-file-copy"><span className="history-customer-file-name">{image.name}</span><span className="history-customer-file-meta">Image · {formatBytes(image.size_bytes)}</span></div>
+                  </div>)}
+                </div>}
+                {(entry.details?.staff_reply_attachments || []).length > 0 && <div className="history-customer-attachment-list">
+                  {entry.details!.staff_reply_attachments!.map(file => <div className="history-customer-attachment" key={`staff-reply-file-${entry.id}-${file.id}`}>
+                    <span className="history-customer-file-name">{file.name}</span>
+                    <StaffAttachmentLink problemId={p.id} attachmentId={file.id} filename={file.name} className="button secondary small">Download</StaffAttachmentLink>
+                  </div>)}
+                </div>}
+              </div>}
               {((entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-files">
                 <strong>Files attached by customer</strong>
                 {(entry.details?.customer_uploaded_images?.length || 0) > 0 && <div className="history-customer-image-grid">
@@ -724,9 +723,9 @@ export default function Detail() {
               {(entry.action === 'updated' || entry.action === 'customer_notification' || entry.action === 'acknowledged') && changes.length > 0 && <div className="history-changes">
                 {changes.map((change, index) => <div className="history-change" key={`${entry.id}-${index}`}>
                   <span className="history-field">{change.field}</span>
-                  <span className="history-before">{displayHistoryValue(change.before)}</span>
+                  <span className="history-before">{currentUser?.is_admin ? displayHistoryValue(change.before) : <TrackingLinkInlineText text={displayHistoryValue(change.before)} />}</span>
                   <span className="history-arrow">→</span>
-                  <span className="history-after">{displayHistoryValue(change.after)}</span>
+                  <span className="history-after">{currentUser?.is_admin ? displayHistoryValue(change.after) : <TrackingLinkInlineText text={displayHistoryValue(change.after)} />}</span>
                 </div>)}
               </div>}
               {entry.action === 'updated' && changes.length === 0 && !entry.details?.customer_shipping_method && !entry.details?.customer_requested_information && !entry.details?.customer_uploaded_images?.length && !entry.details?.customer_uploaded_attachments?.length && !entry.details?.email_not_sent && <div className="muted history-no-change">No field values changed.</div>}
@@ -755,10 +754,10 @@ export default function Detail() {
             </div>}{table.columns.filter(c => !c.is_system || ['current-workflow', 'dispose-automatically', 'system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key)).map(column => column.field_key === 'system-days-until-automatic-disposal'
             ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={automaticDisposalDisplay({...p, custom_values: customValues})} disabled readOnly aria-disabled="true" /></div>
             : column.field_key === 'system-tracking-link'
-              ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{p.tracking_url ? <a className="table-link tracking-link-value" href={p.tracking_url} target="_blank" rel="noreferrer">{p.tracking_url}</a> : <input className="input readonly-input" value="—" disabled readOnly aria-disabled="true" />}</div>
+              ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{<TrackingLinkDisplay url={p.tracking_url} canOpen={Boolean(currentUser?.is_admin)} fullUrl />}</div>
               : column.field_key === 'system-tracking-link-expiry'
                 ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={p.tracking_link_expiry ? new Date(p.tracking_link_expiry).toLocaleString() : (p.tracking_url ? 'Does not expire' : '—')} disabled readOnly aria-disabled="true" /></div>
-                : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value=>updateCustomValue(column.id, column.field_key, value)}/>)}</div><div><button className="button" onClick={saveCustom}>Save Changes</button></div></> : null}
+                : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value=>updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)}/>)}</div><div><button className="button" onClick={() => void saveCustom()}>Save Changes</button></div></> : null}
         </div></section>
 
         <section className="panel file-panel">
@@ -828,6 +827,9 @@ export default function Detail() {
         <p className="customer-email-company-reminder">Your reply will not be saved until you confirm that the generated customer email was sent.</p>
         <div className="field"><label>Customer message</label><textarea className="textarea" readOnly value={historyReplyTarget.details.customer_requested_information || ''} /></div>
         <div className="field"><label>Staff reply <span aria-hidden="true">*</span></label><textarea className="textarea" rows={6} maxLength={4000} autoFocus value={historyReplyText} onChange={event => setHistoryReplyText(event.target.value)} disabled={preparingHistoryReply} placeholder="Type your reply…" /><div className="muted result-meta">{historyReplyText.length}/4000 characters</div></div>
+        <div className="field"><label htmlFor="staff-reply-images">Images for customer chat</label><input id="staff-reply-images" className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setHistoryReplyImages(Array.from(event.target.files || []))} disabled={preparingHistoryReply} /></div>
+        <div className="field"><label htmlFor="staff-reply-attachments">Files for customer chat</label><input id="staff-reply-attachments" className="file-control" type="file" multiple onChange={event => setHistoryReplyAttachments(Array.from(event.target.files || []))} disabled={preparingHistoryReply} /></div>
+        <div className="muted result-meta">{historyReplyImages.length + historyReplyAttachments.length} selected · 12 files max · 25 MB each · 50 MB total. Files appear in the customer's tracking-link chat only. The email will include [View image/file in the tracking link chat] and the secure tracking link.</div>
         {error && <p className="error" role="alert">{error}</p>}
         <div className="email-confirm-actions">
           <button type="button" className="button" onClick={prepareHistoryReply} disabled={preparingHistoryReply || !historyReplyText.trim()}>{preparingHistoryReply ? 'Preparing email…' : 'Submit'}</button>
@@ -836,7 +838,7 @@ export default function Detail() {
       </div>
     </div>}
 
-    {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
+    {historyReplyEmailDraft && <CustomerHistoryReplyEmailModal email={historyReplyEmailDraft.email} fileCount={historyReplyEmailDraft.images.length + historyReplyEmailDraft.attachments.length} onSent={confirmHistoryReplySent} onCancel={() => { setHistoryReplyEmailDraft(null); setError(''); }} busy={savingHistoryReply} error={error} />}
 
     {changeContainerOpen && <ReopenContainerModal
       purpose="change"
@@ -857,11 +859,18 @@ export default function Detail() {
       onConfirm={confirmReopenContainer}
     />}
 
+    {clientEmailPrompt && <ClientEmailSelectionPrompt
+      selectedCount={clientEmailPrompt.selectedCount}
+      fieldCount={clientEmailPrompt.fieldCount}
+      onKeep={() => applyEmailDecision('keep')}
+      onDelete={() => applyEmailDecision('delete')}
+      onCancel={() => setClientEmailPrompt(null)}
+    />}
+
     {changeReasonModal}
 
     {pendingEmailLaunch && <CustomerEmailModal autoStart content={pendingEmailLaunch.content} onSent={confirmEmailSent} onDidNotSend={recordCustomerEmailNotSent} onCancel={dismissEmailLaunch} busy={recordingEmailSent} error={error} />}
     {generalEmailOpen && <GeneralCustomerEmailModal recipients={customerEmails} problemNumber={p.problem_number} onSent={confirmGeneralEmailSent} onCancel={() => { setGeneralEmailOpen(false); setError(''); }} busy={recordingGeneralEmail} error={error} />}
-    {testingEmailDraft && <BackToTestingEmailModal key={`${id}-${testingEmailDraft.mode}`} details={testingDetails()} showRackReminder={testingEmailDraft.mode === 'transition'} onConfirm={finishTestingEmail} onCancel={() => setTestingEmailDraft(null)} busy={testingEmailBusy} error={testingEmailError} />}
     {mentionEmailDraft && <MentionEmailModal emails={mentionEmailDraft.emails} onComplete={() => saveComment(mentionEmailDraft.body, mentionEmailDraft.confirmationToken).catch(() => {})} onCancel={() => setMentionEmailDraft(null)} busy={savingMentionComment} error={error} />}
   </div>;
 }

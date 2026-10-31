@@ -19,6 +19,10 @@ const nextConfig: NextConfig = {
     return [{ source: '/track/:path*', headers: [
       { key: 'Referrer-Policy', value: 'no-referrer' },
       { key: 'Cache-Control', value: 'no-store' },
+    ] }, { source: '/reports/monthly/:path*', headers: [
+      { key: 'Referrer-Policy', value: 'no-referrer' },
+      { key: 'Cache-Control', value: 'private, no-store' },
+      { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
     ] }];
   },
 };

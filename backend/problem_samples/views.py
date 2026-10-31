@@ -30,7 +30,7 @@ from accounts.account_utils import normalize_als_email, user_has_als_email
 from .models import TicketCreationTiming, ProblemSample, ProblemTrackingLink, PreparedProblemSample, ProblemComment, ProblemMention, ProblemImage, ProblemAttachment, ProblemTable, ProblemColumn, ProblemHistory, ProblemContainer, SYSTEM_PROBLEM_STATUSES, ROUTED_PROBLEM_STATUSES, CURRENT_WORKFLOW_CHOICES, CURRENT_WORKFLOW_DEFAULT, CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER, PROBLEM_STATUS_DISPOSED, PROBLEM_STATUS_TO_BE_DISPOSED, PROBLEM_STATUS_TO_BE_SHIPPED_BACK, PROBLEM_STATUS_TO_BE_BACK_TO_TESTING, PROBLEM_STATUS_BACK_TO_TESTING, PROBLEM_STATUS_SHIPPED_BACK, CUSTOMER_ACTION_DISPOSE, CUSTOMER_ACTION_SHIP_BACK, CUSTOMER_ACTION_HOLD, CUSTOMER_ACTION_REQUESTED_INFORMATION, generate_acknowledgement_token, is_strong_tracking_token, SYSTEM_CURRENT_WORKFLOW_FIELD_KEY, SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY, DISPOSE_AUTOMATICALLY_YES, DISPOSE_AUTOMATICALLY_NO, DISPOSE_AUTOMATICALLY_CHOICES, SYSTEM_DAYS_UNTIL_AUTOMATIC_DISPOSAL_FIELD_KEY, SYSTEM_TRACKING_LINK_FIELD_KEY, SYSTEM_TRACKING_LINK_EXPIRY_FIELD_KEY, resolve_problem_type, selected_problem_type_prompts
 from .permissions import IsTrackerAdminOrReadOnly
 from .labs import active_lab, scope_tickets, scope_containers, require_lab_matches, create_container, archive_legacy_empty_disposal
-from .notification_recipient import get_edmonton_recipient, addresses_for_lab
+from .notification_recipient import addresses_for_lab
 from .serializers import (
     ProblemSampleSerializer, ShippingProblemSampleSerializer, CommentSerializer, ImageSerializer, AttachmentSerializer, ProblemTableSerializer, ProblemColumnSerializer, ProblemContainerSerializer,
 )
@@ -45,15 +45,6 @@ MAX_CUSTOMER_RESPONSE_FILES = 12
 MAX_CUSTOMER_RESPONSE_BYTES = 50 * 1024 * 1024
 
 
-def _confirmed_testing_recipient(request):
-    lab = active_lab(request, require_specific=True)
-    configured = ', '.join(addresses_for_lab(lab, UserProfile.ROLE_LAB_TECHNICIAN))
-    if not configured:
-        raise DRFValidationError({'email_recipient': 'Configure Lab notification addresses first.'})
-    supplied = request.data.get('email_recipient')
-    if not isinstance(supplied, str) or supplied.strip().casefold() != configured.casefold():
-        raise DRFValidationError({'email_recipient': 'The Lab notification recipients have changed. Reopen the email preview before confirming.'})
-    return configured
 ALLOWED_IMAGE_FORMATS = {'JPEG', 'PNG', 'GIF', 'WEBP'}
 MENTION_RE = re.compile(r'(?<![A-Za-z0-9_@])@([A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)', re.IGNORECASE)
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
@@ -416,7 +407,43 @@ def _customer_message_history(problem, history_id):
     return entry
 
 
-def _customer_history_reply_email(problem, customer_history, staff_reply, recipients):
+def _staff_reply_file_manifest(raw):
+    """Normalize proposed attachment metadata before signing the email preview."""
+    if raw in (None, ''):
+        return {'images': [], 'attachments': []}
+    if not isinstance(raw, dict):
+        raise DRFValidationError({'detail': 'Invalid reply file selection.'})
+    result = {}
+    for kind in ('images', 'attachments'):
+        files = raw.get(kind, [])
+        if not isinstance(files, list):
+            raise DRFValidationError({'detail': 'Invalid reply file selection.'})
+        normalized = []
+        for item in files:
+            if not isinstance(item, dict):
+                raise DRFValidationError({'detail': 'Invalid reply file selection.'})
+            name = str(item.get('name') or '')
+            size = item.get('size')
+            if not name or len(name) > 255 or type(size) is not int or not (0 < size <= MAX_ROW_FILE_BYTES):
+                raise DRFValidationError({'detail': 'Invalid reply file name or size.'})
+            normalized.append({'name': name, 'size': size})
+        result[kind] = normalized
+    all_files = result['images'] + result['attachments']
+    if len(all_files) > MAX_CUSTOMER_RESPONSE_FILES:
+        raise DRFValidationError({'detail': f'Attach no more than {MAX_CUSTOMER_RESPONSE_FILES} reply files.'})
+    if sum(item['size'] for item in all_files) > MAX_CUSTOMER_RESPONSE_BYTES:
+        raise DRFValidationError({'detail': 'Reply files must total 50 MB or less.'})
+    return result
+
+
+def _staff_reply_uploaded_manifest(request):
+    return {
+        kind: [{'name': uploaded.name, 'size': uploaded.size} for uploaded in request.FILES.getlist(kind)]
+        for kind in ('images', 'attachments')
+    }
+
+
+def _customer_history_reply_email(problem, customer_history, staff_reply, recipients, has_files=False):
     tracking_link = problem.tracking_link_record_or_none
     if not tracking_link or not is_strong_tracking_token(tracking_link.tracking_token):
         raise DRFValidationError({'detail': 'This ticket does not have an active customer tracking link.'})
@@ -442,7 +469,8 @@ def _customer_history_reply_email(problem, customer_history, staff_reply, recipi
         f'ALS Edmonton has replied to your message regarding Ticket #{problem.problem_number}.\n\n'
         f'Your message:\n{customer_message}\n\n'
         f'ALS reply:\n{staff_reply.strip()}\n\n'
-        'Please reply to us using the secure link below to ensure swift correspondence and to make sure your response is attached to the correct ticket:\n'
+        + ('[View image/file in the tracking link chat]\n\n' if has_files else '')
+        + 'Please reply to us using the secure link below to ensure swift correspondence and to make sure your response is attached to the correct ticket:\n'
         f'{direct_url}\n\n'
         'Regards,\nALS Edmonton'
     )
@@ -456,7 +484,7 @@ def _customer_history_reply_email(problem, customer_history, staff_reply, recipi
     }
 
 
-def _customer_history_reply_confirmation_payload(problem, history_entry, author, reply, recipients, tracking_token):
+def _customer_history_reply_confirmation_payload(problem, history_entry, author, reply, recipients, tracking_token, files=None):
     return {
         'problem_id': str(problem.pk),
         'history_id': history_entry.pk,
@@ -467,6 +495,7 @@ def _customer_history_reply_confirmation_payload(problem, history_entry, author,
         ).hexdigest(),
         'recipients': [address.casefold() for address in recipients],
         'tracking_token': str(tracking_token),
+        'reply_files': _staff_reply_file_manifest(files),
     }
 
 
@@ -965,25 +994,6 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             ]
         }
         before_status = str(before_custom.get(SYSTEM_CURRENT_WORKFLOW_FIELD_KEY) or instance.current_workflow or CURRENT_WORKFLOW_DEFAULT).strip()
-        next_status = serializer.validated_data.get('current_workflow', before_status)
-        sending_testing_email = False
-        testing_email_not_sent_reason = ''
-        testing_email_body = ''
-        testing_email_recipient = ''
-        if before_status != PROBLEM_STATUS_BACK_TO_TESTING and next_status == PROBLEM_STATUS_BACK_TO_TESTING:
-            decision = self.request.data.get('back_to_testing_email_sent')
-            if not isinstance(decision, bool):
-                raise DRFValidationError({'back_to_testing_email_sent': 'Confirm whether the NA.EDM email was sent before changing the workflow.'})
-            sending_testing_email = decision
-            if not sending_testing_email:
-                testing_email_not_sent_reason = _required_email_not_sent_reason(
-                    self.request.data.get('back_to_testing_not_sent_reason'), 'back_to_testing_not_sent_reason'
-                )
-            testing_email_body = str(self.request.data.get('back_to_testing_email_body') or '').strip()
-            if sending_testing_email and (not testing_email_body or len(testing_email_body) > 10000):
-                raise DRFValidationError({'back_to_testing_email_body': 'Provide the email message (up to 10,000 characters).'})
-            if sending_testing_email:
-                testing_email_recipient = _confirmed_testing_recipient(self.request)
         before_auto = str(before_custom.get(SYSTEM_DISPOSE_AUTOMATICALLY_FIELD_KEY) or DISPOSE_AUTOMATICALLY_NO).strip().casefold() == DISPOSE_AUTOMATICALLY_YES.casefold()
         before_container = instance.container.container_id if instance.container_id and instance.container else ''
         problem = serializer.save(modified_by=self.request.user)
@@ -992,10 +1002,6 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         )
         if lifecycle_fields:
             problem.save(update_fields=list(dict.fromkeys(lifecycle_fields)))
-        if sending_testing_email and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
-            problem.back_to_testing_notified_at = timezone.now()
-            problem.save(update_fields=['back_to_testing_notified_at'])
-
         column_names = {c.field_key: c.name for c in problem.table.columns.all()} if problem.table else {}
         changes = []
         keys = sorted(set(before_custom) | set(problem.custom_values or {}))
@@ -1038,18 +1044,6 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
             summary='Saved changes', details=_history_details({'changes': changes}, reason),
         )
-        if sending_testing_email and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
-            ProblemHistory.objects.create(
-                problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
-                summary='Sent Back to Testing email to NA.EDM',
-                details={'recipient': testing_email_recipient, 'email_body': testing_email_body, 'changes': []},
-            )
-        elif testing_email_not_sent_reason and problem.workflow_status == PROBLEM_STATUS_BACK_TO_TESTING:
-            ProblemHistory.objects.create(
-                problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=self.request.user,
-                summary='Back to Testing email not sent to NA.EDM',
-                details={'email_not_sent': 'back_to_testing', 'reason': testing_email_not_sent_reason, 'changes': []},
-            )
         # This mainly matters for PT = 0. Longer countdowns are transitioned by
         # request middleware as soon as a later request observes the due time.
         problem.transition_to_disposal_if_due(now=timezone.now())
@@ -1298,23 +1292,8 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'blocking_problem_ids': [sample.problem_number for sample in disposed],
             }, status=status.HTTP_409_CONFLICT)
 
-        sent = request.data.get('back_to_testing_email_sent')
-        if not isinstance(sent, bool):
-            return Response({'back_to_testing_email_sent': 'Confirm whether the NA.EDM email was sent.'}, status=status.HTTP_400_BAD_REQUEST)
-        body = str(request.data.get('back_to_testing_email_body') or '').strip()
-        if sent:
-            if not body or len(body) > 10000:
-                return Response({'back_to_testing_email_body': 'Provide the email message (up to 10,000 characters).'}, status=status.HTTP_400_BAD_REQUEST)
-            recipient = _confirmed_testing_recipient(request)
-            not_sent_reason = ''
-        else:
-            recipient = ''
-            not_sent_reason = _required_email_not_sent_reason(request.data.get('back_to_testing_not_sent_reason'), 'back_to_testing_not_sent_reason')
-
         now = timezone.now()
-        # One email is composed for this entire selection. Record a single email
-        # event, while each ticket retains its own workflow-change audit entry.
-        email_batch_id = str(uuid.uuid4())
+        # Move selected tickets directly; no email or email confirmation is required.
         batch_numbers = [sample.problem_number for sample in ordered]
         batch_ids = [str(sample.id) for sample in ordered]
         modifier = (getattr(request.user, 'email', '') or getattr(request.user, 'username', '') or '').strip()
@@ -1336,11 +1315,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             lifecycle_fields = sample.apply_acknowledgement_status_transition(
                 previous_workflow, previous_dispose_automatically=before_auto, changed_at=now
             )
-            if sent:
-                sample.back_to_testing_notified_at = now
             sample.save(update_fields=list(dict.fromkeys([
                 'custom_values', 'current_workflow', 'container', 'modified_by', 'modified_at',
-                'back_to_testing_notified_at', *lifecycle_fields,
+                *lifecycle_fields,
             ])))
             changes = [{'field': 'Current Workflow', 'before': previous_workflow, 'after': PROBLEM_STATUS_BACK_TO_TESTING}]
             if previous_container:
@@ -1350,71 +1327,23 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 summary='Moved back to testing',
                 details=_history_details({
                     'testing_action': 'bulk_back_to_testing',
-                    'email_batch_id': email_batch_id,
-                    'email_status': 'sent' if sent else 'not_sent',
                     'changes': changes,
                 }, reason),
             )
-        # A *single* notification event describes the *single* consolidated
-        # message. Do not create one purported email event for each ticket.
-        ProblemHistory.objects.create(
-            problem=ordered[0], action=ProblemHistory.ACTION_UPDATED, actor=request.user,
-            summary=('Sent consolidated Back to Testing email to NA.EDM' if sent
-                     else 'Consolidated Back to Testing email not sent to NA.EDM'),
-            details={
-                'email_batch_id': email_batch_id,
-                'ticket_ids': batch_ids,
-                'ticket_numbers': batch_numbers,
-                'ticket_count': len(ordered),
-                'recipient': recipient,
-                **({'email_body': body} if sent else {
-                    'email_not_sent': 'back_to_testing', 'reason': not_sent_reason,
-                }),
-                'changes': [],
-            },
-        )
         return Response({
             'count': len(ordered),
             'problem_ids': batch_ids,
             'problem_numbers': batch_numbers,
-            'email_batch_id': email_batch_id,
-            'emails_sent_confirmed': 1 if sent else 0,
         })
-
-    @action(detail=True, methods=['post'], url_path='back-to-testing-notification')
-    @transaction.atomic
-    def back_to_testing_notification(self, request, pk=None):
-        problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
-        if problem.workflow_status != PROBLEM_STATUS_BACK_TO_TESTING:
-            return Response({'detail': 'This ticket is not Back to testing.'}, status=status.HTTP_409_CONFLICT)
-        email_body = str(request.data.get('email_body') or '').strip()
-        if not email_body or len(email_body) > 10000:
-            return Response({'detail': 'Provide the email message (up to 10,000 characters).'}, status=status.HTTP_400_BAD_REQUEST)
-        if problem.back_to_testing_notified_at is not None:
-            return Response({'detail': 'NA.EDM has already been notified for this workflow change.'}, status=status.HTTP_409_CONFLICT)
-        recipient = _confirmed_testing_recipient(request)
-        problem.back_to_testing_notified_at = timezone.now()
-        problem.save(update_fields=['back_to_testing_notified_at'])
-        ProblemHistory.objects.create(
-            problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
-            summary='Sent Back to Testing email to NA.EDM',
-            details={'recipient': recipient, 'email_body': email_body, 'changes': []},
-        )
-        return Response({'notified_at': problem.back_to_testing_notified_at})
 
     @action(detail=True, methods=['post'], url_path='email-not-sent')
     @transaction.atomic
     def email_not_sent(self, request, pk=None):
         problem = ProblemSample.objects.select_for_update().get(pk=self.get_object().pk)
         kind = request.data.get('kind')
-        if kind not in {'customer', 'back_to_testing'}:
+        if kind != 'customer':
             return Response({'detail': 'Choose the email that was not sent.'}, status=status.HTTP_400_BAD_REQUEST)
         reason = _required_email_not_sent_reason(request.data.get('reason'))
-        if kind == 'back_to_testing' and (
-            problem.workflow_status != PROBLEM_STATUS_BACK_TO_TESTING
-            or problem.back_to_testing_notified_at is not None
-        ):
-            return Response({'detail': 'There is no outstanding Back to Testing email for this ticket.'}, status=status.HTTP_409_CONFLICT)
         # Preparing a customer tracking email may reserve a temporary token when the
         # ticket does not yet have a persisted tracking link. Choosing "I didn't send
         # the email" must not create, replace, refresh, or extend the tracking link.
@@ -1425,8 +1354,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             problem.save(update_fields=['pending_tracking_token'])
         ProblemHistory.objects.create(
             problem=problem, action=ProblemHistory.ACTION_UPDATED, actor=request.user,
-            summary=('Customer tracking email not sent' if kind == 'customer'
-                     else 'Back to Testing email not sent to NA.EDM'),
+            summary='Customer tracking email not sent',
             details={'email_not_sent': kind, 'reason': reason, 'changes': []},
         )
         return Response({'detail': 'Reason recorded.'}, status=status.HTTP_201_CREATED)
@@ -1956,9 +1884,15 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
         if not tracking_link:
             return Response({'detail': 'This ticket does not have a customer tracking link.'}, status=status.HTTP_409_CONFLICT)
 
-        email = _customer_history_reply_email(problem, customer_history, reply, recipients)
+        try:
+            reply_files = _staff_reply_file_manifest(request.data.get('reply_files'))
+        except DRFValidationError as error:
+            return Response(error.detail, status=status.HTTP_400_BAD_REQUEST)
+        has_files = bool(reply_files['images'] or reply_files['attachments'])
+        email = _customer_history_reply_email(problem, customer_history, reply, recipients, has_files=has_files)
         payload = _customer_history_reply_confirmation_payload(
             problem, customer_history, request.user, reply, recipients, tracking_link.tracking_token,
+            files=reply_files,
         )
         token = signing.dumps(payload, salt='problem-customer-history-reply-email', compress=True)
         return Response({
@@ -1966,7 +1900,7 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             'confirmation_token': token,
         })
 
-    @action(detail=True, methods=['post'], url_path='customer-history-reply-sent')
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser, JSONParser], url_path='customer-history-reply-sent')
     @transaction.atomic
     def customer_history_reply_sent(self, request, pk=None):
         """Save a staff reply only after staff confirms the generated email was sent."""
@@ -2006,16 +1940,46 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        uploaded_images = list(request.FILES.getlist('images'))
+        uploaded_attachments = list(request.FILES.getlist('attachments'))
+        try:
+            uploaded_manifest = _staff_reply_file_manifest(_staff_reply_uploaded_manifest(request))
+        except DRFValidationError as error:
+            return Response(error.detail, status=status.HTTP_400_BAD_REQUEST)
         expected = _customer_history_reply_confirmation_payload(
             problem, customer_history, request.user, reply, recipients, tracking_link.tracking_token,
+            files=uploaded_manifest,
         )
         if confirmed != expected:
             return Response(
-                {'detail': 'The customer message, reply, recipient, or tracking link changed. Prepare the reply email again.'},
+                {'detail': 'The customer message, reply, attached files, recipient, or tracking link changed. Prepare the reply email again.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        email = _customer_history_reply_email(problem, customer_history, reply, recipients)
+        # Never save files until the email was explicitly confirmed. Validate
+        # every upload before changing workflows or writing history.
+        prepared_images = []
+        for uploaded in uploaded_images:
+            error = _validate_uploaded_file(uploaded, image=True)
+            if error:
+                return Response({'detail': f'{uploaded.name}: {error}'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                compressed, stored_name = compress_problem_image(uploaded, uploaded.name)
+            except (UnidentifiedImageError, OSError, ValueError):
+                return Response({'detail': f'{uploaded.name}: Invalid image.'}, status=status.HTTP_400_BAD_REQUEST)
+            if not compressed:
+                return Response({'detail': f'{uploaded.name}: Invalid image.'}, status=status.HTTP_400_BAD_REQUEST)
+            prepared_images.append((uploaded.name, compressed, stored_name))
+        for uploaded in uploaded_attachments:
+            error = _validate_uploaded_file(uploaded)
+            if error:
+                return Response({'detail': f'{uploaded.name}: {error}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reply_files = uploaded_manifest
+        email = _customer_history_reply_email(
+            problem, customer_history, reply, recipients,
+            has_files=bool(reply_files['images'] or reply_files['attachments']),
+        )
         before_status = problem.workflow_status
         changes = []
         if before_status == CURRENT_WORKFLOW_DEFAULT:
@@ -2035,6 +1999,32 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                     'after': after_status,
                 })
 
+        saved_images = []
+        for original_name, compressed, stored_name in prepared_images:
+            image = ProblemImage.objects.create(
+                problem=problem,
+                image=ContentFile(compressed, name=stored_name),
+                original_name=original_name[:255],
+                uploaded_by=request.user,
+                include_in_customer_notification=False,
+            )
+            saved_images.append({'id': image.pk, 'name': image.original_name, 'size_bytes': len(compressed)})
+        saved_attachments = []
+        for uploaded in uploaded_attachments:
+            attachment = ProblemAttachment.objects.create(
+                problem=problem,
+                file=uploaded,
+                original_name=uploaded.name[:255],
+                content_type=(getattr(uploaded, 'content_type', '') or '')[:160],
+                size_bytes=uploaded.size,
+                uploaded_by=request.user,
+                include_in_customer_notification=False,
+            )
+            saved_attachments.append({
+                'id': attachment.pk, 'name': attachment.original_name,
+                'size_bytes': attachment.size_bytes, 'content_type': attachment.content_type,
+            })
+
         history = ProblemHistory.objects.create(
             problem=problem,
             action=ProblemHistory.ACTION_CUSTOMER_NOTIFICATION,
@@ -2044,6 +2034,8 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                 'replied_to_history_id': customer_history.pk,
                 'customer_message': email['customer_message'],
                 'staff_reply': reply,
+                'staff_reply_images': saved_images,
+                'staff_reply_attachments': saved_attachments,
                 'recipients': recipients,
                 'subject': email['subject'],
                 'tracking_url': email['direct_url'],
@@ -3215,8 +3207,8 @@ class ProblemAcknowledgementView(APIView):
                     'sender_label': 'ALS Edmonton',
                     'message': staff_reply,
                     'created_at': entry.created_at,
-                    'images': [],
-                    'attachments': [],
+                    'images': [image for image in details.get('staff_reply_images', []) if isinstance(image, dict)],
+                    'attachments': [file for file in details.get('staff_reply_attachments', []) if isinstance(file, dict)],
                 })
 
         return messages
@@ -3253,7 +3245,7 @@ class ProblemAcknowledgementView(APIView):
                 if action == CUSTOMER_ACTION_SHIP_BACK:
                     method = str(details.get('customer_shipping_method') or '')
                     suffix = {
-                        'courier_account': 'Provide a courier account number',
+                        'courier_account': 'Provide your courier name and account number',
                         'pickup': 'Pick up in person',
                         'shipping_quote': 'Receive a quote for the shipping charges',
                     }.get(method)
@@ -3452,9 +3444,10 @@ class ProblemAcknowledgementView(APIView):
         # Reject missing/invalid methods rather than routing a bare ship_back action
         # straight to Shipping (which would hide requests for a shipping quote).
         shipping_method = str(request.data.get('shipping_method') or '').strip()
+        courier_name = ' '.join(str(request.data.get('courier_name') or '').split())
         courier_account_number = ' '.join(str(request.data.get('courier_account_number') or '').split())
         shipping_method_labels = {
-            'courier_account': 'Provide a courier account number',
+            'courier_account': 'Provide your courier name and account number',
             'pickup': 'Pick up in person',
             'shipping_quote': 'Receive a quote for the shipping charges',
         }
@@ -3465,13 +3458,17 @@ class ProblemAcknowledgementView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if shipping_method == 'courier_account':
+                if not courier_name:
+                    return Response({'detail': 'Enter your courier name.'}, status=status.HTTP_400_BAD_REQUEST)
+                if len(courier_name) > 200:
+                    return Response({'detail': 'Courier name must be 200 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
                 if not courier_account_number:
                     return Response({'detail': 'Enter your courier account number.'}, status=status.HTTP_400_BAD_REQUEST)
                 if len(courier_account_number) > 200:
                     return Response({'detail': 'Courier account number must be 200 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
-            elif courier_account_number:
-                return Response({'detail': 'A courier account number is only allowed with the courier account option.'}, status=status.HTTP_400_BAD_REQUEST)
-        elif shipping_method or courier_account_number:
+            elif courier_name or courier_account_number:
+                return Response({'detail': 'Courier details are only allowed with the courier account option.'}, status=status.HTTP_400_BAD_REQUEST)
+        elif shipping_method or courier_name or courier_account_number:
             return Response({'detail': 'Return details can only be sent with I want these sample(s) back.'}, status=status.HTTP_400_BAD_REQUEST)
 
         requested_information = str(request.data.get('requested_information') or '').strip()
@@ -3654,6 +3651,7 @@ class ProblemAcknowledgementView(APIView):
             details['customer_shipping_method'] = shipping_method
             details['customer_shipping_method_label'] = shipping_method_labels[shipping_method]
             if shipping_method == 'courier_account':
+                details['customer_courier_name'] = courier_name
                 details['customer_courier_account_number'] = courier_account_number
             label = f'I want these sample(s) back — {shipping_method_labels[shipping_method]}'
             details['customer_action_label'] = label

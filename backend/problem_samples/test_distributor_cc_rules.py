@@ -62,3 +62,16 @@ class BrandEmailRulesTests(TestCase):
         self.brand.save(update_fields=['brand_cc_rules'])
         row = ProblemSample.objects.create(table=self.table, problem_number=104, custom_values={'brand':'northstar'})
         self.assertEqual(_brand_auto_cc(row), [])
+
+    def test_monthly_excel_column_selection_saved_and_private_fields_rejected(self):
+        batch = ProblemColumn.objects.create(table=self.table, name='Batch ID', field_key='batch-id', column_type='text')
+        forbidden = ProblemColumn.objects.create(table=self.table, name='Client Email', field_key='client-email', column_type='client_email')
+        rule = {'match_type':'contains', 'pattern':'north','sources':['ticket'],
+                'cc_emails':['cc@example.com'], 'send_monthly_reports':True,
+                'report_column_ids':[str(batch.pk)]}
+        self.save_rules([rule],[])
+        self.assertEqual(self.brand.brand_cc_rules[0]['report_column_ids'],[str(batch.pk)])
+        rule['report_column_ids']=[str(forbidden.pk)]
+        serializer=ProblemColumnSerializer(self.brand,data={'brand_cc_rules':[rule]},partial=True)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('brand_cc_rules',serializer.errors)

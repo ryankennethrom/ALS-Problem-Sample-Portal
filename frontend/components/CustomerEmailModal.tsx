@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { CustomerEmailContent, invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { useWebmailSendCountdown, WebmailOpeningStatus } from '@/components/useWebmailSendCountdown';
+import { useCurrentUser } from '@/components/CurrentUserContext';
+import TrackingLinkPreviewText from '@/components/TrackingLinkPreviewText';
 
 type Props = {
   content: CustomerEmailContent | null;
@@ -17,6 +19,7 @@ type Props = {
 };
 
 export default function CustomerEmailModal({ content, onSent, onDidNotSend, onCancel, busy = false, error = '', requireNotSentReason = true, autoStart = false }: Props) {
+  const currentUser = useCurrentUser();
   const { seconds, start } = useWebmailSendCountdown();
   const [copied, setCopied] = useState('');
   const [showNotSentReason, setShowNotSentReason] = useState(false);
@@ -88,9 +91,9 @@ export default function CustomerEmailModal({ content, onSent, onDidNotSend, onCa
       {content && showPreview ? <div className="customer-email-preview-content">
         <div className="customer-email-preview-heading"><strong>Recipients</strong><button type="button" className="button secondary" onClick={() => copy(addresses.join('; '), 'Addresses')}>Copy all addresses</button></div>
         <div className="customer-email-addresses"><strong>To:</strong> {content.to.join('; ') || '—'}{content.cc.length > 0 && <><br/><strong>Cc:</strong> {content.cc.join('; ')}</>}</div>
-        <div className="customer-email-preview-heading"><strong>Email to send</strong><button type="button" className="button secondary" onClick={() => copy(`Subject: ${content.subject}\n\n${content.body}`, 'Email')}>Copy email</button></div>
+        <div className="customer-email-preview-heading"><strong>Email to send</strong>{currentUser?.is_admin && <button type="button" className="button secondary" onClick={() => copy(`Subject: ${content.subject}\n\n${content.body}`, 'Email')}>Copy email</button>}</div>
         <div className="field"><label htmlFor="preview-subject">Subject</label><input id="preview-subject" className="input" readOnly value={content.subject} /></div>
-        <div className="field"><label htmlFor="preview-body">Message</label><textarea id="preview-body" className="textarea customer-email-body" readOnly value={content.body} /></div>
+        <div className="field"><label htmlFor="preview-body">Message</label>{currentUser?.is_admin ? <textarea id="preview-body" className="textarea customer-email-body" readOnly value={content.body} /> : <TrackingLinkPreviewText text={content.body} />}</div>
       </div> : !content ? <p className="muted">Select a customer email address before sending a tracking link.</p> : null}
       {copied && <p className="muted customer-email-copy-status" role="status">{copied}</p>}
       {error && <p className="error" role="alert">{error}</p>}

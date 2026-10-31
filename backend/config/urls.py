@@ -6,8 +6,9 @@ from problem_samples.dashboard_views import DashboardView, ActionRequiredEmailPr
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
 from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView, BackupUpgradeInspectView
 
+from problem_samples.monthly_report_portal import PublicMonthlyReportExcelView
 from problem_samples.ticket_creation_timing_views import StartTicketCreationTimingView, TicketCreationTimeReportView
-from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView, QueueManualDistributorReportView)
+from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView, QueueManualDistributorReportView, RevokeMonthlyReportLinkView)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -15,11 +16,13 @@ urlpatterns = [
     path('api/ticket-creation-timing/start/', StartTicketCreationTimingView.as_view()),
     path('api/admin/ticket-creation-time/', TicketCreationTimeReportView.as_view()),
     path('api/dashboard/', DashboardView.as_view()),
+    path('api/public/monthly-reports/<uuid:token>/xlsx/', PublicMonthlyReportExcelView.as_view()),
     path('api/system-emails/', SystemEmailListView.as_view()),
     path('api/system-emails/queue-due/', QueueDueSystemEmailsView.as_view()),
     path('api/system-emails/queue-now/', QueueManualDistributorReportView.as_view()),
     path('api/system-emails/<uuid:email_id>/', SystemEmailDetailView.as_view()),
     path('api/system-emails/<uuid:email_id>/confirm-sent/', ConfirmSystemEmailView.as_view()),
+    path('api/system-emails/<uuid:email_id>/revoke-report/', RevokeMonthlyReportLinkView.as_view()),
     path('api/dashboard/action-required-email/', ActionRequiredEmailPreviewView.as_view()),
     path('api/dashboard/opened-tickets/', DashboardOpenedTicketsView.as_view()),
     path('api/dashboard/storage/', DashboardStorageView.as_view()),

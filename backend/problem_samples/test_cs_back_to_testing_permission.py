@@ -36,8 +36,6 @@ class CustomerServiceBackToTestingPermissionTests(TestCase):
     def test_customer_service_cannot_patch_to_back_to_testing(self):
         response = self.client.patch(self.ticket_url, {
             'custom_values': {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: PROBLEM_STATUS_BACK_TO_TESTING},
-            'back_to_testing_email_sent': False,
-            'back_to_testing_not_sent_reason': 'Email unavailable',
         }, format='json')
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn('Customer Service', str(response.data))
@@ -50,8 +48,6 @@ class CustomerServiceBackToTestingPermissionTests(TestCase):
         self.profile.save(update_fields=['is_admin'])
         response = self.client.patch(self.ticket_url, {
             'custom_values': {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: PROBLEM_STATUS_BACK_TO_TESTING},
-            'back_to_testing_email_sent': False,
-            'back_to_testing_not_sent_reason': 'Email unavailable',
         }, format='json')
         self.assertEqual(response.status_code, 400, response.data)
 
@@ -63,8 +59,6 @@ class CustomerServiceBackToTestingPermissionTests(TestCase):
         )
         response = self.client.post(self.bulk_url, {
             'problem_ids': [str(self.ticket.pk), str(second.pk)],
-            'back_to_testing_email_sent': False,
-            'back_to_testing_not_sent_reason': 'Email unavailable',
         }, format='json')
         self.assertEqual(response.status_code, 403, response.data)
         self.ticket.refresh_from_db()
@@ -104,8 +98,6 @@ class CustomerServiceBackToTestingPermissionTests(TestCase):
         self.profile.save(update_fields=['role'])
         response = self.client.patch(self.ticket_url, {
             'custom_values': {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: PROBLEM_STATUS_BACK_TO_TESTING},
-            'back_to_testing_email_sent': False,
-            'back_to_testing_not_sent_reason': 'Email unavailable',
         }, format='json')
         self.assertEqual(response.status_code, 200, response.data)
         self.ticket.refresh_from_db()

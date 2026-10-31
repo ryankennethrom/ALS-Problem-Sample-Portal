@@ -23,6 +23,7 @@ type SystemEmail = {
   sent_at: string | null;
   to_emails?: string[];
   body?: string;
+  report_url?: string;
 };
 
 export default function SendSystemEmailsPage() {
@@ -104,6 +105,19 @@ export default function SendSystemEmailsPage() {
     } finally { setBusy(false); }
   }
 
+  async function revokeReport() {
+    if (!selected?.report_url || !user?.is_admin || !window.confirm('Revoke this report link? Recipients will no longer be able to download its Excel file.')) return;
+    setBusy(true); setError('');
+    try {
+      await api(`/system-emails/${selected.id}/revoke-report/`, {method:'POST'});
+      setSelected(null); reset();
+      setSuccess('Report link revoked. The report email record is preserved.');
+      await load();
+    } catch(e) {
+      setError(e instanceof Error ? e.message : 'Could not revoke report link.');
+    } finally {setBusy(false);}
+  }
+
   async function queueDue() {
     setBusy(true); setError(''); setSuccess('');
     try {
@@ -156,6 +170,7 @@ export default function SendSystemEmailsPage() {
         <div className={styles.field}><label htmlFor="system-email-to">To</label><input id="system-email-to" className="input" readOnly value={selected.to_emails?.join(', ') || ''}/></div>
         <div className={styles.field}><label htmlFor="system-email-subject">Subject</label><input id="system-email-subject" className="input" readOnly value={selected.subject}/></div>
         <div className={styles.field}><label htmlFor="system-email-body">Message</label><textarea id="system-email-body" rows={14} className="textarea" readOnly value={selected.body || ''}/></div>
+        {selected.report_url && <p className={styles.help}>Excel report: <a href={selected.report_url} rel="noopener noreferrer" target="_blank">Download Excel report</a></p>}
         {webmailError && <p role="alert" className={styles.error}>{webmailError}</p>}
         <WebmailOpeningStatus seconds={seconds} />
         <div className={styles.actions}>
@@ -163,6 +178,7 @@ export default function SendSystemEmailsPage() {
           {seconds === 0 && <button type="button" className="button" disabled={busy} onClick={confirmSent}>{busy ? 'Saving…' : 'I sent the email'}</button>}
           {seconds === 0 && <button type="button" className="button secondary" disabled={busy} onClick={() => {setSelected(null);reset();}}>I didn't send the email</button>}
           {seconds === 0 && <button type="button" className="button secondary" onClick={retryWebmail}>Open Web Mail again</button>}
+          {selected.report_url && user?.is_admin && <button type="button" className="button secondary" disabled={busy} onClick={()=>void revokeReport()}>Revoke report link</button>}
           <button type="button" className="button secondary" onClick={() => {setSelected(null);reset();}}>Cancel</button>
         </div>
       </section>

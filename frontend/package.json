@@ -2,6 +2,8 @@
   "name": "problem-sample-tracker-frontend",
   "private": true,
   "scripts": {
+    "predev": "node scripts/cleanup-stale-routes.cjs",
+    "prebuild": "node scripts/cleanup-stale-routes.cjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

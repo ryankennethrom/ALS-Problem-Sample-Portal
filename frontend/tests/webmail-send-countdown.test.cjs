@@ -40,12 +40,15 @@ function mount(filename, props) {
     '@/lib/customerEmail':email,
     '@/lib/api':{api:async()=>({email:'lab@example.org'})},
     '@/lib/rackRemovalReminder':{rackRemovalReminder:()=>''},
+    '@/components/CurrentUserContext':{useCurrentUser:()=>({is_admin:false})},
   };
   const sandbox = {
     exports:{}, Date:class extends Date {static now(){return now;}},window:mockWindow,
     require(name){assert.ok(modules[name],`unexpected import: ${name}`);return modules[name];},
   };
   function load(filename){ const module={...sandbox,exports:{}};vm.runInNewContext(compile(filename),module,{filename});return module.exports; }
+  modules['@/lib/trackingLinkAccess'] = load('lib/trackingLinkAccess.ts');
+  modules['@/components/TrackingLinkPreviewText'] = {default:({text}) => jsx('div',{children:text})};
   modules['@/components/useWebmailSendCountdown'] = load('components/useWebmailSendCountdown.tsx');
   const Component = load(filename).default;
   let tree;
@@ -98,27 +101,6 @@ test('tracking email with a required reason only records not-sent after reason c
  assert.deepEqual(actions,[]);
  harness.click('Confirm email not sent');
  assert.deepEqual(actions,['Email unknown']);
-});
-
-test('Back to Testing shares the countdown and retains not-sent reason', async () => {
- const confirmations=[];
- const h=mount('components/BackToTestingEmailModal.tsx',{
-  batchSamples:[{problemNumber:13,tableName:'ALS',containerId:'EDM PC-00001',trackingNumber:'123'}],
-  onConfirm:(...args)=>confirmations.push(args),onCancel:()=>{},busy:false,error:'',
- });
- await Promise.resolve(); await Promise.resolve();
- h.render();
- h.click('Send Email');h.render();
- assert.equal(h.attempts.length,1);
- assert.match(h.text(),/Opening Web Mail.*5 seconds/);
- assert.equal(h.buttons().some(b=>b.name==='I sent the email'),false);
- h.advance(5000);
- h.click("I didn't send the email");h.render();
- assert.equal(confirmations.length,0);
- h.click('Confirm email not sent');
- assert.equal(confirmations.length,1);
- assert.equal(confirmations[0][0],false);
- assert.equal(confirmations[0][3],'Email unknown');
 });
 
 test('general customer email shows no sent/not-sent buttons until countdown ends', () => {
@@ -284,13 +266,10 @@ test('mention emails with no recipients do not request a mail handler',()=>{
  assert.ok(!h.buttons().some(b=>b.name==='I sent the email'));
 });
 
-test('other editable email composers retain Send Email so staff can finish writing',()=>{
+test('editable customer email composer retains Send Email so staff can finish writing',()=>{
  const general=source('components/GeneralCustomerEmailModal.tsx');
- const testing=source('components/BackToTestingEmailModal.tsx');
  assert.match(general,/onClick=\{openEmail\}.*Send Email/);
- assert.match(testing,/onClick=\{proceed\}.*Send Email/);
  assert.match(general,/onChange=\{event => \{ setSubject/);
- assert.match(testing,/Additional details \(optional\)/);
 });
 
 test('prepared system monthly reports auto-launch and still require staff confirmation',()=>{

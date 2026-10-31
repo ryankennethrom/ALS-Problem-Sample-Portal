@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import AdvancedSearch, { AdvancedFilter, MatchMode } from '@/components/AdvancedSearch';
 import ColumnInfo from '@/components/ColumnInfo';
 import { useCurrentUser } from '@/components/CurrentUserContext';
+import TrackingLinkDisplay from '@/components/TrackingLinkDisplay';
 import { displayProblemValue, ProblemTable, systemColumnHint } from '@/lib/problemTables';
 
 type FollowUpSample = {
@@ -285,8 +286,8 @@ function FollowUpContent() {
                   ? <Link className="table-link" href={`/problems/${item.id}`}>Ticket #{item.problem_number}</Link>
                   : column.field_key === 'current-workflow'
                     ? <span className="badge">{displayProblemValue(column, item)}</span>
-                    : column.field_key === 'system-tracking-link' && item.tracking_url
-                      ? <a className="table-link" href={item.tracking_url} target="_blank" rel="noreferrer">Open tracking link</a>
+                    : column.field_key === 'system-tracking-link'
+                      ? (<TrackingLinkDisplay url={item.tracking_url} canOpen={Boolean(currentUser?.is_admin)} />)
                       : displayProblemValue(column, item)}
               </td>)}
             </tr>)}

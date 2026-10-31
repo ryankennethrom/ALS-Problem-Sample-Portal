@@ -9,6 +9,7 @@ backend/media/
 # Node
 frontend/node_modules/
 frontend/.next/
+frontend/.legacy-routes/
 frontend/.env.local
 
 # OS/editor

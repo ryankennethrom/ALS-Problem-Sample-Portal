@@ -1,4 +1,9 @@
+import base64
+import shutil
+import tempfile
+
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -7,6 +12,8 @@ from .models import (
     CURRENT_WORKFLOW_WAITING_FOR_CUSTOMER,
     ProblemColumn,
     ProblemHistory,
+    ProblemImage,
+    ProblemAttachment,
     ProblemSample,
     ProblemTable,
     ProblemTrackingLink,
@@ -18,6 +25,11 @@ from .models import (
 @override_settings(FRONTEND_URL='https://tracker.example')
 class CustomerHistoryReplyTests(TestCase):
     def setUp(self):
+        self.media_root = tempfile.mkdtemp(prefix='tracker-staff-reply-')
+        self.media_override = override_settings(MEDIA_ROOT=self.media_root)
+        self.media_override.enable()
+        self.addCleanup(self.media_override.disable)
+        self.addCleanup(lambda: shutil.rmtree(self.media_root, ignore_errors=True))
         self.user = User.objects.create_user(username='staff.reply', email='staff.reply@alsglobal.com')
         self.client = APIClient()
         self.client.force_authenticate(self.user)
@@ -126,3 +138,98 @@ class CustomerHistoryReplyTests(TestCase):
         )
         self.assertEqual(response.status_code, 409)
         self.assertFalse(ProblemHistory.objects.filter(problem=self.problem, summary='Replied to customer message').exists())
+
+    def test_staff_reply_files_are_shown_in_customer_chat_not_emailed(self):
+        image_bytes = base64.b64decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+        )
+        prepared = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/prepare-customer-history-reply/',
+            {
+                'history_id': self.customer_history.pk,
+                'reply': 'Please see the attached photo and instructions.',
+                'reply_files': {
+                    'images': [{'name': 'reply-photo.png', 'size': len(image_bytes)}],
+                    'attachments': [{'name': 'instructions.txt', 'size': len(b'additional details')}],
+                },
+            }, format='json',
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        self.assertIn('[View image/file in the tracking link chat]', prepared.data['email']['body'])
+        self.assertNotIn('reply-photo.png', prepared.data['email']['body'])
+        self.assertFalse(ProblemImage.objects.filter(problem=self.problem).exists())
+        self.assertFalse(ProblemAttachment.objects.filter(problem=self.problem).exists())
+
+        reply = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/customer-history-reply-sent/',
+            {
+                'history_id': self.customer_history.pk,
+                'reply': 'Please see the attached photo and instructions.',
+                'confirmation_token': prepared.data['confirmation_token'],
+                'images': [SimpleUploadedFile('reply-photo.png', image_bytes, content_type='image/png')],
+                'attachments': [SimpleUploadedFile('instructions.txt', b'additional details', content_type='text/plain')],
+            }, format='multipart',
+        )
+        self.assertEqual(reply.status_code, 201, reply.data)
+        saved_image = ProblemImage.objects.get(problem=self.problem)
+        saved_attachment = ProblemAttachment.objects.get(problem=self.problem)
+        self.assertEqual(saved_image.uploaded_by, self.user)
+        self.assertEqual(saved_attachment.uploaded_by, self.user)
+        history = ProblemHistory.objects.get(problem=self.problem, summary='Replied to customer message')
+        self.assertEqual(history.details['staff_reply_images'][0]['id'], saved_image.pk)
+        self.assertEqual(history.details['staff_reply_attachments'][0]['id'], saved_attachment.pk)
+        public_client = APIClient()
+        public = public_client.get(f'/api/public/problem-sample-tracking/{self.link.tracking_token}/')
+        self.assertEqual(public.status_code, 200, public.data)
+        staff_message = next(item for item in public.data['conversation'] if item['id'] == history.pk)
+        self.assertEqual(staff_message['sender'], 'staff')
+        self.assertEqual(staff_message['images'][0]['id'], saved_image.pk)
+        self.assertEqual(staff_message['attachments'][0]['id'], saved_attachment.pk)
+        self.assertEqual(
+            public_client.get(f'/api/public/problem-sample-tracking/{self.link.tracking_token}/images/{saved_image.pk}/').status_code,
+            200,
+        )
+        self.assertEqual(
+            public_client.get(f'/api/public/problem-sample-tracking/{self.link.tracking_token}/attachments/{saved_attachment.pk}/').status_code,
+            200,
+        )
+
+    def test_reply_rejects_changed_attachment_selection(self):
+        prepared = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/prepare-customer-history-reply/',
+            {
+                'history_id': self.customer_history.pk, 'reply': 'File attached',
+                'reply_files': {'images': [], 'attachments': [{'name': 'original.txt', 'size': 5}]},
+            }, format='json',
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        response = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/customer-history-reply-sent/',
+            {
+                'history_id': self.customer_history.pk, 'reply': 'File attached',
+                'confirmation_token': prepared.data['confirmation_token'],
+                'attachments': [SimpleUploadedFile('changed.txt', b'hello', content_type='text/plain')],
+            }, format='multipart',
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(ProblemAttachment.objects.filter(problem=self.problem).exists())
+        self.assertFalse(ProblemHistory.objects.filter(problem=self.problem, summary='Replied to customer message').exists())
+
+    def test_reply_cannot_save_attachments_without_confirmation(self):
+        response = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/customer-history-reply-sent/',
+            {
+                'history_id': self.customer_history.pk, 'reply': 'File attached',
+                'attachments': [SimpleUploadedFile('notes.txt', b'hello', content_type='text/plain')],
+            }, format='multipart',
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(ProblemAttachment.objects.filter(problem=self.problem).exists())
+
+    def test_file_free_reply_has_no_attachment_reference(self):
+        prepared = self.client.post(
+            f'/api/problem-samples/{self.problem.pk}/prepare-customer-history-reply/',
+            {'history_id': self.customer_history.pk, 'reply': 'A normal reply'}, format='json',
+        )
+        self.assertEqual(prepared.status_code, 200, prepared.data)
+        self.assertNotIn('[View image/file in the tracking link chat]', prepared.data['email']['body'])

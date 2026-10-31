@@ -76,6 +76,8 @@ function mount() {
     '@/lib/api': { api },
     '@/lib/problemTables': { applyIntercolumnRules: (_table, values) => values, initialValue: () => '', resolveProblemTypeMask: () => ({}) },
     '@/lib/customerEmail': { findCustomerEmails: () => [], prepareCustomerEmail: async () => ({ content: null }) },
+    '@/components/ClientEmailSelectionPrompt': () => {},
+    '@/components/ClientEmailAutocomplete': {},
     '@/components/DynamicField': () => {},
     '@/components/CustomerEmailModal': () => {},
     '@/components/CameraCapture': () => {},

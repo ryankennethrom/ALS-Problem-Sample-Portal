@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
+import { resolveClientEmailSelection } from '@/lib/clientEmailSelection';
 
 type ClientEmailSuggestion = {
   id: number;
@@ -47,15 +48,12 @@ function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
-export default function ClientEmailAutocomplete({
-  value,
-  onChange,
-  label,
-  required = false,
-  id = 'client-email-list',
-  placeholder = 'Filter emails or contact names…',
-  dependencies = [],
-}: {
+export type ClientEmailSelectionHandle = {
+  pendingCount: () => number;
+  resolve: (action: 'keep' | 'delete') => string[];
+};
+
+type ClientEmailAutocompleteProps = {
   value: unknown;
   onChange: (value: string[]) => void;
   label?: string;
@@ -63,7 +61,17 @@ export default function ClientEmailAutocomplete({
   id?: string;
   placeholder?: string;
   dependencies?: DependencyValue[];
-}) {
+};
+
+const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEmailAutocompleteProps>(function ClientEmailAutocomplete({
+  value,
+  onChange,
+  label,
+  required = false,
+  id = 'client-email-list',
+  placeholder = 'Filter emails or contact names…',
+  dependencies = [],
+}, ref) {
   const emails = useMemo(() => normalizeEmailList(value), [value]);
   const valueIsUninitialized = value === null || value === undefined || value === '';
   const configuredDependencies = useMemo(
@@ -258,20 +266,33 @@ export default function ClientEmailAutocomplete({
     });
   }
 
-  function keepSelected() {
-    if (!selected.size) return;
-    const kept = visibleRows.filter(row => selected.has(row.email.toLowerCase())).map(row => row.email);
-    onChange(normalizeEmailList(kept));
+  function resolveSelected(action: 'keep' | 'delete'): string[] {
+    if (!selected.size) return emails;
+    const next = resolveClientEmailSelection(
+      emails, visibleRows.map(row => row.email), selected, action,
+    );
+    onChange(next);
+    if (action === 'keep') {
+      setDismissed(new Set());
+      setFilter('');
+    } else {
+      setDismissed(current => new Set([...current, ...selected]));
+    }
     setSelected(new Set());
-    setDismissed(new Set());
-    setFilter('');
+    return next;
+  }
+
+  useImperativeHandle(ref, () => ({
+    pendingCount: () => selected.size,
+    resolve: resolveSelected,
+  }));
+
+  function keepSelected() {
+    resolveSelected('keep');
   }
 
   function deleteSelected() {
-    if (!selected.size) return;
-    onChange(emails.filter(email => !selected.has(email.toLowerCase())));
-    setDismissed(current => new Set([...current, ...selected]));
-    setSelected(new Set());
+    resolveSelected('delete');
   }
 
   function deleteAll() {
@@ -457,4 +478,6 @@ export default function ClientEmailAutocomplete({
     </div>
     <div className="muted result-meta">{helper}</div>
   </div>;
-}
+});
+
+export default ClientEmailAutocomplete;

@@ -60,7 +60,6 @@ class OptionalContainerWorkflowTests(TestCase):
         self.assertEqual(queue.data[0]['id'], str(ticket.pk))
         changed = self.client.patch(f'/api/problem-samples/{ticket.pk}/', {
             'custom_values': {SYSTEM_CURRENT_WORKFLOW_FIELD_KEY: PROBLEM_STATUS_BACK_TO_TESTING},
-            'back_to_testing_email_sent': False,
             'back_to_testing_not_sent_reason': 'Email unknown',
         }, format='json')
         self.assertEqual(changed.status_code, 200, changed.data)
