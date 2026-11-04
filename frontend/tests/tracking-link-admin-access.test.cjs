@@ -54,7 +54,7 @@ test('backend provides tracking URLs to staff but keeps standalone token admin-o
   assert.match(serializers, /def get_acknowledgement_token\(self, obj\):\n        return obj\.acknowledgement_token if self\._can_view_tracking_link\(\) else None/);
   assert.match(serializers, /def get_tracking_url\(self, obj\):\n        return self\.get_acknowledgement_url\(obj\)/);
   assert.match(serializers, /exclude = \['pending_tracking_token'\]/);
-  assert.match(serializers, /def get_details\(self, obj\):[\s\S]*?return obj\.details or \{\}/);
+  assert.match(serializers, /def get_details\(self, obj\):[\s\S]*?return details/);
   const views = source('../backend/problem_samples/views.py');
   assert.match(views, /def customer_notification_credentials\(self, request, pk=None\)/);
   assert.match(views, /def prepare_new\(self, request\)/);

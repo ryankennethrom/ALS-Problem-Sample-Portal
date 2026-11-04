@@ -6,6 +6,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
@@ -98,9 +99,9 @@ def queue_manual_monthly_report(column, rule, *, request_identifier, now=None, l
 
 
 def queue_due_monthly_reports(today=None):
-    """Idempotently queue last month's enabled rules; safe for repeated cron runs.
+    """Idempotently queue last month's enabled rules. Never sends email.
 
-    Never emails anyone. Invoke daily via Railway Cron or with the management command.
+    Called on authenticated app refresh; the optional management command remains available.
     """
     start, end = previous_month(today)
     zone = ZoneInfo(settings.TIME_ZONE)
@@ -155,3 +156,31 @@ def queue_due_monthly_reports(today=None):
                       finalize_report(mail)
               created += int(was_created)
     return {'created': created, 'examined': examined, 'period_start': start.isoformat(), 'period_end': end.isoformat()}
+
+
+def check_monthly_reports_on_app_refresh():
+    """Attempt to queue due reports when a signed-in user refreshes the app.
+
+    A short cache cooldown avoids expensive rule scans on every refresh. A
+    brief lock discourages concurrent checks in a worker. In multi-worker
+    setups the cache may be process-local; the existing DB unique constraint
+    remains the authoritative duplicate safeguard across all workers.
+
+    Failed attempts are retried rather than cached as a success. This check
+    only creates pending drafts; staff still have to send each email.
+    """
+    start, _ = previous_month()
+    cache_key = f'monthly-report-refresh:checked:{start.isoformat()}'
+    lock_key = f'monthly-report-refresh:running:{start.isoformat()}'
+    if cache.get(cache_key):
+        return {'checked': False}
+    if not cache.add(lock_key, True, timeout=120):
+        return {'checked': False}
+    try:
+        # Repeat periodically while the app is being used, so newly eligible
+        # rules and labs are picked up, and missed checks can catch up.
+        result = queue_due_monthly_reports()
+        cache.set(cache_key, True, timeout=300)
+        return {'checked': True, **result}
+    finally:
+        cache.delete(lock_key)

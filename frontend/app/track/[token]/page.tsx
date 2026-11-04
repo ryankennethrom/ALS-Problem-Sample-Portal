@@ -92,6 +92,7 @@ export default function ProblemSampleTrackingPage() {
   const [shippingMethod, setShippingMethod] = useState<ShippingMethod>('');
   const [courierName, setCourierName] = useState('');
   const [courierAccountNumber, setCourierAccountNumber] = useState('');
+  const [returnShippingAddress, setReturnShippingAddress] = useState('');
   const [requestedInformation, setRequestedInformation] = useState('');
   const [requestedImages, setRequestedImages] = useState<File[]>([]);
   const [requestedAttachments, setRequestedAttachments] = useState<File[]>([]);
@@ -154,6 +155,7 @@ export default function ProblemSampleTrackingPage() {
     returnMethod: ShippingMethod = '',
     returnCourierAccount = '',
     returnCourierName = '',
+    shippingAddress = '',
   ) {
     const signedName = effectiveSignature;
     if (busy || !signedName) return;
@@ -175,7 +177,7 @@ export default function ProblemSampleTrackingPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action, signature: signedName, requested_information: requestedInfo.trim(),
-            ...(action === 'ship_back' ? { shipping_method: returnMethod, courier_name: returnMethod === 'courier_account' ? returnCourierName.trim() : '', courier_account_number: returnMethod === 'courier_account' ? returnCourierAccount.trim() : '' } : {}),
+            ...(action === 'ship_back' ? { shipping_method: returnMethod, courier_name: returnMethod === 'courier_account' ? returnCourierName.trim() : '', courier_account_number: returnMethod === 'courier_account' ? returnCourierAccount.trim() : '', return_shipping_address: returnMethod === 'pickup' ? '' : shippingAddress.trim() } : {}),
           }),
         });
       }
@@ -190,6 +192,7 @@ export default function ProblemSampleTrackingPage() {
         setShippingMethod('');
         setCourierName('');
         setCourierAccountNumber('');
+        setReturnShippingAddress('');
       }
       if (action === 'requested_info') {
         // Keep the chat open so the customer immediately sees the new message
@@ -283,7 +286,7 @@ export default function ProblemSampleTrackingPage() {
             <button className="button" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about the issue</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => {
-              setError(''); setShippingMethod(''); setCourierName(''); setCourierAccountNumber(''); setReturnDialogOpen(true);
+              setError(''); setShippingMethod(''); setCourierName(''); setCourierAccountNumber(''); setReturnShippingAddress(''); setReturnDialogOpen(true);
             }}>I want these sample(s) back</button>
           </div>
         </div>}
@@ -321,11 +324,16 @@ export default function ProblemSampleTrackingPage() {
                 <span>3. Receive a quote for the shipping charges.</span>
               </label>
             </div>
+            {(shippingMethod === 'courier_account' || shippingMethod === 'shipping_quote') && <div className="public-return-address">
+              <label htmlFor="return-shipping-address">Return shipping address <span>(optional)</span></label>
+              <textarea id="return-shipping-address" rows={4} maxLength={1000} value={returnShippingAddress} onChange={event => setReturnShippingAddress(event.target.value)} disabled={busy} placeholder={'Recipient name\nStreet address\nCity, province/state, postal/ZIP code\nCountry'} />
+              <small>Provide an address if you would like the samples shipped to a specific location.</small>
+            </div>}
             {error && <p className="error" role="alert">{error}</p>}
             <div className="public-requested-info-signature">Submitting as: <strong>{effectiveSignature}</strong></div>
             <div className="public-requested-info-actions">
               <button className="button secondary" type="button" disabled={busy} onClick={() => setReturnDialogOpen(false)}>Cancel</button>
-              <button className="button" type="button" disabled={busy || !effectiveSignature || !shippingMethod || (shippingMethod === 'courier_account' && (!courierName.trim() || !courierAccountNumber.trim()))} onClick={() => chooseAction('ship_back', '', [], [], shippingMethod, courierAccountNumber, courierName)}>{busy ? 'Saving…' : 'Confirm return method'}</button>
+              <button className="button" type="button" disabled={busy || !effectiveSignature || !shippingMethod || (shippingMethod === 'courier_account' && (!courierName.trim() || !courierAccountNumber.trim()))} onClick={() => chooseAction('ship_back', '', [], [], shippingMethod, courierAccountNumber, courierName, returnShippingAddress)}>{busy ? 'Saving…' : 'Confirm return method'}</button>
             </div>
           </section>
         </div>}

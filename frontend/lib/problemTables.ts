@@ -113,6 +113,7 @@ export type ProblemColumn = {
   depends_on_column_name: string;
   depends_on_field_key: string;
   client_email_dependencies: string[];
+  client_email_fallback_hours: number | null;
   client_email_dependency_details: ClientEmailDependency[];
   intercolumn_rules: IntercolumnRule[];
   form_mask_rules: ProblemTypeRules;

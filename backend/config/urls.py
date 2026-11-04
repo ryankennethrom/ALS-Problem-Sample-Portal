@@ -2,13 +2,13 @@ from django.contrib import admin
 from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
-from problem_samples.dashboard_views import DashboardView, ActionRequiredEmailPreviewView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView
+from problem_samples.dashboard_views import DashboardView, ActionRequiredEmailPreviewView, DashboardOpenedTicketsView, DashboardStorageView, CustomerRespondedTicketsView, ResendTrackingLinksView
 from problem_samples.terminal_cleanup_views import OldTicketDefinitionView, TerminalTicketCleanupView
 from problem_samples.backup_restore_views import BackupRestoreStatusView, BackupPrepareDownloadView, BackupDownloadView, BackupRestoreView, BackupUpgradeInspectView
 
 from problem_samples.monthly_report_portal import PublicMonthlyReportExcelView
 from problem_samples.ticket_creation_timing_views import StartTicketCreationTimingView, TicketCreationTimeReportView
-from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView, QueueManualDistributorReportView, RevokeMonthlyReportLinkView)
+from problem_samples.system_email_views import (SystemEmailListView, SystemEmailDetailView, ConfirmSystemEmailView, QueueDueSystemEmailsView, QueueMonthlyReportsOnRefreshView, QueueManualDistributorReportView, RevokeMonthlyReportLinkView)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/public/monthly-reports/<uuid:token>/xlsx/', PublicMonthlyReportExcelView.as_view()),
     path('api/system-emails/', SystemEmailListView.as_view()),
     path('api/system-emails/queue-due/', QueueDueSystemEmailsView.as_view()),
+    path('api/system-emails/check-on-refresh/', QueueMonthlyReportsOnRefreshView.as_view()),
     path('api/system-emails/queue-now/', QueueManualDistributorReportView.as_view()),
     path('api/system-emails/<uuid:email_id>/', SystemEmailDetailView.as_view()),
     path('api/system-emails/<uuid:email_id>/confirm-sent/', ConfirmSystemEmailView.as_view()),
@@ -27,6 +28,7 @@ urlpatterns = [
     path('api/dashboard/opened-tickets/', DashboardOpenedTicketsView.as_view()),
     path('api/dashboard/storage/', DashboardStorageView.as_view()),
     path('api/dashboard/customer-responded/', CustomerRespondedTicketsView.as_view()),
+    path('api/dashboard/resend-tracking-links/', ResendTrackingLinksView.as_view()),
     path('api/admin/terminal-ticket-cleanup/', TerminalTicketCleanupView.as_view()),
     path('api/admin/old-ticket-definition/', OldTicketDefinitionView.as_view()),
     path('api/admin/backup-restore/', BackupRestoreStatusView.as_view()),

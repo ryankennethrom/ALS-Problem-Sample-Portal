@@ -67,6 +67,55 @@ class CustomerReturnMethodTests(TestCase):
         self.assertEqual(history.details['customer_courier_name'], 'Federal Express')
         self.assertEqual(history.details['customer_courier_account_number'], 'AB 123')
 
+    def test_courier_account_can_include_optional_return_shipping_address(self):
+        response = self.respond(
+            shipping_method='courier_account', courier_name='UPS', courier_account_number='AB123',
+            return_shipping_address='  Receiving Dept\n123 Main St\nEdmonton AB T5J 0N1  ',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.latest_selection().details['customer_return_shipping_address'],
+            'Receiving Dept\n123 Main St\nEdmonton AB T5J 0N1',
+        )
+
+    def test_courier_account_without_address_remains_valid(self):
+        response = self.respond(shipping_method='courier_account', courier_name='UPS', courier_account_number='AB123')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('customer_return_shipping_address', self.latest_selection().details)
+
+    def test_shipping_quote_can_include_optional_return_address(self):
+        response = self.respond(shipping_method='shipping_quote', return_shipping_address='456 Sample Ave\nEdmonton, AB')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.latest_selection().details['customer_return_shipping_address'],
+            '456 Sample Ave\nEdmonton, AB',
+        )
+        self.problem.refresh_from_db()
+        self.assertEqual(self.problem.workflow_status, CURRENT_WORKFLOW_DEFAULT)
+
+    def test_pickup_with_return_shipping_address_is_rejected(self):
+        result = self.respond(shipping_method='pickup', return_shipping_address='123 Main St')
+        self.assertEqual(result.status_code, 400)
+        self.assertFalse(self.problem.history.exists())
+
+    def test_address_cannot_be_added_to_non_return_action(self):
+        result = self.client.post(self.url, data={
+            'action': 'dispose', 'signature': 'Customer Name',
+            'return_shipping_address': '123 Main St',
+        }, content_type='application/json')
+        self.assertEqual(result.status_code, 400)
+        self.assertFalse(self.problem.history.exists())
+
+    def test_return_shipping_address_length_limit(self):
+        for fields in (
+            {'shipping_method': 'shipping_quote', 'return_shipping_address': 'X' * 1001},
+            {'shipping_method': 'courier_account', 'courier_name': 'UPS', 'courier_account_number': 'AB123', 'return_shipping_address': 'X' * 1001},
+        ):
+            with self.subTest(fields=fields['shipping_method']):
+                result = self.respond(**fields)
+                self.assertEqual(result.status_code, 400)
+        self.assertFalse(self.problem.history.exists())
+
     def test_pickup_queues_shipping_and_records_method(self):
         result = self.respond(shipping_method='pickup')
         self.assertEqual(result.status_code, 200)

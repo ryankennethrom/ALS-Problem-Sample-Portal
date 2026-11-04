@@ -1341,3 +1341,12 @@ button.sidebar-lab-control:focus-visible{outline:2px solid #b6e1ff;outline-offse
 /* Non-admin staff may read tracking URLs, but receive no clickable or copyable UI. */
 .tracking-link-noninteractive{user-select:none;-webkit-user-select:none;cursor:default;overflow-wrap:anywhere;word-break:break-word}
 .tracking-link-preview-text{height:auto;min-height:96px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
+
+/* Optional customer-provided return shipping address. */
+.public-return-address{display:grid;gap:7px;margin-top:14px}
+.public-return-address label{font-size:13px;font-weight:700;color:#273743}
+.public-return-address label span{font-weight:400;color:#64748b}
+.public-return-address textarea{width:100%;box-sizing:border-box;padding:11px 12px;font:inherit;border-radius:5px;border:1px solid #aebfc9;resize:vertical}
+.public-return-address textarea:focus{outline:2px solid #91bbdf;border-color:#1d6fb8}
+.public-return-address small{color:#526273}
+.history-return-shipping-address{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:4px}

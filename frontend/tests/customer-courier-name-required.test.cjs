@@ -14,7 +14,7 @@ for (const route of ['track', 'acknowledge']) {
   });
   test(`${route} posts courier name and clears it when reopening`, () => {
     assert.match(source, /courier_name: returnMethod === 'courier_account' \? returnCourierName\.trim\(\) : ''/);
-    assert.match(source, /chooseAction\('ship_back', '', \[\], \[\], shippingMethod, courierAccountNumber, courierName\)/);
+    assert.match(source, /chooseAction\('ship_back', '', \[\], \[\], shippingMethod, courierAccountNumber, courierName, returnShippingAddress\)/);
     assert.match(source, /setShippingMethod\(''\); setCourierName\(''\); setCourierAccountNumber\(''\);/);
   });
 }
@@ -25,7 +25,7 @@ test('backend rejects missing, oversized and misplaced courier names', () => {
   assert.match(source, /if not courier_name:\s*return Response\(\{'detail': 'Enter your courier name\.'/);
   assert.match(source, /if len\(courier_name\) > 200:/);
   assert.match(source, /elif courier_name or courier_account_number:/);
-  assert.match(source, /elif shipping_method or courier_name or courier_account_number:/);
+  assert.match(source, /elif shipping_method or courier_name or courier_account_number or return_shipping_address:/);
 });
 
 test('backend stores courier name and account in ticket history without a schema change', () => {

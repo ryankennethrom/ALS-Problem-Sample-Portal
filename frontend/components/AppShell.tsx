@@ -150,6 +150,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [problemSamplesOpen, setProblemSamplesOpen] = useState(pathname === '/problem-samples');
   const [disposalOpen, setDisposalOpen] = useState(false);
   const [mentionUnread, setMentionUnread] = useState(0);
+  const [resendQueueEnabled, setResendQueueEnabled] = useState(false);
+  const monthlyRefreshCheckStarted = useRef(false);
 
   useEffect(() => {
     const refresh = () => {
@@ -265,6 +267,44 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, [pathname, router]);
 
+  // A configured Client Email fallback enables a new Action Required queue.
+  // Refresh on navigation, lab changes and after automatic escalation checks.
+  useEffect(() => {
+    if (!user || user.needs_lab || user.needs_role || user.needs_email) return;
+    let cancelled = false;
+    const update = () => {
+      void api('/dashboard/resend-tracking-links/?page=1')
+        .then((response: {enabled: boolean}) => { if (!cancelled) setResendQueueEnabled(Boolean(response.enabled)); })
+        .catch(() => { if (!cancelled) setResendQueueEnabled(false); });
+    };
+    update();
+    window.addEventListener('monthly-reports-checked', update);
+    return () => { cancelled = true; window.removeEventListener('monthly-reports-checked', update); };
+  }, [user?.id, user?.needs_lab, user?.needs_role, user?.needs_email, selectedLabCode, pathname]);
+
+  // One automatic due-report check per authenticated page load. A normal
+  // browser refresh remounts AppShell; ordinary navigation does not retrigger
+  // the check. The backend throttles scans and deduplicates created drafts.
+  useEffect(() => {
+    if (monthlyRefreshCheckStarted.current || !user || user.needs_lab ||
+        user.needs_email || user.needs_role || !getToken() ||
+        pathname === '/login' || pathname.startsWith('/login/') ||
+        pathname.startsWith('/track/') || pathname.startsWith('/reports/monthly/')) return;
+    monthlyRefreshCheckStarted.current = true;
+    void api('/system-emails/check-on-refresh/', {method:'POST'}).then((result: {
+      ok?: boolean; monthly_reports_checked?: boolean; client_email_escalations_checked?: boolean;
+    }) => {
+      if (result?.monthly_reports_checked === false || result?.client_email_escalations_checked === false) {
+        console.warn('Some automatic refresh checks did not complete; inspect backend logs.', result);
+      }
+      window.dispatchEvent(new Event('monthly-reports-checked'));
+    }).catch((error) => {
+      // A transient backend failure should be retryable on the next navigation.
+      monthlyRefreshCheckStarted.current = false;
+      console.error('Automatic monthly-report / Client Email escalation check failed:', error);
+    });
+  }, [user?.id, user?.needs_lab, user?.needs_email, user?.needs_role, pathname]);
+
   useEffect(() => {
     if (!user || user.needs_email || user.needs_lab || !getToken()) return;
     let cancelled = false;
@@ -292,7 +332,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   async function logout() {
     closeMobileDrawer();
     try { if (getToken()) await api('/auth/logout/', { method: 'POST', successMessage:'Signed out successfully.', errorMessage:'Could not sign out cleanly' }); } catch {}
-    clearToken(); setUser(null); router.push('/login');
+    clearToken(); setUser(null); monthlyRefreshCheckStarted.current = false; router.push('/login');
   }
 
   return <div className={`admin-shell ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -336,6 +376,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Link href="/follow-up-required/tracking-not-sent" className={`side-link ${pathname === '/follow-up-required/tracking-not-sent' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="clock"/></span><span className="side-label">Tracking Not Sent</span>
         </Link>
+        {resendQueueEnabled && <Link href="/resend-tracking-links" className={`side-link ${pathname === '/resend-tracking-links' ? 'active' : ''}`}>
+          <span className="side-icon"><Icon name="mail"/></span><span className="side-label">Resend Tracking Links</span>
+        </Link>}
         <Link href="/follow-up-required/customer-responded" className={`side-link ${pathname === '/follow-up-required/customer-responded' ? 'active' : ''}`}>
           <span className="side-icon"><Icon name="mail"/></span><span className="side-label">New Tracking Link Response</span>
         </Link>

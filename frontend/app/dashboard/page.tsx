@@ -12,8 +12,9 @@ type Range = 'week' | 'month' | 'six_months' | 'year' | 'custom';
 type Point = { period: string; label: string; count: number };
 type Data = {
   generated_at: string;
+  resend_tracking_links_enabled: boolean;
   selected_table: {id:string; name:string} | null;
-  counts: { tracking_emails_today:number; customer_responded:number; tracking_not_sent:number; customer_service_other:number; old_tickets:number; to_be_shipped:number; to_be_back_to_testing:number; containers_ready_to_dispose:number; day:number; week:number; month:number; six_months:number; year:number; custom:number|null };
+  counts: { tracking_emails_today:number; customer_responded:number; tracking_not_sent:number; resend_tracking_links:number; customer_service_other:number; old_tickets:number; to_be_shipped:number; to_be_back_to_testing:number; containers_ready_to_dispose:number; day:number; week:number; month:number; six_months:number; year:number; custom:number|null };
   old_ticket_definition: { age_months:number; created_before:string };
   chart: { range:Range; range_label:string; bucket:string; total:number; points:Point[] };
   automatic_disposal_chart: { range:Range; range_label:string; bucket:string; total:number; points:Point[] };
@@ -120,16 +121,21 @@ export default function Dashboard() {
   const [storageLoading,setStorageLoading]=useState(true);
   const [storageError,setStorageError]=useState('');
   const [tables,setTables]=useState<ProblemTable[]>([]);
+  const [automaticChecksVersion, setAutomaticChecksVersion] = useState(0);
   const [tableId,setTableId]=useState('');
   const [tablesLoading,setTablesLoading]=useState(true);
   const [showActionEmail,setShowActionEmail]=useState(false);
   const [pendingSystemEmails,setPendingSystemEmails] = useState<number | null>(null);
   useEffect(() => {
     let stop = false;
-    api('/system-emails/?summary=1').then((d: {pending_count:number}) => {
-      if (!stop) setPendingSystemEmails(d.pending_count);
-    }).catch(() => { if (!stop) setPendingSystemEmails(null); });
-    return () => { stop = true; };
+    const refreshPending = () => {
+      api('/system-emails/?summary=1').then((d: {pending_count:number}) => {
+        if (!stop) setPendingSystemEmails(d.pending_count);
+      }).catch(() => { if (!stop) setPendingSystemEmails(null); });
+    };
+    refreshPending();
+    window.addEventListener('monthly-reports-checked', refreshPending);
+    return () => { stop = true; window.removeEventListener('monthly-reports-checked', refreshPending); };
   }, []);
 
 
@@ -170,6 +176,12 @@ export default function Dashboard() {
     return()=>{stop=true;};
   },[showStorageAnalytics]);
 
+  useEffect(() => {
+    const refresh = () => setAutomaticChecksVersion(value => value + 1);
+    window.addEventListener('monthly-reports-checked', refresh);
+    return () => window.removeEventListener('monthly-reports-checked', refresh);
+  }, []);
+
   useEffect(()=>{
     let stop=false;
     if(!tableId){setLoading(false);return;}
@@ -182,7 +194,7 @@ export default function Dashboard() {
       .catch(e=>{if(!stop)setError(e instanceof Error?e.message:'Could not load dashboard');})
       .finally(()=>{if(!stop)setLoading(false);});
     return()=>{stop=true;};
-  },[range,appliedStart,appliedEnd,tableId]);
+  },[range,appliedStart,appliedEnd,tableId,automaticChecksVersion]);
 
   function applyCustom(){
     if(!start||!end){setError('Choose both custom dates.');return;}
@@ -240,6 +252,15 @@ export default function Dashboard() {
         <Link href="/follow-up-required/tracking-not-sent" className={styles.seeAll}>See all &gt;</Link>
       </section>
 
+      {data?.resend_tracking_links_enabled && <section className={styles.newCard} aria-label="Resend Tracking Links">
+        <div>
+          <div className={styles.label}>Resend Tracking Links</div>
+          <div className={styles.value}>{format(data?.counts.resend_tracking_links)}</div>
+          <div className={styles.note}>Priority escalated · Follow Up Required · latest history requests a tracking-link resend</div>
+        </div>
+        <Link href="/resend-tracking-links" className={styles.seeAll}>See all &gt;</Link>
+      </section>}
+
       <section className={styles.newCard} aria-label="New Tracking Link Response">
         <div>
           <div className={styles.label}>New Tracking Link Response</div>
@@ -253,7 +274,7 @@ export default function Dashboard() {
         <div>
           <div className={styles.label}>Others</div>
           <div className={styles.value}>{loading&&!data?'…':format(data?.counts.customer_service_other)}</div>
-          <div className={styles.note}>Follow Up Required · not Tracking Not Sent or New Tracking Link Response</div>
+          <div className={styles.note}>Follow Up Required · excluding Tracking Not Sent, New Tracking Link Response, and Resend Tracking Links</div>
         </div>
         <Link href="/follow-up-required/other" className={styles.seeAll}>See all &gt;</Link>
       </section>

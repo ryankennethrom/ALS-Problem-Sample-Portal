@@ -214,6 +214,10 @@ class ProblemColumn(models.Model):
         default=list, blank=True,
         help_text='Ordered ProblemColumn UUIDs used as Client Email company fallbacks.',
     )
+    client_email_fallback_hours = models.PositiveIntegerField(
+        null=True, blank=True, validators=[MinValueValidator(0), MaxValueValidator(87600)],
+        help_text='After this many hours without a new customer response, escalate to the next priority.',
+    )
     form_mask_rules = models.JSONField(default=dict, blank=True, help_text='Choice label -> form visibility and customer instructions.')
     company_brand_dependencies = models.JSONField(default=list, blank=True, help_text='Company column IDs whose imported Brand values may be used in Brand email rules.')
     brand_cc_rules = models.JSONField(default=list, blank=True, help_text='Email CC/monthly report rules based on ticket Brand or dependent company Brands.')
@@ -532,6 +536,9 @@ class ProblemSample(models.Model):
     notify = models.BooleanField(default=False)
     email_confirmation = models.BooleanField(default=False)
     customer_notified_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    client_email_priority_state = models.JSONField(default=dict, blank=True)
+    client_email_last_tracking_sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    client_email_last_customer_response_at = models.DateTimeField(null=True, blank=True)
     automatic_disposal_started_at = models.DateTimeField(null=True, blank=True, db_index=True)
     pending_tracking_token = models.CharField(max_length=128, default=None, editable=False, null=True, blank=True)
     acknowledged_at = models.DateTimeField(null=True, blank=True, db_index=True)

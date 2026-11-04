@@ -54,6 +54,12 @@ export default function SendSystemEmailsPage() {
     }
   }
   useEffect(() => { void load(showAll); }, [showAll]);
+  // Newly queued reports should appear without requiring a second reload.
+  useEffect(() => {
+    const refreshAfterCheck = () => { void load(showAll); };
+    window.addEventListener('monthly-reports-checked', refreshAfterCheck);
+    return () => window.removeEventListener('monthly-reports-checked', refreshAfterCheck);
+  }, [showAll]);
 
   useEffect(() => {
     const emailId = new URLSearchParams(window.location.search).get('email');

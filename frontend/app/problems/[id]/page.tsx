@@ -46,6 +46,7 @@ type HistoryEntry = {
     customer_shipping_method_label?: string;
     customer_courier_name?: string;
     customer_courier_account_number?: string;
+    customer_return_shipping_address?: string;
     customer_uploaded_images?: { id:number; name:string; size_bytes:number }[];
     customer_uploaded_attachments?: { id:number; name:string; size_bytes:number; content_type?:string }[];
     replied_to_history_id?: number;
@@ -61,7 +62,7 @@ type HistoryEntry = {
   actor_name: string;
   created_at: string;
 };
-type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues; brand_cc_recipients?: string[] };
+type Problem = { problem_type_prompts?: {column:string;choice:string;message:string}[]; id: string; problem_number:number; created_at:string; table:string; table_name:string; container_id:string; container_is_dumping?:boolean; customer_notified_at:string|null; automatic_disposal_started_at:string|null; expires_at:string|null; expiration_status:'active'|'expired'; days_until_expiration:number|null; days_until_automatic_disposal:number|null; pt_days:number; tracking_url:string; tracking_link_expiry:string|null; back_to_testing_notified_at:string|null; acknowledged_at:string|null; comments: Comment[]; history: HistoryEntry[]; images: ProblemImage[]; attachments: ProblemAttachment[]; custom_values: CustomValues; client_email_priority_state?: Record<string, number>; brand_cc_recipients?: string[] };
 
 // Only completed workflows require a container when staff reopen the ticket.
 const TERMINAL_WORKFLOWS = new Set([
@@ -113,6 +114,7 @@ export default function Detail() {
   const [p, setP] = useState<Problem | null>(null);
   const [table, setTable] = useState<ProblemTable | null>(null);
   const [customValues, setCustomValues] = useState<CustomValues>({});
+  const [emailPriorities, setEmailPriorities] = useState<Record<string, number>>({});
   const [clientEmailPrompt, setClientEmailPrompt] = useState<{ selectedCount: number; fieldCount: number } | null>(null);
   const clientEmailEditors = useRef(new Map<string, ClientEmailSelectionHandle>());
   function registerClientEmailEditor(fieldKey: string, editor: ClientEmailSelectionHandle | null) {
@@ -177,7 +179,7 @@ export default function Detail() {
   async function load() {
     try {
       const problem: Problem = await api(`/problem-samples/${id}/`);
-      setP(problem); setCustomValues(problem.custom_values || {}); setContainerCode(problem.container_id || '');
+      setP(problem); setCustomValues(problem.custom_values || {}); setEmailPriorities(problem.client_email_priority_state || {}); setContainerCode(problem.container_id || '');
       setPendingContainerChoice(null); setChangeContainerOpen(false);
       setReopenContainerMode('existing'); setReopenExistingContainer('');
       setReopenContainerConfirmed(false); setPendingReopenWorkflow(null);
@@ -210,6 +212,15 @@ export default function Detail() {
       setPendingContainerChoice(null);
       setReopenContainerConfirmed(false);
       setReopenExistingContainer('');
+    }
+    const affectedEmailColumns = table.columns.filter(candidate => candidate.column_type === 'client_email'
+      && (candidate.client_email_dependencies || []).includes(columnId));
+    if (affectedEmailColumns.length) {
+      setEmailPriorities(current => {
+        const next = {...current};
+        for (const candidate of affectedEmailColumns) delete next[candidate.id];
+        return next;
+      });
     }
     setCustomValues(current => {
       const next = { ...current, [fieldKey]: value };
@@ -410,7 +421,7 @@ export default function Detail() {
       const updated = await api(`/problem-samples/${id}/`, {
         method:'PATCH',
         headers: changeReasonHeaders(reason),
-        body:JSON.stringify({custom_values:values, ...containerSelection}),
+        body:JSON.stringify({custom_values:values, client_email_priority_state:emailPriorities, ...containerSelection}),
         successMessage:'Ticket saved successfully.',
         errorMessage:'Could not save ticket',
       });
@@ -681,6 +692,7 @@ export default function Detail() {
                 <strong>Return method:</strong> {entry.details.customer_shipping_method_label || entry.details.customer_shipping_method}
                 {entry.details.customer_courier_name && <div><strong>Courier name:</strong> {entry.details.customer_courier_name}</div>}
                 {entry.details.customer_courier_account_number && <div><strong>Courier account number:</strong> {entry.details.customer_courier_account_number}</div>}
+                {entry.details.customer_return_shipping_address && <div><strong>Return shipping address:</strong> <div className="history-return-shipping-address">{entry.details.customer_return_shipping_address}</div></div>}
               </div>}
               {(entry.details?.customer_requested_information || (entry.details?.customer_uploaded_images?.length || 0) > 0 || (entry.details?.customer_uploaded_attachments?.length || 0) > 0) && <div className="history-customer-information">
                 <strong>{entry.details?.customer_requested_information ? 'Information provided by customer:' : 'Customer sent files:'}</strong>
@@ -757,7 +769,7 @@ export default function Detail() {
               ? <div className="field readonly-field tracking-link-field" key={column.id}><label>{column.name}</label>{<TrackingLinkDisplay url={p.tracking_url} canOpen={Boolean(currentUser?.is_admin)} fullUrl />}</div>
               : column.field_key === 'system-tracking-link-expiry'
                 ? <div className="field readonly-field" key={column.id}><label>{column.name}</label><input className="input readonly-input" value={p.tracking_link_expiry ? new Date(p.tracking_link_expiry).toLocaleString() : (p.tracking_url ? 'Does not expire' : '—')} disabled readOnly aria-disabled="true" /></div>
-                : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value=>updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)}/>)}</div><div><button className="button" onClick={() => void saveCustom()}>Save Changes</button></div></> : null}
+                : <DynamicField key={column.id} column={column} value={customValues[column.field_key]} allValues={customValues} onChange={value=>updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)} activeEmailPriority={emailPriorities[column.id] ?? null} onEmailPriorityChange={priority => setEmailPriorities(current => ({...current,[column.id]:priority}))}/>)}</div><div><button className="button" onClick={() => void saveCustom()}>Save Changes</button></div></> : null}
         </div></section>
 
         <section className="panel file-panel">

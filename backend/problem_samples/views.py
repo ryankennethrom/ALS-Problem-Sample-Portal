@@ -1827,6 +1827,18 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
                     'after': workflow_after_waiting,
                 })
 
+        # Every confirmed tracking-link send starts a new response window and
+        # restarts automatic disposal, including resends and priority escalations.
+        sent_at = timezone.now()
+        problem.client_email_last_tracking_sent_at = sent_at
+        update_fields.append('client_email_last_tracking_sent_at')
+        if problem.dispose_automatically:
+            before_days = _automatic_disposal_history_value(problem)
+            problem.automatic_disposal_started_at = sent_at
+            update_fields.append('automatic_disposal_started_at')
+            after_days = _automatic_disposal_history_value(problem)
+            changes.append({'field': 'Automatic disposal countdown', 'before': before_days,
+                            'after': after_days, 'reason': 'Tracking link sent; countdown restarted'})
         if update_fields:
             problem.save(update_fields=list(dict.fromkeys(update_fields)))
 
@@ -1837,6 +1849,9 @@ class ProblemSampleViewSet(viewsets.ModelViewSet):
             summary='Sent tracking link to customer by email',
             details={
                 'delivery_method': delivery_method,
+                # Persist the chosen email-list priority in future send records.
+                # Pre-0101 history cannot establish this reliably on its own.
+                'client_email_priority_state': dict(problem.client_email_priority_state or {}),
                 'confirmation': 'User confirmed the customer notification email was sent.',
                 'first_notification': first_notification,
                 'starts_pt_clock': automatic_disposal_activated,
@@ -3446,6 +3461,7 @@ class ProblemAcknowledgementView(APIView):
         shipping_method = str(request.data.get('shipping_method') or '').strip()
         courier_name = ' '.join(str(request.data.get('courier_name') or '').split())
         courier_account_number = ' '.join(str(request.data.get('courier_account_number') or '').split())
+        return_shipping_address = str(request.data.get('return_shipping_address') or '').replace('\r\n', '\n').strip()
         shipping_method_labels = {
             'courier_account': 'Provide your courier name and account number',
             'pickup': 'Pick up in person',
@@ -3468,7 +3484,11 @@ class ProblemAcknowledgementView(APIView):
                     return Response({'detail': 'Courier account number must be 200 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
             elif courier_name or courier_account_number:
                 return Response({'detail': 'Courier details are only allowed with the courier account option.'}, status=status.HTTP_400_BAD_REQUEST)
-        elif shipping_method or courier_name or courier_account_number:
+            if return_shipping_address and shipping_method == 'pickup':
+                return Response({'detail': 'A return shipping address is only allowed with a shipping option.'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(return_shipping_address) > 1000:
+                return Response({'detail': 'Return shipping address must be 1000 characters or fewer.'}, status=status.HTTP_400_BAD_REQUEST)
+        elif shipping_method or courier_name or courier_account_number or return_shipping_address:
             return Response({'detail': 'Return details can only be sent with I want these sample(s) back.'}, status=status.HTTP_400_BAD_REQUEST)
 
         requested_information = str(request.data.get('requested_information') or '').strip()
@@ -3581,7 +3601,8 @@ class ProblemAcknowledgementView(APIView):
         # as though they made this customer-originated change. A later staff save
         # sets modified_by and the Recent Row Modifier value back to that user.
         problem.modified_by = None
-        update_fields.extend(['custom_values', 'current_workflow', 'modified_by', 'modified_at'])
+        problem.client_email_last_customer_response_at = timezone.now()
+        update_fields.extend(['custom_values', 'current_workflow', 'modified_by', 'modified_at', 'client_email_last_customer_response_at'])
 
         after_status = problem.workflow_status
         after_auto = problem.dispose_automatically
@@ -3653,6 +3674,8 @@ class ProblemAcknowledgementView(APIView):
             if shipping_method == 'courier_account':
                 details['customer_courier_name'] = courier_name
                 details['customer_courier_account_number'] = courier_account_number
+            if return_shipping_address:
+                details['customer_return_shipping_address'] = return_shipping_address
             label = f'I want these sample(s) back — {shipping_method_labels[shipping_method]}'
             details['customer_action_label'] = label
         if customer_action == CUSTOMER_ACTION_REQUESTED_INFORMATION:

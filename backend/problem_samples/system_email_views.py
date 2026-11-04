@@ -1,5 +1,6 @@
 """Review/confirm API for prepared system mail, using the normal external mail app."""
 import uuid
+import logging
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -8,9 +9,12 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .models import ProblemColumn, SystemEmail
+
+logger = logging.getLogger(__name__)
 from accounts.models import Lab
 from .labs import active_lab
-from .system_email_service import queue_due_monthly_reports, queue_manual_monthly_report, normalize_addresses
+from .system_email_service import (queue_due_monthly_reports, queue_manual_monthly_report,
+                                   check_monthly_reports_on_app_refresh, normalize_addresses)
 
 
 def is_admin(user):
@@ -79,9 +83,40 @@ class ConfirmSystemEmailView(APIView):
         return Response({'status': mail.status, 'sent_at': mail.sent_at.isoformat()})
 
 
+class QueueMonthlyReportsOnRefreshView(APIView):
+    """Signed-in app refreshes opportunistically queue eligible monthly drafts.
+
+    The operation is safe for non-admin staff: it uses only saved admin rules
+    and exposes neither cross-lab counts nor any report data in its response.
+    """
+    def post(self, request):
+        # These are independent jobs. A broken monthly-report rule must never
+        # prevent overdue Client Email escalations (or vice versa).
+        monthly_ok = False
+        escalation_ok = False
+        try:
+            check_monthly_reports_on_app_refresh()
+            monthly_ok = True
+        except Exception:
+            logger.exception('Automatic monthly-report refresh check failed')
+
+        try:
+            from .client_email_escalation import check_client_email_escalations_on_request
+            check_client_email_escalations_on_request()
+            escalation_ok = True
+        except Exception:
+            logger.exception('Automatic Client Email escalation refresh check failed')
+
+        if not monthly_ok and not escalation_ok:
+            return Response({'detail': 'Automatic refresh checks failed; see backend logs.'}, status=503)
+        # Report only check success/failure, never global ticket counts or details.
+        return Response({'ok': True, 'monthly_reports_checked': monthly_ok,
+                         'client_email_escalations_checked': escalation_ok})
+
+
 class QueueDueSystemEmailsView(APIView):
     def post(self, request):
-        # Manual catch-up is admin-only; scheduled Django management command runs as a service.
+        # Manual catch-up remains admin-only; refresh checks are automatic.
         if not is_admin(request.user):
             return Response({'detail': 'Administrator access is required to queue due reports manually.'}, status=403)
         return Response(queue_due_monthly_reports())

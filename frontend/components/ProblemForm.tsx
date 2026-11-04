@@ -33,6 +33,7 @@ export default function ProblemForm() {
   const [newContainerId, setNewContainerId] = useState('');
   const [creatingContainer, setCreatingContainer] = useState(false);
   const [customValues, setCustomValues] = useState<CustomValues>({});
+  const [emailPriorities, setEmailPriorities] = useState<Record<string, number>>({});
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
@@ -106,6 +107,15 @@ export default function ProblemForm() {
 
   function updateCustomValue(columnId: string, fieldKey: string, value: unknown) {
     if (!table) return;
+    const affectedEmailColumns = table.columns.filter(candidate => candidate.column_type === 'client_email'
+      && (candidate.client_email_dependencies || []).includes(columnId));
+    if (affectedEmailColumns.length) {
+      setEmailPriorities(current => {
+        const next = {...current};
+        for (const candidate of affectedEmailColumns) delete next[candidate.id];
+        return next;
+      });
+    }
     setCustomValues(current => {
       const next = { ...current, [fieldKey]: value };
       for (const candidate of table.columns) {
@@ -194,7 +204,7 @@ export default function ProblemForm() {
     try {
       const prepared = await api('/problem-samples/prepare-new/', {
         method: 'POST',
-        body: JSON.stringify({ table: tableId, container_code: assignedContainerId, custom_values: values, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
+        body: JSON.stringify({ table: tableId, container_code: assignedContainerId, custom_values: values, client_email_priority_state: emailPriorities, image_count: imageMode === 'hidden' ? 0 : imageFiles.length, attachment_count: attachmentMode === 'hidden' ? 0 : attachmentFiles.length }),
         errorMessage: 'Could not prepare ticket',
       });
       preparedId = String(prepared.id || '');
@@ -343,7 +353,7 @@ export default function ProblemForm() {
     {table ? <>
       <div className="grid">
         {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key)) && (c.column_type === 'problem_type' || mask[c.field_key] !== 'hidden')).map(column =>
-          <DynamicField key={column.id} column={{...column, required: mask[column.field_key] === 'required' || (mask[column.field_key] !== 'shown' && column.required)}} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)}/>) }
+          <DynamicField key={column.id} column={{...column, required: mask[column.field_key] === 'required' || (mask[column.field_key] !== 'shown' && column.required)}} value={customValues[column.field_key]} allValues={customValues} onChange={value => updateCustomValue(column.id, column.field_key, value)} clientEmailRef={editor => registerClientEmailEditor(column.field_key, editor)} activeEmailPriority={emailPriorities[column.id] ?? null} onEmailPriorityChange={priority => setEmailPriorities(current => ({...current, [column.id]: priority}))}/>) }
       </div>
       {table.columns.filter(c => !['system-days-until-automatic-disposal', 'system-tracking-link', 'system-tracking-link-expiry'].includes(c.field_key) && (!c.is_system || ['current-workflow', 'dispose-automatically'].includes(c.field_key))).length === 0 && <div className="muted">This table currently has only its built-in columns. You can create a row now or add more columns.</div>}
     </> : null}

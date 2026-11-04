@@ -25,7 +25,7 @@ function ColumnFieldLabel({
   </div>;
 }
 
-export default function DynamicField({ column, value, allValues = {}, onChange, clientEmailRef }: { column: ProblemColumn; value: unknown; allValues?: Record<string, unknown>; onChange: (value: unknown) => void; clientEmailRef?: (editor: ClientEmailSelectionHandle | null) => void }) {
+export default function DynamicField({ column, value, allValues = {}, onChange, clientEmailRef, activeEmailPriority, onEmailPriorityChange }: { column: ProblemColumn; value: unknown; allValues?: Record<string, unknown>; onChange: (value: unknown) => void; clientEmailRef?: (editor: ClientEmailSelectionHandle | null) => void; activeEmailPriority?: number | null; onEmailPriorityChange?: (priority: number) => void }) {
   const currentUser = useCurrentUser();
   const noBackToTesting = column.field_key === 'current-workflow' && currentUser?.role === 'customer_service';
   const id = `custom-${column.id}`;
@@ -70,6 +70,8 @@ export default function DynamicField({ column, value, allValues = {}, onChange, 
       value={value}
       onChange={next => onChange(next)}
       dependencies={dependencies}
+      activePriority={activeEmailPriority}
+      onPriorityChange={onEmailPriorityChange}
     /></div>;
   }
   if (column.column_type === 'long_text') {

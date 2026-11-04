@@ -40,7 +40,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             'id', 'table', 'name', 'description', 'field_key', 'column_type', 'column_type_label',
             'required', 'searchable', 'include_in_customer_notification', 'choices', 'default_value', 'fill_existing_with', 'group_role', 'group_users',
             'depends_on_column', 'depends_on_column_name', 'depends_on_field_key',
-            'client_email_dependencies', 'client_email_dependency_details', 'company_brand_dependencies', 'intercolumn_rules', 'form_mask_rules', 'brand_cc_rules', 'position', 'is_system',
+            'client_email_dependencies', 'client_email_dependency_details', 'client_email_fallback_hours', 'company_brand_dependencies', 'intercolumn_rules', 'form_mask_rules', 'brand_cc_rules', 'position', 'is_system',
             'created_at', 'modified_at',
         ]
         read_only_fields = ['field_key', 'is_system', 'group_users', 'depends_on_column_name', 'depends_on_field_key', 'client_email_dependency_details', 'created_at', 'modified_at']
@@ -124,6 +124,9 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
         ) or []
 
         if column_type == ProblemColumn.TYPE_CLIENT_EMAIL:
+            hours = attrs.get('client_email_fallback_hours', getattr(self.instance, 'client_email_fallback_hours', None))
+            if hours is not None and (type(hours) is not int or not 0 <= hours <= 87600):
+                raise serializers.ValidationError({'client_email_fallback_hours': 'Enter 0 to 87,600 hours.'})
             # Backward compatibility: a legacy single dependency becomes priority #1.
             if 'client_email_dependencies' not in attrs and depends_on_column:
                 dependency_ids = [str(depends_on_column.pk)]
@@ -163,6 +166,7 @@ class ProblemColumnSerializer(serializers.ModelSerializer):
             depends_on_column = attrs['depends_on_column']
         else:
             attrs['client_email_dependencies'] = []
+            attrs['client_email_fallback_hours'] = None
             attrs['depends_on_column'] = None
             dependency_columns = []
             depends_on_column = None
@@ -627,7 +631,12 @@ class HistorySerializer(serializers.ModelSerializer):
     def get_details(self, obj):
         # History is viewable to staff. The frontend must not linkify tracking URLs
         # for non-admin users; never rewrite stored audit history.
-        return obj.details or {}
+        details = obj.details or {}
+        if (isinstance(details, dict) and details.get('automatic')
+                and obj.summary == 'Client Email priority escalated; resend tracking link'):
+            from .client_email_escalation_reason import display_escalation_reason
+            return {**details, 'reason': display_escalation_reason(details.get('reason') or '')}
+        return details
 
     def get_summary(self, obj):
         if obj.action == ProblemHistory.ACTION_CREATED:
@@ -1007,7 +1016,30 @@ class ProblemSampleSerializer(serializers.ModelSerializer):
         model = ProblemSample
         # This temporary secret is only returned by the dedicated email-preparation endpoint.
         exclude = ['pending_tracking_token']
-        read_only_fields = ['problem_number', 'container', 'lab', 'customer_notified_at', 'automatic_disposal_started_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
+        read_only_fields = ['problem_number', 'container', 'lab', 'customer_notified_at', 'automatic_disposal_started_at', 'client_email_last_tracking_sent_at', 'client_email_last_customer_response_at', 'acknowledgement_token', 'acknowledged_at', 'acknowledgement_status_changed_at', 'customer_acknowledgement_action', 'back_to_testing_notified_at', 'created_by', 'modified_by', 'problem_type_prompts', 'created_at', 'modified_at']
+
+    @staticmethod
+    def _raise_invalid_client_email_table():
+        raise serializers.ValidationError('Select a table first.')
+
+    def validate_client_email_priority_state(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('Expected priority selections by Client Email column ID.')
+        table = self.instance.table if self.instance else (self.initial_data.get('table') if isinstance(self.initial_data, dict) else None)
+        if not table:
+            return {} if not value else self._raise_invalid_client_email_table()
+        from .models import ProblemTable
+        if not isinstance(table, ProblemTable):
+            table = ProblemTable.objects.filter(pk=table).first()
+        columns = list(table.columns.filter(column_type=ProblemColumn.TYPE_CLIENT_EMAIL)) if table else []
+        by_id = {str(column.id): column for column in columns}
+        cleaned = {}
+        for key, priority in value.items():
+            column = by_id.get(str(key))
+            if column is None or type(priority) is not int or priority < 0 or priority >= len(_client_email_dependency_columns(column)):
+                raise serializers.ValidationError('Invalid Client Email dependency priority.')
+            cleaned[str(key)] = priority
+        return cleaned
 
     def get_brand_cc_recipients(self, obj):
         view = self.context.get('view')

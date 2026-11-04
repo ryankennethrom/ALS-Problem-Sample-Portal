@@ -167,7 +167,7 @@ export default function ActionRequiredEmailModal({ onClose }: { onClose: () => v
         <textarea id="action-update-note" className="textarea" rows={4} maxLength={2000}
           placeholder="Add an update, request, or note for your colleagues…"
           value={note} onChange={event => { setNote(event.target.value); setError(''); }} />
-        <p className={styles.help}>The email will include current counts across all ticket tables and links to each Action Required queue.</p>
+        <p className={styles.help}>The email will include the current pending system-email count, ticket queue counts, and links to the Action Required queues for the selected lab.</p>
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className={styles.actions}>
           <button type="button" className="button" disabled={busy || !recipients.length} onClick={preview}>

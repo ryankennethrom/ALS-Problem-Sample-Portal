@@ -253,3 +253,37 @@ class MonthlyBrandReportTests(TestCase):
         }, format='json')
         self.assertEqual(result.status_code, 400)
         self.assertEqual(SystemEmail.objects.count(), 0)
+
+    @override_settings(CACHES={'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+                                     'LOCATION': 'monthly-refresh-endpoint-tests'}})
+    def test_staff_refresh_prepares_pending_report_without_sending(self):
+        from unittest.mock import patch
+        from django.core.cache import cache
+        cache.clear()
+        rules = self.configure()
+        rules[0]['monthly_reports_enabled_at'] = '2026-10-01T12:00:00-06:00'
+        self.column.brand_cc_rules = rules
+        self.column.save(update_fields=['brand_cc_rules'])
+        self.ticket(self.table, 88, 'ACME', 2026, 10, 10)
+        with patch('problem_samples.system_email_service.previous_month',
+                   return_value=(date(2026, 10, 1), date(2026, 11, 1))):
+            first = self.client.post('/api/system-emails/check-on-refresh/')
+            again = self.client.post('/api/system-emails/check-on-refresh/')
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.data['ok'])
+        self.assertTrue(first.data['monthly_reports_checked'])
+        self.assertTrue(first.data['client_email_escalations_checked'])
+        self.assertTrue(again.data['ok'])
+        self.assertEqual(SystemEmail.objects.count(), 1)
+        mail = SystemEmail.objects.get()
+        self.assertEqual(mail.status, SystemEmail.STATUS_PENDING)
+        self.assertEqual(mail.matched_ticket_count, 1)
+        self.assertIsNone(mail.sent_at)
+
+    def test_anonymous_refresh_cannot_trigger_monthly_checks(self):
+        from unittest.mock import patch
+        anonymous = APIClient()
+        with patch('problem_samples.system_email_views.check_monthly_reports_on_app_refresh') as generate:
+            response = anonymous.post('/api/system-emails/check-on-refresh/')
+        self.assertIn(response.status_code, (401, 403))
+        generate.assert_not_called()

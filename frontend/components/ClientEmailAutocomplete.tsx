@@ -61,6 +61,8 @@ type ClientEmailAutocompleteProps = {
   id?: string;
   placeholder?: string;
   dependencies?: DependencyValue[];
+  activePriority?: number | null;
+  onPriorityChange?: (priority: number) => void;
 };
 
 const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEmailAutocompleteProps>(function ClientEmailAutocomplete({
@@ -71,6 +73,8 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
   id = 'client-email-list',
   placeholder = 'Filter emails or contact names…',
   dependencies = [],
+  activePriority = null,
+  onPriorityChange,
 }, ref) {
   const emails = useMemo(() => normalizeEmailList(value), [value]);
   const valueIsUninitialized = value === null || value === undefined || value === '';
@@ -101,6 +105,8 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
   const [addError, setAddError] = useState('');
   const [copiedEmail, setCopiedEmail] = useState('');
   const [copiedAll, setCopiedAll] = useState(false);
+  const [switchingPriority, setSwitchingPriority] = useState(false);
+  const [showPriorityOptions, setShowPriorityOptions] = useState(false);
   const sourceRequestId = useRef(0);
   const filterRequestId = useRef(0);
   const hydratedDependencySignature = useRef('');
@@ -134,7 +140,7 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
       setLoading(true);
       try {
         const params = new URLSearchParams();
-        for (const dependency of populatedDependencies) params.append('company', dependency.company);
+        for (const dependency of (activePriority !== null ? populatedDependencies.filter(item => item.priority - 1 === activePriority) : populatedDependencies)) params.append('company', dependency.company);
         const raw = await api(`/customers/client-emails/suggest/?${params.toString()}`);
         if (currentRequest !== sourceRequestId.current) return;
         const data: SuggestResponse = Array.isArray(raw)
@@ -143,6 +149,10 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
         const results = Array.isArray(data?.results) ? data.results : [];
         setSourceSuggestions(results);
         setActiveCompany(data?.active_company || '');
+        if (activePriority === null && data?.active_company && onPriorityChange) {
+          const matched = configuredDependencies.find(dep => dep.company.toLowerCase() === data.active_company.toLowerCase());
+          if (matched) onPriorityChange(matched.priority - 1);
+        }
         setAttemptedCompanies(Array.isArray(data?.attempted_companies) ? data.attempted_companies : []);
 
         if (valueIsUninitialized && hydratedDependencySignature.current !== dependencySignature) {
@@ -161,7 +171,7 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
     }, 80);
 
     return () => window.clearTimeout(timer);
-  }, [dependencyConfigured, dependencySignature, valueIsUninitialized]);
+  }, [dependencyConfigured, dependencySignature, valueIsUninitialized, activePriority]);
 
   // Fuzzy filtering stays a search aid rather than the value editor itself.
   // Scoped fields intersect fuzzy results with the current kept list, so
@@ -182,7 +192,7 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
       setLoading(true);
       try {
         const params = new URLSearchParams({ q: query });
-        for (const dependency of populatedDependencies) params.append('company', dependency.company);
+        for (const dependency of (activePriority !== null ? populatedDependencies.filter(item => item.priority - 1 === activePriority) : populatedDependencies)) params.append('company', dependency.company);
         const raw = await api(`/customers/client-emails/suggest/?${params.toString()}`);
         if (currentRequest !== filterRequestId.current) return;
         const data: SuggestResponse = Array.isArray(raw)
@@ -199,7 +209,7 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [filter, dependencyConfigured, dependencySignature]);
+  }, [filter, dependencyConfigured, dependencySignature, activePriority]);
 
   const metadataByEmail = useMemo(() => {
     const map = new Map<string, ClientEmailSuggestion>();
@@ -319,6 +329,26 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
     setAdding(false);
   }
 
+  async function selectEmailPriority(priority: number) {
+    const dependency = configuredDependencies[priority];
+    if (!dependency || !dependency.company) return;
+    setSwitchingPriority(true);
+    try {
+      const params = new URLSearchParams({company: dependency.company});
+      const data: SuggestResponse = await api(`/customers/client-emails/suggest/?${params.toString()}`);
+      const items = Array.isArray(data?.results) ? data.results : [];
+      if (!items.length) { setAddError('This contact list has no available email addresses.'); return; }
+      setAddError('');
+      onChange(normalizeEmailList(items.map(item => item.email)));
+      onPriorityChange?.(priority);
+      setShowPriorityOptions(false);
+      setActiveCompany(dependency.company);
+      setSourceSuggestions(items);
+      setSelected(new Set()); setDismissed(new Set()); setFilter('');
+      hydratedDependencySignature.current = dependencySignature;
+    } finally { setSwitchingPriority(false); }
+  }
+
   async function copyText(text: string): Promise<boolean> {
     let copied = false;
     try {
@@ -384,6 +414,19 @@ const ClientEmailAutocomplete = forwardRef<ClientEmailSelectionHandle, ClientEma
 
   return <div className="field client-email-field">
     {label && <label htmlFor={`${id}-filter`}>{label}{required && <span className="required-marker" aria-hidden="true"> *</span>}</label>}
+    {configuredDependencies.length > 0 && <div className="client-email-priority-control" style={{marginBottom: 8}}>
+      <button type="button" className="button secondary" aria-expanded={showPriorityOptions}
+        aria-controls={`${id}-priority-options`} onClick={() => setShowPriorityOptions(value => !value)}>
+        Current Email List: {configuredDependencies[activePriority ?? (activeDependency?.priority ?? 1) - 1]?.label || activeDependency?.label || 'Select contact'} ▾
+      </button>
+      {showPriorityOptions && <div id={`${id}-priority-options`} className="client-email-priority-options" style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:8}}>
+        {configuredDependencies.map(item => <button type="button" className="button secondary"
+          key={item.priority} disabled={!item.company || switchingPriority}
+          onClick={() => void selectEmailPriority(item.priority - 1)}>
+          Priority {item.priority}: {item.label}{item.company ? ` (${item.company})` : ' (no company)'}
+        </button>)}
+      </div>}
+    </div>}
     <div className="client-email-editor">
       <div className="client-email-toolbar-top">
         <div className="client-email-filter-wrap">

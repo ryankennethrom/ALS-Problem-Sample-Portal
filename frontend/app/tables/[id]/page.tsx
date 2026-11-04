@@ -118,6 +118,22 @@ function DefaultValueField({
   return <div className="field"><label htmlFor={id}>{label}</label><input id={id} className="input" type={inputType} step={type === 'number' ? 'any' : undefined} value={value == null ? '' : String(value)} onChange={e => onChange(e.target.value)} placeholder={['text', 'email', 'phone', 'url'].includes(type) ? 'Optional' : undefined} /></div>;
 }
 
+function ClientEmailFallbackOption({count, value, onChange}: {
+  count: number; value: number | null; onChange: (value: number | null) => void;
+}) {
+  return <div className="field">
+    <label className="check-label"><input type="checkbox" checked={value !== null} disabled={count < 2}
+      onChange={e => onChange(e.target.checked ? 72 : null)} /> Make next priority email list as contact if no response after a duration</label>
+    {value !== null && count >= 2 && <div className="field"><label>Duration (hours)</label>
+      <input className="input" type="number" min={0} max={87600} step={1} value={value}
+        onChange={e => onChange(Math.max(0, Math.min(87600, Math.trunc(Number(e.target.value) || 0))))} />
+      <div className="muted result-meta">Set to 0 hours to make the ticket eligible on the next escalation check after a confirmed tracking-link send or customer response (if the other conditions are met).</div>
+      <div className="muted result-meta">If the ticket is Waiting for Customer Response and the customer has not replied within this period, move it to Follow Up Required, switch to the next available company list, and ask staff to resend its tracking link. No email is sent automatically.</div>
+    </div>}
+    {count < 2 && <div className="muted result-meta">Configure at least two dependency priorities to enable automatic escalation.</div>}
+  </div>;
+}
+
 function ClientEmailDependencyPriority({
   value,
   onChange,
@@ -549,6 +565,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
   const [defaultValue, setDefaultValue] = useState<unknown>(column.default_value);
   const [groupRole, setGroupRole] = useState<GroupRole>((column.group_role || 'lab_technician') as GroupRole);
   const [dependencyIds, setDependencyIds] = useState<string[]>(column.client_email_dependencies || (column.depends_on_column ? [column.depends_on_column] : []));
+  const [fallbackHours, setFallbackHours] = useState<number | null>(column.client_email_fallback_hours ?? null);
   const [intercolumnRules, setIntercolumnRules] = useState<IntercolumnRule[]>(column.intercolumn_rules || []);
   const [maskRules, setMaskRules] = useState<ProblemTypeRules>(column.form_mask_rules || {});
   const [brandCCRules, setBrandCCRules] = useState<BrandCCRule[]>(column.brand_cc_rules || []);
@@ -587,6 +604,7 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
         choices: choiceList,
         group_role: type === 'group' ? groupRole : '',
         client_email_dependencies: type === 'client_email' ? dependencyIds : [],
+        client_email_fallback_hours: type === 'client_email' && dependencyIds.length > 1 ? fallbackHours : null,
         intercolumn_rules: type === 'intercolumn_controller' ? intercolumnRules : [],
         form_mask_rules: type === 'problem_type' ? Object.fromEntries(Object.entries(maskRules).filter(([choice]) => choiceList.includes(choice))) : {},
         company_brand_dependencies: type === 'brand' ? companyBrandDependencies : [],
@@ -622,7 +640,10 @@ function ColumnEditor({ column, allColumns, onChanged }: {column: ProblemColumn;
       <div className="field column-description-field"><label>Explanation <span className="muted">(optional)</span></label><textarea className="textarea compact-textarea" value={columnDescription} onChange={e=>setColumnDescription(e.target.value)} placeholder="Explain what this column is for or what users should enter. An (i) icon appears anywhere the column is shown." /></div>
       {(type === 'choice' || type === 'multi_choice' || type === 'problem_type') && <div className="field column-choice-options"><label>Choices (one per line)</label><textarea className="textarea compact-textarea" value={choices} onChange={e=>setChoices(e.target.value)}/></div>}
       {type === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={groupRole} onChange={e=>{ setGroupRole(e.target.value as GroupRole); setDefaultValue(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
-      {type === 'client_email' && <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />}
+      {type === 'client_email' && <>
+        <ClientEmailDependencyPriority value={dependencyIds} onChange={next => { setDependencyIds(next); setDefaultValue(''); }} columns={allColumns} excludeId={column.id} />
+        <ClientEmailFallbackOption count={dependencyIds.length} value={fallbackHours} onChange={setFallbackHours} />
+      </>}
       {type === 'intercolumn_controller' && <IntercolumnRulesEditor rules={intercolumnRules} onChange={setIntercolumnRules} columns={allColumns} controllerName={name} excludeId={column.id} idPrefix={`controller-${column.id}`} />}
       {type === 'problem_type' && <MaskRulesEditor choices={choiceList} rules={maskRules} onChange={setMaskRules} columns={allColumns} excludeId={column.id} />}
       {type === 'brand' && <>
@@ -658,6 +679,7 @@ export default function TableSettings() {
   const [colMaskRules, setColMaskRules] = useState<ProblemTypeRules>({});
   const [colBrandCCRules, setColBrandCCRules] = useState<BrandCCRule[]>([]);
   const [colCompanyBrandDependencies, setColCompanyBrandDependencies] = useState<string[]>([]);
+  const [colFallbackHours, setColFallbackHours] = useState<number | null>(null);
   const [required, setRequired] = useState(false);
   const [searchable, setSearchable] = useState(true);
   const [includeInCustomerNotification, setIncludeInCustomerNotification] = useState(false);
@@ -694,6 +716,7 @@ export default function TableSettings() {
         choices:choiceList,
         group_role: colType === 'group' ? colGroupRole : '',
         client_email_dependencies: colType === 'client_email' ? colDependencyIds : [],
+        client_email_fallback_hours: colType === 'client_email' && colDependencyIds.length > 1 ? colFallbackHours : null,
         intercolumn_rules: colType === 'intercolumn_controller' ? colIntercolumnRules : [],
         form_mask_rules: colType === 'problem_type' ? Object.fromEntries(Object.entries(colMaskRules).filter(([choice]) => choiceList.includes(choice))) : {},
         company_brand_dependencies: colType === 'brand' ? colCompanyBrandDependencies : [],
@@ -847,7 +870,10 @@ export default function TableSettings() {
             <div className="field"><label>Column type</label><select className="select" value={colType} onChange={e=>changeNewColumnType(e.target.value as ColumnType)}>{COLUMN_TYPES.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select></div>
             {(colType === 'choice' || colType === 'multi_choice' || colType === 'problem_type') && <div className="field"><label>Choices (one per line)</label><textarea className="textarea" value={choices} onChange={e=>setChoices(e.target.value)} placeholder={'New\nIn progress\nResolved'}/></div>}
             {colType === 'group' && <div className="field"><label>Group <span className="required-marker" aria-hidden="true"> *</span></label><select className="select" value={colGroupRole} onChange={e=>{ setColGroupRole(e.target.value as GroupRole); setDefaultValue(''); setFillExistingWith(''); }}><option value="lab_technician">Lab</option><option value="customer_service">Customer Service</option></select></div>}
-            {colType === 'client_email' && <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); setFillExistingWith(''); }} columns={table.columns} />}
+            {colType === 'client_email' && <>
+              <ClientEmailDependencyPriority value={colDependencyIds} onChange={next => { setColDependencyIds(next); setDefaultValue(''); setFillExistingWith(''); }} columns={table.columns} />
+              <ClientEmailFallbackOption count={colDependencyIds.length} value={colFallbackHours} onChange={setColFallbackHours} />
+            </>}
             {colType === 'intercolumn_controller' && <IntercolumnRulesEditor rules={colIntercolumnRules} onChange={setColIntercolumnRules} columns={table.columns} controllerName={colName} idPrefix="controller-new" />}
             {colType === 'problem_type' && <MaskRulesEditor choices={newChoiceList} rules={colMaskRules} onChange={setColMaskRules} columns={table.columns} />}
             {colType === 'brand' && <>

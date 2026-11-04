@@ -67,14 +67,14 @@ test('Create Ticket blocks the prepare-new endpoint until client emails are reso
   assert.match(source, /onDelete=\{\(\) => applyEmailDecision\('delete'\)\}/);
   assert.match(source, /onCancel=\{\(\) => setClientEmailPrompt\(null\)\}/);
   assert.match(source, /void continueSubmit\(resolvedValues\)/);
-  assert.match(source, /custom_values: values, image_count:/);
+  assert.match(source, /custom_values: values, client_email_priority_state: emailPriorities, image_count:/);
   assert.match(source, /findCustomerEmails\(table, values\)/);
 });
 test('Save Changes gates existing-ticket PATCH and resumes with the resolved email values', () => {
   const source = read('app/problems/[id]/page.tsx');
   assert.match(source, /if \(!clientEmailsResolved\) \{\s*const pending = unresolvedClientEmails\(\);\s*if \(pending\.selectedCount\) \{\s*setClientEmailPrompt\(pending\);\s*return;/);
   assert.match(source, /void saveCustom\(resolvedValues, true\)/);
-  assert.match(source, /body:JSON\.stringify\(\{custom_values:values, \.\.\.containerSelection\}\)/);
+  assert.match(source, /body:JSON\.stringify\(\{custom_values:values, client_email_priority_state:emailPriorities, \.\.\.containerSelection\}\)/);
   assert.match(source, /onClick=\{\(\) => void saveCustom\(\)\}>Save Changes/);
   assert.match(source, /onCancel=\{\(\) => setClientEmailPrompt\(null\)\}/);
 });
