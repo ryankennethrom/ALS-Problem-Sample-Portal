@@ -78,7 +78,7 @@ const actionLabels: Record<Exclude<CustomerAction, ''>, string> = {
   dispose: 'Dispose Sample(s)',
   ship_back: 'I want these sample(s) back',
   hold: 'Hold sample',
-  requested_info: 'Message us about the issue',
+  requested_info: 'Message us about this issue',
 };
 
 export default function ProblemSampleTrackingPage() {
@@ -280,18 +280,18 @@ export default function ProblemSampleTrackingPage() {
           </label>
           {error && <div className="card error">{error}</div>}
           {data.customer_action && <div className="public-ack-selection">
-            Current response: <strong>{data.customer_action_label || actionLabels[data.customer_action]}</strong>. You can change this response until ALS completes the requested action.
+            Current response: <strong>{data.customer_action === 'requested_info' ? actionLabels.requested_info : (data.customer_action_label || actionLabels[data.customer_action])}</strong>. You can change this response until ALS completes the requested action.
           </div>}
           <div className="public-ack-action-buttons">
-            <button className="button" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
-            <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about the issue</button>
+            <button className="button" disabled={busy || !effectiveSignature} onClick={() => { setError(''); setRequestedInformation(''); setRequestedImages([]); setRequestedAttachments([]); setAttachmentMenuOpen(false); setRequestedInfoOpen(true); }}>Message us about this issue</button>
+            <button className="button secondary" disabled={busy || !signature.trim()} onClick={() => chooseAction('dispose')}>Permit immediate disposal</button>
             <button className="button secondary" disabled={busy || !effectiveSignature} onClick={() => {
               setError(''); setShippingMethod(''); setCourierName(''); setCourierAccountNumber(''); setReturnShippingAddress(''); setReturnDialogOpen(true);
             }}>I want these sample(s) back</button>
           </div>
         </div>}
         {data.state === 'acknowledged' && !data.can_choose_action && data.customer_action && <div className="public-ack-selection">
-          Your response has been recorded: <strong>{data.customer_action_label || actionLabels[data.customer_action]}</strong>.
+          Your response has been recorded: <strong>{data.customer_action === 'requested_info' ? actionLabels.requested_info : (data.customer_action_label || actionLabels[data.customer_action])}</strong>.
         </div>}
         {data.state === 'disposing' && <p>ALS has recorded that the sample(s) are marked for disposal.</p>}
         {data.state === 'shipping' && <p>ALS has recorded that the sample(s) are to be shipped back to the client.</p>}
@@ -350,7 +350,7 @@ export default function ProblemSampleTrackingPage() {
                     <h2 id="customer-chat-title">ALS Edmonton</h2>
                     <span className="public-chat-status"><span aria-hidden="true" /> Ticket #{data?.problem_number}</span>
                   </div>
-                  <p id="customer-chat-description">Message us about the issue</p>
+                  <p id="customer-chat-description">Message us about this issue</p>
                 </div>
               </div>
               <button type="button" className="public-chat-close" aria-label="Close chat" disabled={busy} onClick={() => setRequestedInfoOpen(false)}>×</button>
@@ -427,7 +427,7 @@ export default function ProblemSampleTrackingPage() {
                       <span aria-hidden="true">📷</span><span><strong>Take photo</strong><small>Open your device camera</small></span>
                     </button>
                     <button type="button" role="menuitem" disabled={busy} onClick={() => { setAttachmentMenuOpen(false); imageInputRef.current?.click(); }}>
-                      <span aria-hidden="true">▧</span><span><strong>Add images</strong><small>JPEG, PNG, GIF or WebP</small></span>
+                      <span aria-hidden="true">▧</span><span><strong>Add images</strong><small>JPEG, PNG, GIF, WebP or HEIC/HEIF</small></span>
                     </button>
                     <button type="button" role="menuitem" disabled={busy} onClick={() => { setAttachmentMenuOpen(false); attachmentInputRef.current?.click(); }}>
                       <span aria-hidden="true">⌕</span><span><strong>Add files</strong><small>Up to 25 MB each</small></span>
@@ -451,7 +451,7 @@ export default function ProblemSampleTrackingPage() {
                     ref={imageInputRef}
                     className="public-chat-hidden-input"
                     type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,.heic,.heif"
                     multiple
                     disabled={busy}
                     onChange={event => {

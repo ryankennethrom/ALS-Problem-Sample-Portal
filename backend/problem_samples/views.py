@@ -17,7 +17,7 @@ from email import policy
 import mimetypes
 import os
 import re
-from PIL import Image as PillowImage, UnidentifiedImageError
+from PIL import UnidentifiedImageError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
@@ -36,7 +36,7 @@ from .serializers import (
 )
 from .search import search_problem_samples
 from .advanced_search import advanced_search_problem_samples
-from .image_processing import compress_problem_image
+from .image_processing import compress_problem_image, validate_problem_image
 
 
 MAX_ROW_FILE_BYTES = 25 * 1024 * 1024
@@ -45,7 +45,6 @@ MAX_CUSTOMER_RESPONSE_FILES = 12
 MAX_CUSTOMER_RESPONSE_BYTES = 50 * 1024 * 1024
 
 
-ALLOWED_IMAGE_FORMATS = {'JPEG', 'PNG', 'GIF', 'WEBP'}
 MENTION_RE = re.compile(r'(?<![A-Za-z0-9_@])@([A-Za-z0-9_](?:[A-Za-z0-9_.+-]*[A-Za-z0-9_])?)', re.IGNORECASE)
 MENTION_EMAIL_SUFFIX = '@alsglobal.com'
 MENTION_GROUP_LAB = 'lab'
@@ -197,7 +196,7 @@ def _mention_email(problem, mentioned_by, users, groups, direct_user_ids, body):
         f'{author_name} mentioned {", ".join(labels)} on Ticket #{problem.problem_number} in {table_name}.\n\n'
         f'Message:\n{(body or "").strip()}\n\n'
         f'Open the ticket directly:\n{direct_url}\n\n'
-        'Regards,\nALS Ticket Tracker'
+        'Regards,\nProblem Samples Tracker'
     )
     return {
         # email is retained as a display/backward-compatibility field. New UI
@@ -305,15 +304,7 @@ def _validate_uploaded_file(uploaded, *, image=False):
     if uploaded.size > MAX_ROW_FILE_BYTES:
         return 'Files must be 25 MB or smaller.'
     if image:
-        try:
-            picture = PillowImage.open(uploaded)
-            image_format = (picture.format or '').upper()
-            picture.verify()
-            uploaded.seek(0)
-        except (UnidentifiedImageError, OSError, ValueError):
-            return 'The selected file is not a valid image.'
-        if image_format not in ALLOWED_IMAGE_FORMATS:
-            return 'Images must be JPEG, PNG, GIF, or WebP.'
+        return validate_problem_image(uploaded)
     return ''
 
 

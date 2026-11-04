@@ -440,7 +440,7 @@ def inspect_backup_archive(uploaded, expected_kind: str | None = None) -> Inspec
             pass
 
     if manifest.get('format') != BACKUP_FORMAT or manifest.get('version') != BACKUP_VERSION:
-        raise BackupError('This file is not a supported ALS Ticket Tracker backup.')
+        raise BackupError('This file is not a supported Problem Samples Tracker backup.')
     kind = manifest.get('kind')
     if kind not in {'database', 'media', 'full'}:
         raise BackupError('Backup type is invalid.')

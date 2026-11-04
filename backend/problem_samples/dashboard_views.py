@@ -427,7 +427,7 @@ class ActionRequiredEmailPreviewView(APIView):
         author = request.user.get_full_name().strip() or _mention_handle(request.user)
         lines = [
             'Hello,', '',
-            f'{author} is sharing the current Action Required status from the ALS Ticket Tracker.',
+            f'{author} is sharing the current Action Required status from the Problem Samples Tracker.',
             f'Snapshot: {timestamp} (all ticket tables)', '',
         ]
         if note:
@@ -437,7 +437,7 @@ class ActionRequiredEmailPreviewView(APIView):
             lines.extend([f'- {label}: {counts[key]}', f'  {queue_link(path)}'])
         lines.extend(['', 'Open the Dashboard:', queue_link('/dashboard'), '',
                       'Counts reflect the time this draft was generated and may change.', '',
-                      'Regards,', author, 'ALS Ticket Tracker'])
+                      'Regards,', author, 'Problem Samples Tracker'])
         return Response({
             'recipients': addresses,
             'mentions': _mention_labels(users, groups, direct_ids),

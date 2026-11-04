@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Older ALS Ticket Tracker installations contain an HTML monthly-report page.
+// Older Problem Samples Tracker installations contain an HTML monthly-report page.
 // The monthly-report URL is now a route handler that downloads an Excel file.
 // `cp -a` updates do not remove old files, and Next.js rejects page.tsx + route.ts
 // in the same directory. Archive ONLY this known-obsolete route before build/dev.
@@ -22,5 +22,5 @@ if (fs.existsSync(excelRoute) && fs.existsSync(obsoletePage)) {
     backup = path.join(backupDir, `monthly-report-page-${attempt++}.tsx`);
   }
   fs.renameSync(obsoletePage, backup);
-  console.log(`[ALS Ticket Tracker] Archived obsolete monthly report page to ${path.relative(frontendDir, backup)}. Excel download route kept.`);
+  console.log(`[Problem Samples Tracker] Archived obsolete monthly report page to ${path.relative(frontendDir, backup)}. Excel download route kept.`);
 }

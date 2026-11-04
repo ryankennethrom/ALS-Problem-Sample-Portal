@@ -60,7 +60,7 @@ export default function Login() {
     <section className="login-card" aria-labelledby="login-title">
       <div className="login-brand-area">
         <img className="login-logo" src="/als-logo.png" alt="ALS" />
-        <h1 id="login-title">ALS Ticket<br />Tracker</h1>
+        <h1 id="login-title">Problem Samples<br />Tracker</h1>
       </div>
 
       <div className="login-divider" />

@@ -346,7 +346,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             mobileDrawerRef.current?.click();
           }
         }}>×</label>
-      <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">A</span><span className="brand-label">ALS Ticket Tracker</span></Link>
+      <Link href="/dashboard" className="sidebar-brand" onClick={closeMobileDrawer}><span className="brand-mark">A</span><span className="brand-label">Problem Samples Tracker</span></Link>
       <LabSelector user={user} labs={labs} selectedLabCode={selectedLabCode}
         collapsed={collapsed} onExpand={() => setCollapsed(false)}
         onSelect={code => {
@@ -499,7 +499,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           }
         }}><span></span><span></span><span></span></label>
       <button className="menu-toggle desktop-menu-toggle" type="button" aria-controls="main-sidebar" aria-expanded={!collapsed} aria-label="Toggle sidebar" onClick={() => setCollapsed(value => !value)}><span></span><span></span><span></span></button>
-      <div className="topbar-title">ALS Ticket Tracker</div></header><main className="page-content">
+      <div className="topbar-title">Problem Samples Tracker</div></header><main className="page-content">
       <CurrentUserContext.Provider value={user}>
         {!user
           ? <div className="muted">Checking session…</div>

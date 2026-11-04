@@ -4,8 +4,8 @@ import ToastProvider from '@/components/ToastProvider';
 import OutlookEmailManualCompose from '@/components/OutlookEmailManualCompose';
 
 export const metadata = {
-  title: 'ALS Ticket Tracker',
-  description: 'Internal ticket tracker',
+  title: 'Problem Samples Tracker',
+  description: 'Problem sample management and tracking',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

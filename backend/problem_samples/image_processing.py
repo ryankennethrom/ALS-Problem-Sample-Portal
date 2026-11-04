@@ -11,13 +11,47 @@ from io import BytesIO
 import os
 import re
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
+
+
+# iPhone cameras may upload HEIC/HEIF data even if the browser supplies an
+# ``IMG.jpeg`` filename or ``image/jpeg`` content type.  Register the decoder
+# globally; Pillow identifies images using their bytes, not their filename.
+# The existing compression pipeline re-encodes all accepted images to WebP.
+register_heif_opener()
 
 
 # Keep enough detail for labels/sample inspection while putting a firm practical
 # ceiling on storage. Most real photos end up far below this target.
 TARGET_STORED_IMAGE_BYTES = 450 * 1024
 MAX_STORED_IMAGE_EDGE = 1600
+
+ALLOWED_IMAGE_FORMATS = frozenset({'JPEG', 'PNG', 'GIF', 'WEBP', 'HEIF', 'HEIC'})
+
+
+def validate_problem_image(file_obj) -> str:
+    """Validate decoded image content, not its extension or reported MIME type.
+
+    iOS may submit HEIC bytes named ``IMG.jpeg``.  The Pillow HEIF opener
+    registered above recognizes the actual format, and the file is subsequently
+    normalized to WebP by ``compress_problem_image``.
+    """
+    try:
+        file_obj.seek(0)
+        with Image.open(file_obj) as image:
+            image_format = (image.format or '').upper()
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError):
+        return 'The selected file is not a valid image.'
+    finally:
+        try:
+            file_obj.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
+    if image_format not in ALLOWED_IMAGE_FORMATS:
+        return 'Images must be JPEG, PNG, GIF, WebP, or HEIC/HEIF.'
+    return ''
 
 # Ordered from least destructive to most aggressive. We stop as soon as the
 # encoded WebP is at or under the target size.

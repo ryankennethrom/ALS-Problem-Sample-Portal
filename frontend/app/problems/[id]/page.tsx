@@ -787,11 +787,11 @@ export default function Detail() {
               </div>}
               {(p.images || []).length === 0 && <div className="muted file-empty">No images added.</div>}
               <div className="file-upload-row">
-                <input key={imageInputKey} className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
+                <input key={imageInputKey} className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,.heic,.heif" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
                 <button type="button" className="button secondary" disabled={!imageFiles.length || uploadingImages} onClick={uploadImages}>{uploadingImages ? 'Uploading…' : `Add Image${imageFiles.length === 1 ? '' : 's'}`}</button>
                 <CameraCapture onCapture={uploadCapturedImage} disabled={uploadingImages} />
               </div>
-              <div className="muted file-help">Upload JPEG, PNG, GIF, or WebP, or take a photo directly with this device · maximum 25 MB each</div>
+              <div className="muted file-help">Upload JPEG, PNG, GIF, WebP, or iPhone HEIC/HEIF, or take a photo directly with this device · maximum 25 MB each</div>
             </div>
 
             <div className="file-subsection">
@@ -839,7 +839,7 @@ export default function Detail() {
         <p className="customer-email-company-reminder">Your reply will not be saved until you confirm that the generated customer email was sent.</p>
         <div className="field"><label>Customer message</label><textarea className="textarea" readOnly value={historyReplyTarget.details.customer_requested_information || ''} /></div>
         <div className="field"><label>Staff reply <span aria-hidden="true">*</span></label><textarea className="textarea" rows={6} maxLength={4000} autoFocus value={historyReplyText} onChange={event => setHistoryReplyText(event.target.value)} disabled={preparingHistoryReply} placeholder="Type your reply…" /><div className="muted result-meta">{historyReplyText.length}/4000 characters</div></div>
-        <div className="field"><label htmlFor="staff-reply-images">Images for customer chat</label><input id="staff-reply-images" className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setHistoryReplyImages(Array.from(event.target.files || []))} disabled={preparingHistoryReply} /></div>
+        <div className="field"><label htmlFor="staff-reply-images">Images for customer chat</label><input id="staff-reply-images" className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,.heic,.heif" multiple onChange={event => setHistoryReplyImages(Array.from(event.target.files || []))} disabled={preparingHistoryReply} /></div>
         <div className="field"><label htmlFor="staff-reply-attachments">Files for customer chat</label><input id="staff-reply-attachments" className="file-control" type="file" multiple onChange={event => setHistoryReplyAttachments(Array.from(event.target.files || []))} disabled={preparingHistoryReply} /></div>
         <div className="muted result-meta">{historyReplyImages.length + historyReplyAttachments.length} selected · 12 files max · 25 MB each · 50 MB total. Files appear in the customer's tracking-link chat only. The email will include [View image/file in the tracking link chat] and the secure tracking link.</div>
         {error && <p className="error" role="alert">{error}</p>}

@@ -41,7 +41,7 @@ def make_report_email_body(mail):
         'The Summary tab shows report totals only.', '',
         f'This confidential link expires 90 days after report generation ({timezone.localtime(mail.public_expires_at).date().isoformat() if mail.public_expires_at else "not set"}).',
         'Do not forward the link outside its intended recipients.', '',
-        'Prepared by ALS Ticket Tracker. Sending requires staff confirmation.',
+        'Prepared by Problem Samples Tracker. Sending requires staff confirmation.',
     ])
 
 
@@ -246,7 +246,7 @@ def render_excel(snapshot):
     for index in range(len(workflows)):
         summary.row_dimensions[8 + index].height = 30
 
-    summary.append([cell(summary, 'ALS TICKET TRACKER', 'banner'),
+    summary.append([cell(summary, 'PROBLEM SAMPLES TRACKER', 'banner'),
                     cell(summary, 'MONTHLY BRAND REPORT', 'banner_accent'),
                     cell(summary, '', 'banner'), cell(summary, '', 'banner')])
     summary.append([cell(summary, 'CONFIDENTIAL • GENERATED REPORT', 'subtitle')])
@@ -315,7 +315,7 @@ def render_excel(snapshot):
                     break
         tickets_ws.row_dimensions[i].height = min(150, max(27, 15 * min(max_lines, 10) + 8))
 
-    tickets_ws.append([cell(tickets_ws, 'ALS TICKET TRACKER — MONTHLY BRAND REPORT', 'banner'),
+    tickets_ws.append([cell(tickets_ws, 'PROBLEM SAMPLES TRACKER — MONTHLY BRAND REPORT', 'banner'),
                        cell(tickets_ws, 'TICKET DETAILS', 'banner_accent')])
     tickets_ws.append([cell(tickets_ws, value, 'head') for value in header])
 

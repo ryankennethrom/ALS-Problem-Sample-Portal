@@ -38,9 +38,9 @@ test('Next.js metadata icons use recognizable ALS artwork at appropriate sizes',
   assert.deepEqual(pngDimensions(path.join(publicDir, 'als-logo.png')), [270, 270]);
 });
 
-test('the app keeps its ALS Ticket Tracker browser tab title', () => {
+test('the app keeps its Problem Samples Tracker browser tab title', () => {
   const layout = fs.readFileSync(path.join(app, 'layout.tsx'), 'utf8');
-  assert.match(layout, /title:\s*['"]ALS Ticket Tracker['"]/);
+  assert.match(layout, /title:\s*['"]Problem Samples Tracker['"]/);
 });
 
 

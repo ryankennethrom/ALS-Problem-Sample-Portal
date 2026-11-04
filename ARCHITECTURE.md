@@ -280,7 +280,7 @@ Regular new accounts with no workflow role still receive the required first-logi
 
 
 ### Customer tracking actions by follow-up status
-- Available actions are **Permit immediate disposal**, **Message us about the issue**, and **Ship back**.
+- Available actions are **Message us about this issue**, **Permit immediate disposal**, and **Ship back**.
 - An existing customer response remains editable in active and intermediate queue workflows, including **To be Disposed**, **To be shipped back to client**, and **To be back to testing**.
 - **Message us about the issue** returns Current Workflow to **Follow Up Required**.
 - Submitting any customer response turns `Dispose Automatically` off.

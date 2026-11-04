@@ -364,10 +364,10 @@ export default function ProblemForm() {
         {imageMode !== 'hidden' && <div className="field">
           <label>Images{imageMode === 'required' && <span className="required-marker"> *</span>}</label>
           <div className="camera-upload-controls">
-            <input className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
+            <input className="file-control" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,.heic,.heif" multiple onChange={event => setImageFiles(Array.from(event.target.files || []))} />
             <CameraCapture onCapture={file => setImageFiles(current => [...current, file])} disabled={saving || Boolean(pendingCreation)} />
           </div>
-          <div className="muted file-help">Upload JPEG, PNG, GIF, or WebP, or take a photo with this device. Up to 25 MB per image.{imageFiles.length ? ` ${imageFiles.length} selected.` : ''}</div>
+          <div className="muted file-help">Upload JPEG, PNG, GIF, WebP, or iPhone HEIC/HEIF, or take a photo with this device. Up to 25 MB per image.{imageFiles.length ? ` ${imageFiles.length} selected.` : ''}</div>
         </div>}
         {attachmentMode !== 'hidden' && <div className="field">
           <label>Attachments{attachmentMode === 'required' && <span className="required-marker"> *</span>}</label>

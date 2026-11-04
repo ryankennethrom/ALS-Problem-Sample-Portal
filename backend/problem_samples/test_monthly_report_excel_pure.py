@@ -38,7 +38,7 @@ class XLSXDownloadPureTests(unittest.TestCase):
                                  'details': [{'id':'batch','label':'Batch','value':'Lot-27'}]}]}
         book = load_workbook(io.BytesIO(namespace['render_excel'](snapshot)))
         ws = book['Tickets']
-        self.assertEqual(ws['A1'].value, 'ALS TICKET TRACKER — MONTHLY BRAND REPORT')
+        self.assertEqual(ws['A1'].value, 'PROBLEM SAMPLES TRACKER — MONTHLY BRAND REPORT')
         self.assertEqual([ws.cell(2, i).value for i in range(1, 4)],
                          ['Ticket #', 'Current Workflow', 'Batch'])
         self.assertEqual([ws.cell(3, i).value for i in range(1, 4)],
