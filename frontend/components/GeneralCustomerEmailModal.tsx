@@ -14,8 +14,8 @@ type Props = {
 };
 
 export default function GeneralCustomerEmailModal({ recipients, problemNumber, onSent, onCancel, busy = false, error = '' }: Props) {
-  const [subject, setSubject] = useState(`Ticket Ticket #${problemNumber}`);
-  const [body, setBody] = useState(`Hello,\n\nI'm contacting you regarding ticket ticket #${problemNumber}.\n\nRegards,\nALS`);
+  const [subject, setSubject] = useState(`Ticket #${problemNumber}`);
+  const [body, setBody] = useState(`Hello,\n\nI'm contacting you regarding ticket #${problemNumber}.\n\nRegards,\nALS`);
   const { seconds, start } = useWebmailSendCountdown();
   const message: CustomerEmailContent = { to: recipients, cc: [], subject: subject.trim(), body: body.trim() };
 

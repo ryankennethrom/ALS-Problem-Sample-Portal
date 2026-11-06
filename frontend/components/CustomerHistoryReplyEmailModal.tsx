@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeCustomerEmail, mailtoForCustomerEmail } from '@/lib/customerEmail';
 import { useWebmailSendCountdown, WebmailOpeningStatus } from '@/components/useWebmailSendCountdown';
-import { useCurrentUser } from '@/components/CurrentUserContext';
-import TrackingLinkPreviewText from '@/components/TrackingLinkPreviewText';
+import { trackingLinkFromEmail } from '@/lib/trackingLinkAccess';
 
 export type CustomerHistoryReplyEmail = {
   to: string[];
@@ -30,9 +29,9 @@ export default function CustomerHistoryReplyEmailModal({
   error?: string;
   fileCount?: number;
 }) {
-  const currentUser = useCurrentUser();
   const { seconds, start } = useWebmailSendCountdown();
   const [launchError, setLaunchError] = useState('');
+  const [copied, setCopied] = useState('');
   const [showPreview, setShowPreview] = useState(false);
   const launchAttempted = useRef(false);
 
@@ -54,6 +53,18 @@ export default function CustomerHistoryReplyEmailModal({
     } catch { setLaunchError('Web Mail could not be opened. Check your email handler settings.'); }
   }
 
+  const trackingLink = trackingLinkFromEmail(email.body);
+
+  async function copyTrackingLink() {
+    if (!trackingLink) return;
+    try {
+      await navigator.clipboard.writeText(trackingLink);
+      setCopied('Tracking link copied');
+    } catch {
+      setCopied('Could not copy automatically. Select the link in the message and copy it manually.');
+    }
+  }
+
   return <div className="email-confirm-overlay" role="presentation">
     <div className="email-confirm-dialog customer-email-preview" role="dialog" aria-modal="true" aria-labelledby="customer-history-reply-email-title">
       <h2 id="customer-history-reply-email-title">{seconds === 0 ? 'Confirm Customer Reply' : 'Opening Web Mail'}</h2>
@@ -63,7 +74,9 @@ export default function CustomerHistoryReplyEmailModal({
       {showPreview && <div className="customer-email-preview-content">
         <div className="customer-email-addresses"><strong>To:</strong> {email.to.join('; ') || '—'}</div>
         <div className="field"><label>Subject</label><input className="input" readOnly value={email.subject} /></div>
-        <div className="field"><label>Message</label>{currentUser?.is_admin ? <textarea className="textarea customer-email-body" readOnly value={email.body} /> : <TrackingLinkPreviewText text={email.body} />}</div>
+        <div className="customer-email-preview-heading"><strong>Message</strong>{trackingLink && <button type="button" className="button secondary" onClick={copyTrackingLink}>Copy tracking link</button>}</div>
+        <div className="field"><textarea className="textarea customer-email-body" readOnly value={email.body} aria-label="Message" /></div>
+        {copied && <p className="muted customer-email-copy-status" role="status">{copied}</p>}
         <div className="muted result-meta">The email includes the customer's original message, the staff reply, and a secure tracking link that opens “Message us about the issue.”</div>
       </div>}
       {error && <p className="error" role="alert">{error}</p>}

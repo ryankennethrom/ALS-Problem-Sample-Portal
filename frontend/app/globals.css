@@ -430,6 +430,8 @@ a.result:hover{background:#f7f9fb}
 .customer-email-preview-content{display:grid;gap:10px}
 .customer-email-preview-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:5px}
 .customer-email-preview-heading .button{min-height:30px;padding:5px 10px;font-size:12px}
+.email-review-copy-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+@media(max-width:520px){.customer-email-preview-heading{flex-wrap:wrap;align-items:flex-start}.email-review-copy-actions{justify-content:flex-start}}
 .customer-email-addresses{padding:9px 11px;background:#f5f7f9;border:1px solid #e1e5e9;border-radius:4px;overflow-wrap:anywhere;line-height:1.6}
 .customer-email-body{min-height:220px;resize:vertical;white-space:pre-wrap}
 .customer-email-copy-status{font-size:12px;margin:4px 0}

@@ -32,13 +32,17 @@ test('shared display has an anchor only for administrators and disables UI copyi
   assert.match(css, /\.tracking-link-noninteractive\{user-select:none;-webkit-user-select:none/);
 });
 
-test('staff email preview shows but does not turn tracking URLs into links or offer Copy email', () => {
+test('all staff can copy tracking URLs from Review Email, without enabling ticket link actions', () => {
   const modal = source('components/CustomerEmailModal.tsx');
-  assert.match(modal, /currentUser\?\.is_admin && <button[\s\S]*?>Copy email<\/button>/);
-  assert.match(modal, /<TrackingLinkPreviewText text=\{content\.body\} \/>/);
+  assert.match(modal, /trackingLink && <button[^>]+onClick=\{\(\) => copy\(trackingLink, 'Tracking link'\)\}>Copy tracking link<\/button>/);
+  assert.match(modal, /onClick=\{\(\) => copy\(`Subject: \${content\.subject}/);
+  assert.match(modal, /<textarea id="preview-body"[^>]+readOnly value=\{content\.body\}/);
+  assert.doesNotMatch(modal, /currentUser\?\.is_admin/);
   assert.match(modal, /start\(content\)/);
   const reply = source('components/CustomerHistoryReplyEmailModal.tsx');
-  assert.match(reply, /<TrackingLinkPreviewText text=\{email\.body\} \/>/);
+  assert.match(reply, /Copy tracking link<\/button>/);
+  assert.match(reply, /<textarea[^>]+readOnly value=\{email\.body\}/);
+  assert.doesNotMatch(reply, /currentUser\?\.is_admin/);
   assert.match(reply, /start\(\{ to: email\.to, cc: email\.cc \|\| \[\], subject: email\.subject, body: email\.body \}\)/);
 });
 

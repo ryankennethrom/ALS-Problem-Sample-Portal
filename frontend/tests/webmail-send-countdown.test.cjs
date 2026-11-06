@@ -20,6 +20,7 @@ function mount(filename, props) {
   const hooks = [], effects = [], intervals = new Map();
   let nextInterval = 0, now = 1000000;
   const attempts = [];
+  const copied = [];
   const callbacks = [];
   const react = {
     useState(initial) { const index=hookIndex++; if (!(index in hooks)) hooks[index]=initial;
@@ -44,6 +45,7 @@ function mount(filename, props) {
   };
   const sandbox = {
     exports:{}, Date:class extends Date {static now(){return now;}},window:mockWindow,
+    navigator:{clipboard:{async writeText(value){copied.push(value);}}},
     require(name){assert.ok(modules[name],`unexpected import: ${name}`);return modules[name];},
   };
   function load(filename){ const module={...sandbox,exports:{}};vm.runInNewContext(compile(filename),module,{filename});return module.exports; }
@@ -62,7 +64,7 @@ function mount(filename, props) {
   function click(name){const button=buttons().find(b=>b.name===name);assert.ok(button,`Missing ${name}; found ${buttons().map(b=>b.name).join('; ')}`);return button.onClick();}
   function advance(ms){now+=ms;for(const fn of [...intervals.values()])fn();render();}
   render();
-  return {render,click,advance,buttons,attempts,text:()=>text(tree)};
+  return {render,click,advance,buttons,attempts,copied,text:()=>text(tree)};
 }
 const content={to:['customer@example.org'],cc:[],subject:'Test',body:'Hello'};
 function verifyFlow(mountArgs, send='Send Email') {
@@ -290,4 +292,42 @@ test('prepared Action Required update auto-launches after Send Email with retry'
  assert.match(code,/start\(\{ to: draft\.recipients/);
  assert.match(code,/seconds === 0.*I sent the email/);
  assert.match(code,/Try Opening Web Mail/);
+});
+
+
+test('non-admin staff can copy the customer tracking URL from Review email details', async () => {
+ const url = 'https://tracker.example/track/customer-token_123?message=1';
+ const h=mount('components/CustomerEmailModal.tsx',{
+  content:{...content,body:`Please respond using\n${url}\nThanks`},autoStart:true,
+  onSent:()=>{},onDidNotSend:()=>{},onCancel:()=>{},
+ });
+ h.click('Review email details'); h.render();
+ assert.ok(h.buttons().some(b=>b.name==='Copy tracking link'));
+ assert.ok(h.buttons().some(b=>b.name==='Copy email'));
+ await h.click('Copy tracking link');
+ assert.deepEqual(h.copied,[url]);
+ await h.click('Copy email');
+ assert.equal(h.copied.length,2);
+ assert.match(h.copied[1],/Subject: Test/);
+ assert.ok(h.copied[1].includes(url));
+});
+
+test('non-admin staff can copy tracking URL from customer-reply Review email details', async () => {
+ const url='https://tracker.example/track/customer-token_456?message=1';
+ const h=mount('components/CustomerHistoryReplyEmailModal.tsx',{
+  email:{...content,body:`Reply here: ${url}`,direct_url:url,customer_message:'Hi'},
+  onSent:()=>{},onCancel:()=>{},
+ });
+ h.click('Review email details');h.render();
+ assert.ok(h.buttons().some(b=>b.name==='Copy tracking link'));
+ await h.click('Copy tracking link');
+ assert.deepEqual(h.copied,[url]);
+});
+
+test('Review email details does not offer Copy tracking link when no customer link exists', () => {
+ const h=mount('components/CustomerEmailModal.tsx',{
+  content,autoStart:true,onSent:()=>{},onDidNotSend:()=>{},onCancel:()=>{},
+ });
+ h.click('Review email details');h.render();
+ assert.ok(!h.buttons().some(b=>b.name==='Copy tracking link'));
 });
